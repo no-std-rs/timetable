@@ -613,6 +613,51 @@ fn cancelling_a_pending_stream_drops_provisional_events() {
 }
 
 #[test]
+fn indexed_queries_reject_invalid_directions_without_clearing_the_index() {
+    block_on(async {
+        let mut feed = Feed::open(Memory::new(FIXTURE, 3), &mut [0; 64])
+            .await
+            .unwrap();
+        let mut workspace = zip::Workspace::new();
+        let mut slots = [TripSlot::<32>::EMPTY; 8];
+        let mut trips = TripIndex::new(&mut slots);
+        trips.insert("previous-trip", 0, None).unwrap();
+        trips.finish().unwrap();
+        for direction in [2, u8::MAX] {
+            assert_eq!(
+                feed.select_trips::<32, 32>(
+                    &["4"],
+                    Some(direction),
+                    None,
+                    &mut trips,
+                    &mut workspace,
+                )
+                .await,
+                Err(Error::InvalidField("direction_id"))
+            );
+            feed.scan(Table::Trips, &mut workspace, |row| {
+                assert_eq!(
+                    trips.consider::<32>(row.trip()?, &["4"], Some(direction), None),
+                    Err(Error::InvalidField("direction_id"))
+                );
+                Ok(())
+            })
+            .await
+            .unwrap();
+            assert_eq!(trips.len(), 1);
+            assert!(
+                trips
+                    .cursor()
+                    .unwrap()
+                    .find("previous-trip")
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    });
+}
+
+#[test]
 fn route_stop_and_date_filtered_timetables() {
     block_on(async {
         let mut feed = Feed::open(Memory::new(FIXTURE, 7), &mut [0; 128])

@@ -178,6 +178,9 @@ impl<'a, const N: usize> TripIndex<'a, N> {
         direction: Option<u8>,
         services: Option<&IdSet<'_, S>>,
     ) -> Result<(), Error> {
+        if direction.is_some_and(|value| value > 1) {
+            return Err(Error::InvalidField("direction_id"));
+        }
         if let Some(route_index) = routes.iter().position(|&r| r == trip.route_id)
             && direction.is_none_or(|d| trip.direction == Some(d))
             && services.is_none_or(|s| s.contains(trip.service_id))
@@ -444,6 +447,7 @@ impl<R: Read + Seek> Feed<R> {
 
     /// `services=None` selects every service day (useful for all route variants).
     /// `direction=None` includes both directions and trips without direction_id.
+    /// A direction other than 0 or 1 returns an error before changing `result`.
     pub async fn select_trips<const N: usize, const S: usize>(
         &mut self,
         routes: &[&str],
@@ -452,6 +456,9 @@ impl<R: Read + Seek> Feed<R> {
         result: &mut TripIndex<'_, N>,
         workspace: &mut zip::Workspace,
     ) -> Result<(), Error> {
+        if direction.is_some_and(|value| value > 1) {
+            return Err(Error::InvalidField("direction_id"));
+        }
         result.clear();
         self.scan(Table::Trips, workspace, |row| {
             result.consider(row.trip()?, routes, direction, services)
