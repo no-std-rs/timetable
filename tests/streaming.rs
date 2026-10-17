@@ -56,6 +56,67 @@ impl<R: Read> Read for Forward<R> {
 }
 
 #[test]
+fn cache_verification_checks_all_payloads_before_accepting_the_archive() {
+    block_on(async {
+        let mut workspace = zip::Workspace::new();
+        for data in [
+            FIXTURE,
+            include_bytes!("fixtures/descriptor.zip").as_slice(),
+            include_bytes!("fixtures/stored.zip").as_slice(),
+            include_bytes!("fixtures/comment.zip").as_slice(),
+        ] {
+            let directory = zip::Directory::read(&mut Memory::new(data, 3), &mut [0; 64])
+                .await
+                .unwrap();
+            let manifest = zip::verify(Forward(Memory::new(data, 1)), &mut workspace, &mut [0; 17])
+                .await
+                .unwrap();
+            assert_eq!(manifest, zip::Manifest::from_directory(&directory));
+            assert!(
+                zip::verify(
+                    Forward(Memory::new(&data[..data.len() - 1], 3)),
+                    &mut workspace,
+                    &mut [0; 17],
+                )
+                .await
+                .is_err()
+            );
+        }
+        for name in [b"routes.txt", b"shapes.txt"] {
+            let mut corrupt = include_bytes!("fixtures/stored.zip").to_vec();
+            let offsets: Vec<_> = corrupt
+                .windows(10)
+                .enumerate()
+                .filter_map(|(i, bytes)| (bytes == b"routes.txt").then_some(i))
+                .collect();
+            for offset in offsets {
+                corrupt[offset..offset + 10].copy_from_slice(name);
+            }
+            let name_len = u16::from_le_bytes([corrupt[26], corrupt[27]]) as usize;
+            let extra_len = u16::from_le_bytes([corrupt[28], corrupt[29]]) as usize;
+            corrupt[30 + name_len + extra_len] ^= 1;
+            // Directory-only validation accepts the intact headers and footer.
+            zip::Directory::read(&mut Memory::new(&corrupt, 3), &mut [0; 64])
+                .await
+                .unwrap();
+            assert_eq!(
+                zip::verify(
+                    Forward(Memory::new(&corrupt, 1)),
+                    &mut workspace,
+                    &mut [0; 17],
+                )
+                .await,
+                Err(Error::CrcMismatch)
+            );
+        }
+        assert_eq!(
+            zip::verify(Forward(Memory::new(FIXTURE, 1)), &mut workspace, &mut []).await,
+            Err(Error::BufferTooSmall)
+        );
+    });
+}
+
+#[test]
 fn official_queries_need_only_read_and_accept_arbitrary_member_order() {
     block_on(async {
         for data in [

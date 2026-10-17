@@ -255,9 +255,9 @@ impl Http {
         }
         file.sync_all()?;
         drop(file);
-        // Verify the directory before making this the cached feed snapshot.
-        let mut source = FileIo(File::open(&temporary)?);
-        zip::Directory::read(&mut source, &mut [0; 1024]).await?;
+        // Verify every member before replacing the previous cached snapshot.
+        let source = FileIo(File::open(&temporary)?);
+        zip::verify(source, &mut zip::Workspace::new(), &mut buf).await?;
         std::fs::rename(temporary, path)?;
         Ok(())
     }

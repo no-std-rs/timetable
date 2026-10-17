@@ -127,6 +127,33 @@ impl Manifest {
     }
 }
 
+/// Verify every member's decompressed size and CRC, including non-GTFS files,
+/// then validate the directory, EOCD and body EOF. Use before publishing a cached
+/// ZIP. This checks container integrity, not the validity of GTFS table contents.
+pub async fn verify<R: Read>(
+    source: R,
+    workspace: &mut Workspace,
+    scratch: &mut [u8],
+) -> Result<Manifest, Error> {
+    if scratch.is_empty() {
+        return Err(Error::BufferTooSmall);
+    }
+    let mut archive = Reader::new(source, workspace);
+    let mut observed = Manifest::EMPTY;
+    while let Some(entry) = archive.next_entry().await? {
+        while archive.read(scratch).await? != 0 {}
+        if let Some(table) = entry.table() {
+            let fingerprint = archive
+                .current_entry()
+                .and_then(|e| e.fingerprint())
+                .ok_or(Error::InvalidZip)?;
+            observed.record(table, fingerprint)?;
+        }
+    }
+    archive.finish_archive(&observed).await?;
+    Ok(observed)
+}
+
 /// Stream a ZIP directly from an `embedded_io_async::Read`, including an HTTP body.
 /// `Read` returns decompressed bytes for the current entry only; call `next_entry`
 /// to advance. Dropping a reader does not drain or verify the remaining bytes.
