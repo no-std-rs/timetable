@@ -1,0 +1,26 @@
+{
+  "target": "riscv32imac-unknown-none-elf",
+  "profiles": [
+    {
+      "trips": 1024,
+      "task_bytes": 132520,
+      "reserves_bytes": 139264,
+      "total_bytes": 271784,
+      "fits_400000": true
+    },
+    {
+      "trips": 2048,
+      "task_bytes": 177576,
+      "reserves_bytes": 139264,
+      "total_bytes": 316840,
+      "fits_400000": true
+    },
+    {
+      "trips": 4096,
+      "task_bytes": 267688,
+      "reserves_bytes": 139264,
+      "total_bytes": 406952,
+      "fits_400000": false
+    }
+  ]
+}

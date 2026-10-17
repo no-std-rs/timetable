@@ -1,0 +1,26 @@
+{
+  "target": "x86_64-unknown-linux-gnu",
+  "profiles": [
+    {
+      "trips": 1024,
+      "task_bytes": 149776,
+      "reserves_bytes": 139264,
+      "total_bytes": 289040,
+      "fits_400000": true
+    },
+    {
+      "trips": 2048,
+      "task_bytes": 207120,
+      "reserves_bytes": 139264,
+      "total_bytes": 346384,
+      "fits_400000": true
+    },
+    {
+      "trips": 4096,
+      "task_bytes": 321808,
+      "reserves_bytes": 139264,
+      "total_bytes": 461072,
+      "fits_400000": false
+    }
+  ]
+}

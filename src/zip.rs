@@ -1,0 +1,792 @@
+//! Forward-only ZIP extraction and a small seekable index of GTFS members.
+//!
+//! Stored and raw DEFLATE entries are supported, including DEFLATE data
+//! descriptors. ZIP64, encryption and multi-disk archives return explicit errors.
+//! Reading an entry through EOF verifies its CRC and size. Skipping an entry
+//! avoids decompression when its compressed size is known and does not verify CRC.
+
+use crc32fast::Hasher;
+use embedded_io_async::{Error as _, ErrorType, Read, Seek, SeekFrom};
+use miniz_oxide::inflate::{
+    TINFLStatus,
+    core::{DecompressorOxide, decompress, inflate_flags::TINFL_FLAG_HAS_MORE_INPUT},
+};
+
+use crate::{Error, Table, read_exact};
+
+const LOCAL: u32 = 0x04034b50;
+const CENTRAL: u32 = 0x02014b50;
+const END: u32 = 0x06054b50;
+const DESCRIPTOR: u32 = 0x08074b50;
+const INPUT: usize = 2048;
+
+fn u16_at(b: &[u8], i: usize) -> u16 {
+    u16::from_le_bytes([b[i], b[i + 1]])
+}
+
+fn u32_at(b: &[u8], i: usize) -> u32 {
+    u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]])
+}
+
+/// Reusable DEFLATE state. The 32 KiB dictionary is required by the ZIP format.
+/// Keep this in caller-owned memory and reuse it between entries and queries.
+pub struct Workspace {
+    dictionary: [u8; 32768],
+    inflater: DecompressorOxide,
+}
+
+impl Workspace {
+    pub fn new() -> Self {
+        Self {
+            dictionary: [0; 32768],
+            inflater: DecompressorOxide::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.inflater.init();
+    }
+}
+
+impl Default for Workspace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Local member metadata. Sizes are unknown until EOF when a data descriptor is used.
+#[derive(Debug, Clone, Copy)]
+pub struct Entry {
+    name: [u8; 128],
+    name_len: usize,
+    pub compression: u16,
+    pub compressed_size: Option<u32>,
+    pub uncompressed_size: Option<u32>,
+    crc: Option<u32>,
+    descriptor: bool,
+}
+
+impl Entry {
+    pub fn name(&self) -> &[u8] {
+        &self.name[..self.name_len]
+    }
+
+    pub fn table(&self) -> Option<Table> {
+        Table::from_filename(self.name())
+    }
+
+    pub fn fingerprint(&self) -> Option<Fingerprint> {
+        Some(Fingerprint {
+            crc32: self.crc?,
+            uncompressed_size: self.uncompressed_size?,
+        })
+    }
+}
+
+/// Identity of uncompressed table bytes. This also matches a recompressed mirror.
+/// CRC32 detects version changes/corruption; it is not a cryptographic identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fingerprint {
+    pub crc32: u32,
+    pub uncompressed_size: u32,
+}
+
+/// Small snapshot descriptor retained alongside selected routes/trips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Manifest {
+    tables: [Option<Fingerprint>; Table::COUNT],
+}
+
+impl Manifest {
+    pub const EMPTY: Self = Self {
+        tables: [None; Table::COUNT],
+    };
+    pub fn from_directory(directory: &Directory) -> Self {
+        let mut result = Self::EMPTY;
+        for table in Table::ALL {
+            result.tables[table as usize] = directory.member(table).map(|m| m.fingerprint());
+        }
+        result
+    }
+    pub fn get(&self, table: Table) -> Option<Fingerprint> {
+        self.tables[table as usize]
+    }
+    pub(crate) fn record(&mut self, table: Table, fingerprint: Fingerprint) -> Result<(), Error> {
+        if self.tables[table as usize].replace(fingerprint).is_some() {
+            return Err(Error::DuplicateTable(table));
+        }
+        Ok(())
+    }
+    pub fn check(&self, other: &Self) -> Result<(), Error> {
+        for table in Table::ALL {
+            if self.get(table) != other.get(table) {
+                return Err(Error::SnapshotMismatch(table));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Stream a ZIP directly from an `embedded_io_async::Read`, including an HTTP body.
+/// `Read` returns decompressed bytes for the current entry only; call `next_entry`
+/// to advance. Dropping a reader does not drain or verify the remaining bytes.
+pub struct Reader<'a, R> {
+    source: R,
+    workspace: &'a mut Workspace,
+    input: [u8; INPUT],
+    start: usize,
+    end: usize,
+    current: Option<Entry>,
+    remaining: Option<u32>,
+    compressed: u64,
+    uncompressed: u64,
+    crc: Hasher,
+    pending_start: usize,
+    pending_end: usize,
+    dictionary_pos: usize,
+    done: bool,
+    archive_done: bool,
+    position: u64,
+    entries: u32,
+    tail: u32,
+    footer_finished: bool,
+}
+
+impl<'a, R: Read> Reader<'a, R> {
+    pub fn new(source: R, workspace: &'a mut Workspace) -> Self {
+        Self {
+            source,
+            workspace,
+            input: [0; INPUT],
+            start: 0,
+            end: 0,
+            current: None,
+            remaining: Some(0),
+            compressed: 0,
+            uncompressed: 0,
+            crc: Hasher::new(),
+            pending_start: 0,
+            pending_end: 0,
+            dictionary_pos: 0,
+            done: true,
+            archive_done: false,
+            position: 0,
+            entries: 0,
+            tail: 0,
+            footer_finished: false,
+        }
+    }
+
+    pub fn into_inner(self) -> R {
+        self.source
+    }
+
+    /// Includes sizes/CRC discovered from a data descriptor after reading EOF.
+    pub fn current_entry(&self) -> Option<Entry> {
+        self.current
+    }
+
+    /// Decode only a member's compressed payload, e.g. a single HTTP range body.
+    /// The caller must validate the range and use `Member::data_range` first.
+    pub fn data(source: R, workspace: &'a mut Workspace, member: Member) -> Self {
+        let mut reader = Self::new(source, workspace);
+        let mut name = [0; 128];
+        let bytes = member.table.filename().as_bytes();
+        name[..bytes.len()].copy_from_slice(bytes);
+        reader.current = Some(Entry {
+            name,
+            name_len: bytes.len(),
+            compression: member.compression,
+            compressed_size: Some(member.compressed_size),
+            uncompressed_size: Some(member.uncompressed_size),
+            crc: Some(member.crc),
+            descriptor: false,
+        });
+        reader.remaining = Some(member.compressed_size);
+        reader.done = false;
+        reader.workspace.reset();
+        reader
+    }
+
+    async fn fill(&mut self) -> Result<(), Error> {
+        if self.start == self.end {
+            self.start = 0;
+            self.end = self
+                .source
+                .read(&mut self.input)
+                .await
+                .map_err(|e| Error::Io(e.kind()))?;
+            if self.end == 0 {
+                return Err(Error::UnexpectedEof);
+            }
+        }
+        Ok(())
+    }
+
+    async fn exact(&mut self, mut out: &mut [u8]) -> Result<(), Error> {
+        while !out.is_empty() {
+            self.fill().await?;
+            let n = out.len().min(self.end - self.start);
+            out[..n].copy_from_slice(&self.input[self.start..self.start + n]);
+            self.start += n;
+            self.position += n as u64;
+            out = &mut out[n..];
+        }
+        Ok(())
+    }
+
+    async fn discard(&mut self, mut count: u64) -> Result<(), Error> {
+        while count != 0 {
+            self.fill().await?;
+            let n = count.min((self.end - self.start) as u64) as usize;
+            self.start += n;
+            self.position += n as u64;
+            count -= n as u64;
+        }
+        Ok(())
+    }
+
+    /// Advance, skipping any unread part of the previous entry.
+    pub async fn next_entry(&mut self) -> Result<Option<Entry>, Error> {
+        self.skip_entry().await?;
+        if self.archive_done {
+            return Ok(None);
+        }
+        let mut h = [0; 30];
+        self.exact(&mut h[..4]).await?;
+        match u32_at(&h, 0) {
+            CENTRAL | END => {
+                self.archive_done = true;
+                self.tail = u32_at(&h, 0);
+                self.current = None;
+                return Ok(None);
+            }
+            LOCAL => {}
+            _ => return Err(Error::InvalidZip),
+        }
+        self.exact(&mut h[4..]).await?;
+        let flags = u16_at(&h, 6);
+        check_format(flags, u16_at(&h, 8))?;
+        if u16_at(&h, 4) > 20 || u32_at(&h, 18) == u32::MAX || u32_at(&h, 22) == u32::MAX {
+            return Err(Error::UnsupportedZip);
+        }
+        let name_len = u16_at(&h, 26) as usize;
+        if name_len > 128 {
+            return Err(Error::NameTooLong);
+        }
+        let descriptor = flags & 8 != 0;
+        let mut entry = Entry {
+            name: [0; 128],
+            name_len,
+            compression: u16_at(&h, 8),
+            compressed_size: (!descriptor).then(|| u32_at(&h, 18)),
+            uncompressed_size: (!descriptor).then(|| u32_at(&h, 22)),
+            crc: (!descriptor).then(|| u32_at(&h, 14)),
+            descriptor,
+        };
+        self.exact(&mut entry.name[..name_len]).await?;
+        self.discard(u16_at(&h, 28) as u64).await?;
+        self.current = Some(entry);
+        self.entries += 1;
+        self.remaining = entry.compressed_size;
+        self.compressed = 0;
+        self.uncompressed = 0;
+        self.crc = Hasher::new();
+        self.pending_start = 0;
+        self.pending_end = 0;
+        self.dictionary_pos = 0;
+        self.done = false;
+        self.workspace.reset();
+        Ok(Some(entry))
+    }
+
+    async fn descriptor(&mut self) -> Result<(u32, u32, u32), Error> {
+        let mut h = [0; 12];
+        self.exact(&mut h[..4]).await?;
+        if u32_at(&h, 0) == DESCRIPTOR {
+            self.exact(&mut h).await?;
+        } else {
+            self.exact(&mut h[4..]).await?;
+        }
+        Ok((u32_at(&h, 0), u32_at(&h, 4), u32_at(&h, 8)))
+    }
+
+    /// Skip without inflating when sizes are known. CRC is checked only for fully read entries.
+    pub async fn skip_entry(&mut self) -> Result<(), Error> {
+        if self.done {
+            self.pending_start = self.pending_end;
+            return Ok(());
+        }
+        if let Some(n) = self.remaining {
+            self.discard(n as u64).await?;
+            if self.current.is_some_and(|e| e.descriptor) {
+                self.descriptor().await?;
+            }
+            self.remaining = Some(0);
+            self.pending_start = self.pending_end;
+            self.done = true;
+        } else {
+            let mut buf = [0; 512];
+            while self.read(&mut buf).await? != 0 {}
+        }
+        Ok(())
+    }
+
+    async fn finish(&mut self) -> Result<(), Error> {
+        let entry = self.current.ok_or(Error::InvalidZip)?;
+        if self.remaining.is_some_and(|n| n != 0) {
+            return Err(Error::SizeMismatch);
+        }
+        let (crc, compressed, uncompressed) = if entry.descriptor {
+            self.descriptor().await?
+        } else {
+            (
+                entry.crc.unwrap(),
+                entry.compressed_size.unwrap(),
+                entry.uncompressed_size.unwrap(),
+            )
+        };
+        if self.compressed != compressed as u64
+            || self.uncompressed != uncompressed as u64
+            || entry.compressed_size.is_some_and(|n| n != compressed)
+            || entry.uncompressed_size.is_some_and(|n| n != uncompressed)
+        {
+            return Err(Error::SizeMismatch);
+        }
+        if self.crc.clone().finalize() != crc || entry.crc.is_some_and(|c| c != crc) {
+            return Err(Error::CrcMismatch);
+        }
+        let entry = self.current.as_mut().unwrap();
+        entry.crc = Some(crc);
+        entry.compressed_size = Some(compressed);
+        entry.uncompressed_size = Some(uncompressed);
+        self.done = true;
+        Ok(())
+    }
+
+    /// Finish a whole forward ZIP: validate its central directory against the
+    /// observed local table headers, EOCD offsets/counts, comment and body EOF.
+    /// Call after `next_entry()` returned `None`, only on a stream starting at 0.
+    pub async fn finish_archive(&mut self, observed: &Manifest) -> Result<(), Error> {
+        if self.footer_finished {
+            return Ok(());
+        }
+        if !self.archive_done {
+            return Err(Error::InvalidZip);
+        }
+        let directory_start = self.position - 4;
+        let mut directory = Manifest::EMPTY;
+        let mut count = 0u32;
+        let mut signature = self.tail;
+        while signature == CENTRAL {
+            let mut h = [0; 46];
+            h[..4].copy_from_slice(&CENTRAL.to_le_bytes());
+            self.exact(&mut h[4..]).await?;
+            if u16_at(&h, 6) > 20
+                || u16_at(&h, 34) != 0
+                || u32_at(&h, 20) == u32::MAX
+                || u32_at(&h, 24) == u32::MAX
+            {
+                return Err(Error::UnsupportedZip);
+            }
+            check_format(u16_at(&h, 8), u16_at(&h, 10))?;
+            let name_len = u16_at(&h, 28) as usize;
+            if name_len > 128 {
+                return Err(Error::NameTooLong);
+            }
+            let mut name = [0; 128];
+            self.exact(&mut name[..name_len]).await?;
+            if let Some(table) = Table::from_filename(&name[..name_len]) {
+                directory.record(
+                    table,
+                    Fingerprint {
+                        crc32: u32_at(&h, 16),
+                        uncompressed_size: u32_at(&h, 24),
+                    },
+                )?;
+            }
+            if u32_at(&h, 42) as u64 >= directory_start {
+                return Err(Error::InvalidZip);
+            }
+            self.discard(u16_at(&h, 30) as u64 + u16_at(&h, 32) as u64)
+                .await?;
+            count += 1;
+            let mut sig = [0; 4];
+            self.exact(&mut sig).await?;
+            signature = u32_at(&sig, 0);
+        }
+        if signature != END {
+            return Err(Error::InvalidZip);
+        }
+        let directory_size = self.position - 4 - directory_start;
+        let mut h = [0; 22];
+        h[..4].copy_from_slice(&END.to_le_bytes());
+        self.exact(&mut h[4..]).await?;
+        if u16_at(&h, 4) != 0 || u16_at(&h, 6) != 0 || u16_at(&h, 10) == u16::MAX {
+            return Err(Error::UnsupportedZip);
+        }
+        if u16_at(&h, 8) as u32 != count
+            || u16_at(&h, 10) as u32 != count
+            || count != self.entries
+            || u32_at(&h, 12) as u64 != directory_size
+            || u32_at(&h, 16) as u64 != directory_start
+        {
+            return Err(Error::InvalidZip);
+        }
+        observed.check(&directory).map_err(|_| Error::InvalidZip)?;
+        self.discard(u16_at(&h, 20) as u64).await?;
+        if self.start != self.end {
+            return Err(Error::InvalidZip);
+        }
+        let n = self
+            .source
+            .read(&mut self.input[..1])
+            .await
+            .map_err(|e| Error::Io(e.kind()))?;
+        if n != 0 {
+            return Err(Error::InvalidZip);
+        }
+        self.footer_finished = true;
+        Ok(())
+    }
+}
+
+impl<'a, R: Read + Seek> Reader<'a, R> {
+    /// Open one indexed member, seeking past all unrelated compressed tables.
+    pub async fn member(
+        mut source: R,
+        workspace: &'a mut Workspace,
+        member: Member,
+    ) -> Result<Self, Error> {
+        source
+            .seek(SeekFrom::Start(member.offset as u64))
+            .await
+            .map_err(|e| Error::Io(e.kind()))?;
+        let mut reader = Self::new(source, workspace);
+        let entry = reader.next_entry().await?.ok_or(Error::InvalidZip)?;
+        if entry.table() != Some(member.table)
+            || entry.compression != member.compression
+            || entry.descriptor != (member.flags & 8 != 0)
+            || entry
+                .compressed_size
+                .is_some_and(|n| n != member.compressed_size)
+            || entry
+                .uncompressed_size
+                .is_some_and(|n| n != member.uncompressed_size)
+            || entry.crc.is_some_and(|n| n != member.crc)
+        {
+            return Err(Error::InvalidZip);
+        }
+        let data_start = member.offset as u64 + 30 + entry.name_len as u64;
+        // The local extra field has already been consumed. Account for buffered bytes
+        // to find the actual source position without assuming a fixed extra length.
+        let physical = reader
+            .source
+            .stream_position()
+            .await
+            .map_err(|e| Error::Io(e.kind()))?;
+        let logical = physical - (reader.end - reader.start) as u64;
+        if logical < data_start
+            || logical + member.compressed_size as u64 > member.directory_offset as u64
+        {
+            return Err(Error::InvalidZip);
+        }
+        let entry = reader.current.as_mut().unwrap();
+        entry.crc = Some(member.crc);
+        entry.compressed_size = Some(member.compressed_size);
+        entry.uncompressed_size = Some(member.uncompressed_size);
+        reader.remaining = Some(member.compressed_size);
+        Ok(reader)
+    }
+}
+
+impl<R> ErrorType for Reader<'_, R> {
+    type Error = Error;
+}
+
+impl<R: Read> Read for Reader<'_, R> {
+    async fn read(&mut self, out: &mut [u8]) -> Result<usize, Error> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.pending_start < self.pending_end {
+                let n = out.len().min(self.pending_end - self.pending_start);
+                out[..n].copy_from_slice(
+                    &self.workspace.dictionary[self.pending_start..self.pending_start + n],
+                );
+                self.pending_start += n;
+                return Ok(n);
+            }
+            if self.done {
+                return Ok(0);
+            }
+            let entry = self.current.ok_or(Error::InvalidZip)?;
+            if entry.compression == 0 {
+                let remaining = self.remaining.ok_or(Error::UnsupportedZip)?;
+                if remaining == 0 {
+                    self.finish().await?;
+                    return Ok(0);
+                }
+                self.fill().await?;
+                let n = out.len().min(self.end - self.start).min(remaining as usize);
+                out[..n].copy_from_slice(&self.input[self.start..self.start + n]);
+                self.start += n;
+                self.position += n as u64;
+                self.remaining = Some(remaining - n as u32);
+                self.compressed += n as u64;
+                self.uncompressed += n as u64;
+                self.crc.update(&out[..n]);
+                return Ok(n);
+            }
+            if self.remaining != Some(0) {
+                self.fill().await?;
+            }
+            let available = self.remaining.map_or(self.end - self.start, |n| {
+                (n as usize).min(self.end - self.start)
+            });
+            let flags = if self.remaining.is_none_or(|n| n as usize > available) {
+                TINFL_FLAG_HAS_MORE_INPUT
+            } else {
+                0
+            };
+            let pos = self.dictionary_pos;
+            let (status, consumed, produced) = decompress(
+                &mut self.workspace.inflater,
+                &self.input[self.start..self.start + available],
+                &mut self.workspace.dictionary,
+                pos,
+                flags,
+            );
+            self.start += consumed;
+            self.position += consumed as u64;
+            if let Some(n) = self.remaining.as_mut() {
+                *n -= consumed as u32;
+            }
+            self.compressed += consumed as u64;
+            self.uncompressed += produced as u64;
+            if entry
+                .uncompressed_size
+                .is_some_and(|n| self.uncompressed > n as u64)
+            {
+                return Err(Error::SizeMismatch);
+            }
+            self.crc
+                .update(&self.workspace.dictionary[pos..pos + produced]);
+            self.pending_start = pos;
+            self.pending_end = pos + produced;
+            self.dictionary_pos = (pos + produced) & 32767;
+            match status {
+                TINFLStatus::Done => self.finish().await?,
+                TINFLStatus::NeedsMoreInput | TINFLStatus::HasMoreOutput
+                    if consumed != 0 || produced != 0 => {}
+                _ => return Err(Error::InvalidDeflate),
+            }
+        }
+    }
+}
+
+fn check_format(flags: u16, compression: u16) -> Result<(), Error> {
+    if flags & 0x2041 != 0 {
+        return Err(Error::EncryptedZip);
+    }
+    // Compression options, descriptor and UTF-8 filenames are the supported flags.
+    if flags & !0x080e != 0 {
+        return Err(Error::UnsupportedZip);
+    }
+    if compression != 0 && compression != 8 {
+        return Err(Error::UnsupportedCompression(compression));
+    }
+    Ok(())
+}
+
+/// Trusted only after `Directory::read` has validated the central directory.
+#[derive(Debug, Clone, Copy)]
+pub struct Member {
+    table: Table,
+    offset: u32,
+    directory_offset: u32,
+    compression: u16,
+    flags: u16,
+    compressed_size: u32,
+    uncompressed_size: u32,
+    crc: u32,
+}
+
+impl Member {
+    pub fn fingerprint(&self) -> Fingerprint {
+        Fingerprint {
+            crc32: self.crc,
+            uncompressed_size: self.uncompressed_size,
+        }
+    }
+    pub fn compressed_size(&self) -> u32 {
+        self.compressed_size
+    }
+    pub fn uncompressed_size(&self) -> u32 {
+        self.uncompressed_size
+    }
+    pub fn table(&self) -> Table {
+        self.table
+    }
+    /// Fetch these 30 local-header bytes before calculating the payload range.
+    pub fn header_range(&self) -> crate::http::ByteRange {
+        crate::http::ByteRange::new(self.offset as u64, self.offset as u64 + 29)
+            .expect("u32 ZIP offset")
+    }
+    pub fn data_range(&self, header: &[u8; 30]) -> Result<crate::http::ByteRange, Error> {
+        if u32_at(header, 0) != LOCAL
+            || u16_at(header, 4) > 20
+            || u16_at(header, 6) != self.flags
+            || u16_at(header, 8) != self.compression
+            || u16_at(header, 26) as usize != self.table.filename().len()
+        {
+            return Err(Error::InvalidZip);
+        }
+        if self.flags & 8 == 0
+            && (u32_at(header, 14) != self.crc
+                || u32_at(header, 18) != self.compressed_size
+                || u32_at(header, 22) != self.uncompressed_size)
+        {
+            return Err(Error::InvalidZip);
+        }
+        let start = self.offset as u64 + 30 + u16_at(header, 26) as u64 + u16_at(header, 28) as u64;
+        let end = start + self.compressed_size as u64;
+        if end > self.directory_offset as u64 || self.compressed_size == 0 {
+            return Err(Error::InvalidZip);
+        }
+        crate::http::ByteRange::new(start, end - 1)
+    }
+}
+
+/// Stores only the seven tables needed for route, stop and calendar queries.
+#[derive(Debug)]
+pub struct Directory {
+    members: [Option<Member>; Table::COUNT],
+}
+
+impl Directory {
+    pub fn member(&self, table: Table) -> Option<Member> {
+        self.members[table as usize]
+    }
+
+    /// Read the ZIP directory with caller-owned scratch (at least 22 bytes).
+    /// A 1 KiB buffer efficiently handles even the maximum ZIP comment length.
+    pub async fn read<R: Read + Seek>(source: &mut R, scratch: &mut [u8]) -> Result<Self, Error> {
+        if scratch.len() < 22 {
+            return Err(Error::BufferTooSmall);
+        }
+        let length = source
+            .seek(SeekFrom::End(0))
+            .await
+            .map_err(|e| Error::Io(e.kind()))?;
+        if length < 22 {
+            return Err(Error::InvalidZip);
+        }
+        if length > u32::MAX as u64 {
+            return Err(Error::UnsupportedZip);
+        }
+        let lower = length.saturating_sub(65557);
+        let mut end = length;
+        let (offset, size, count, end_offset) = 'search: loop {
+            let start = lower.max(end.saturating_sub(scratch.len() as u64));
+            let n = (end - start) as usize;
+            source
+                .seek(SeekFrom::Start(start))
+                .await
+                .map_err(|e| Error::Io(e.kind()))?;
+            read_exact(source, &mut scratch[..n]).await?;
+            for i in (0..=n - 22).rev() {
+                let b = &scratch[i..];
+                if u32_at(b, 0) != END || start + i as u64 + 22 + u16_at(b, 20) as u64 != length {
+                    continue;
+                }
+                if u16_at(b, 4) != 0
+                    || u16_at(b, 6) != 0
+                    || u16_at(b, 8) != u16_at(b, 10)
+                    || u16_at(b, 10) == u16::MAX
+                    || u32_at(b, 12) == u32::MAX
+                    || u32_at(b, 16) == u32::MAX
+                {
+                    return Err(Error::UnsupportedZip);
+                }
+                break 'search (
+                    u32_at(b, 16),
+                    u32_at(b, 12),
+                    u16_at(b, 10),
+                    start + i as u64,
+                );
+            }
+            if start == lower {
+                return Err(Error::InvalidZip);
+            }
+            end = start + 21;
+        };
+        if offset as u64 + size as u64 != end_offset {
+            return Err(Error::InvalidZip);
+        }
+        let mut result = Self {
+            members: [None; Table::COUNT],
+        };
+        let mut pos = offset as u64;
+        for _ in 0..count {
+            if pos + 46 > end_offset {
+                return Err(Error::InvalidZip);
+            }
+            source
+                .seek(SeekFrom::Start(pos))
+                .await
+                .map_err(|e| Error::Io(e.kind()))?;
+            let mut h = [0; 46];
+            read_exact(source, &mut h).await?;
+            if u32_at(&h, 0) != CENTRAL {
+                return Err(Error::InvalidZip);
+            }
+            if u16_at(&h, 34) != 0 {
+                return Err(Error::UnsupportedZip);
+            }
+            let name_len = u16_at(&h, 28) as usize;
+            pos += 46 + name_len as u64 + u16_at(&h, 30) as u64 + u16_at(&h, 32) as u64;
+            if pos > end_offset {
+                return Err(Error::InvalidZip);
+            }
+            if name_len > 128 {
+                continue;
+            }
+            let mut name = [0; 128];
+            read_exact(source, &mut name[..name_len]).await?;
+            if let Some(table) = Table::from_filename(&name[..name_len]) {
+                check_format(u16_at(&h, 8), u16_at(&h, 10))?;
+                if u16_at(&h, 6) > 20
+                    || u32_at(&h, 20) == u32::MAX
+                    || u32_at(&h, 24) == u32::MAX
+                    || u32_at(&h, 42) == u32::MAX
+                {
+                    return Err(Error::UnsupportedZip);
+                }
+                let member = Member {
+                    table,
+                    offset: u32_at(&h, 42),
+                    directory_offset: offset,
+                    flags: u16_at(&h, 8),
+                    compression: u16_at(&h, 10),
+                    compressed_size: u32_at(&h, 20),
+                    uncompressed_size: u32_at(&h, 24),
+                    crc: u32_at(&h, 16),
+                };
+                if member.offset as u64 + 30 + name_len as u64 + member.compressed_size as u64
+                    > offset as u64
+                {
+                    return Err(Error::InvalidZip);
+                }
+                if result.members[table as usize].replace(member).is_some() {
+                    return Err(Error::DuplicateTable(table));
+                }
+            }
+        }
+        if pos != end_offset {
+            return Err(Error::InvalidZip);
+        }
+        Ok(result)
+    }
+}
