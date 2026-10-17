@@ -59,6 +59,7 @@ impl<R: Read> Read for Forward<R> {
 fn cache_verification_checks_all_payloads_before_accepting_the_archive() {
     block_on(async {
         let mut workspace = zip::Workspace::new();
+        let mut entries = [zip::VerificationSlot::EMPTY; 8];
         for data in [
             FIXTURE,
             include_bytes!("fixtures/descriptor.zip").as_slice(),
@@ -68,15 +69,21 @@ fn cache_verification_checks_all_payloads_before_accepting_the_archive() {
             let directory = zip::Directory::read(&mut Memory::new(data, 3), &mut [0; 64])
                 .await
                 .unwrap();
-            let manifest = zip::verify(Forward(Memory::new(data, 1)), &mut workspace, &mut [0; 17])
-                .await
-                .unwrap();
+            let manifest = zip::verify(
+                Forward(Memory::new(data, 1)),
+                &mut workspace,
+                &mut [0; 17],
+                &mut entries,
+            )
+            .await
+            .unwrap();
             assert_eq!(manifest, zip::Manifest::from_directory(&directory));
             assert!(
                 zip::verify(
                     Forward(Memory::new(&data[..data.len() - 1], 3)),
                     &mut workspace,
                     &mut [0; 17],
+                    &mut entries,
                 )
                 .await
                 .is_err()
@@ -104,15 +111,140 @@ fn cache_verification_checks_all_payloads_before_accepting_the_archive() {
                     Forward(Memory::new(&corrupt, 1)),
                     &mut workspace,
                     &mut [0; 17],
+                    &mut entries,
                 )
                 .await,
                 Err(Error::CrcMismatch)
             );
         }
         assert_eq!(
-            zip::verify(Forward(Memory::new(FIXTURE, 1)), &mut workspace, &mut []).await,
+            zip::verify(
+                Forward(Memory::new(FIXTURE, 1)),
+                &mut workspace,
+                &mut [],
+                &mut entries
+            )
+            .await,
             Err(Error::BufferTooSmall)
         );
+        assert_eq!(
+            zip::verify(
+                Forward(Memory::new(FIXTURE, 1)),
+                &mut workspace,
+                &mut [0; 17],
+                &mut [zip::VerificationSlot::EMPTY; 1],
+            )
+            .await,
+            Err(Error::IndexFull)
+        );
+    });
+}
+
+#[test]
+fn cache_verification_matches_all_local_and_directory_metadata() {
+    block_on(async {
+        let end = FIXTURE.len() - 22;
+        let directory_start =
+            u32::from_le_bytes(FIXTURE[end + 16..end + 20].try_into().unwrap()) as usize;
+        let mut records = Vec::new();
+        let mut pos = directory_start;
+        while pos < end {
+            let len = |i| u16::from_le_bytes([FIXTURE[pos + i], FIXTURE[pos + i + 1]]) as usize;
+            let size = 46 + len(28) + len(30) + len(32);
+            records.push((pos, size, &FIXTURE[pos + 46..pos + 46 + len(28)]));
+            pos += size;
+        }
+        let mut workspace = zip::Workspace::new();
+        let mut slots = [zip::VerificationSlot::EMPTY; 8];
+        for name in [b"routes.txt", b"shapes.txt"] {
+            let offset = records.iter().find(|record| record.2 == name).unwrap().0;
+            // Flags, method, CRC, compressed/uncompressed size, offset and name.
+            for field in [8, 10, 16, 20, 24, 42, 46] {
+                let mut corrupt = FIXTURE.to_vec();
+                match field {
+                    8 => corrupt[offset + field] ^= 8, // Supported descriptor flag.
+                    10 => corrupt[offset + field] = 0, // Supported stored method.
+                    _ => corrupt[offset + field] ^= 1,
+                }
+                assert!(
+                    zip::verify(
+                        Forward(Memory::new(&corrupt, 3)),
+                        &mut workspace,
+                        &mut [0; 17],
+                        &mut slots,
+                    )
+                    .await
+                    .is_err(),
+                    "accepted mismatched {name:?} field {field}"
+                );
+            }
+        }
+        // Directory order is independent of physical local-entry order.
+        let mut reordered = FIXTURE[..directory_start].to_vec();
+        for (offset, size, _) in records.iter().rev() {
+            reordered.extend_from_slice(&FIXTURE[*offset..*offset + *size]);
+        }
+        reordered.extend_from_slice(&FIXTURE[end..]);
+        let expected = zip::verify(
+            Forward(Memory::new(FIXTURE, 3)),
+            &mut workspace,
+            &mut [0; 17],
+            &mut slots,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            zip::verify(
+                Forward(Memory::new(&reordered, 1)),
+                &mut workspace,
+                &mut [0; 17],
+                &mut slots,
+            )
+            .await
+            .unwrap(),
+            expected
+        );
+    });
+}
+
+#[test]
+fn directory_search_skips_false_end_records_inside_valid_comments() {
+    block_on(async {
+        let end = FIXTURE.len() - 22;
+        let prefix = b"comment-prefix";
+        let suffix = b"comment-suffix";
+        for kind in 0..3 {
+            let mut data = FIXTURE.to_vec();
+            let comment_len = (prefix.len() + 22 + suffix.len()) as u16;
+            data[end + 20..end + 22].copy_from_slice(&comment_len.to_le_bytes());
+            data.extend_from_slice(prefix);
+            let fake_offset = data.len();
+            let mut fake = [0u8; 22];
+            fake[..4].copy_from_slice(b"PK\x05\x06");
+            fake[20..22].copy_from_slice(&(suffix.len() as u16).to_le_bytes());
+            match kind {
+                0 => fake[4] = 1, // Unsupported disk in a false candidate.
+                1 => {}           // Supported fields, inconsistent directory bounds.
+                _ => {
+                    // Plausible bounds and real entries, but the fake directory
+                    // includes the genuine end record and a comment prefix.
+                    fake[8..12].copy_from_slice(&FIXTURE[end + 8..end + 12]);
+                    fake[16..20].copy_from_slice(&FIXTURE[end + 16..end + 20]);
+                    let start = u32::from_le_bytes(fake[16..20].try_into().unwrap());
+                    let size = fake_offset as u32 - start;
+                    fake[12..16].copy_from_slice(&size.to_le_bytes());
+                }
+            }
+            data.extend_from_slice(&fake);
+            data.extend_from_slice(suffix);
+            for capacity in [22, 23, 64, 1024] {
+                let mut scratch = vec![0; capacity];
+                let directory = zip::Directory::read(&mut Memory::new(&data, 1), &mut scratch)
+                    .await
+                    .unwrap();
+                assert!(directory.member(Table::Routes).is_some());
+            }
+        }
     });
 }
 

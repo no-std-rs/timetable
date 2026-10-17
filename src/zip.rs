@@ -60,6 +60,7 @@ pub struct Entry {
     name: [u8; 128],
     name_len: usize,
     pub compression: u16,
+    flags: u16,
     pub compressed_size: Option<u32>,
     pub uncompressed_size: Option<u32>,
     crc: Option<u32>,
@@ -127,30 +128,63 @@ impl Manifest {
     }
 }
 
+/// Caller-owned metadata for one verified ZIP member, including non-GTFS files.
+/// Supply one slot per archive entry; insufficient capacity returns `IndexFull`.
+#[derive(Clone, Copy)]
+pub struct VerificationSlot {
+    entry: Option<Entry>,
+    offset: u32,
+    seen: bool,
+}
+
+impl VerificationSlot {
+    pub const EMPTY: Self = Self {
+        entry: None,
+        offset: 0,
+        seen: false,
+    };
+}
+
 /// Verify every member's decompressed size and CRC, including non-GTFS files,
-/// then validate the directory, EOCD and body EOF. Use before publishing a cached
-/// ZIP. This checks container integrity, not the validity of GTFS table contents.
+/// then match all directory names, flags, methods, sizes, CRCs and offsets to the
+/// verified local entries, and validate the EOCD and body EOF. Use before
+/// publishing a cached ZIP. This does not validate GTFS table contents.
 pub async fn verify<R: Read>(
     source: R,
     workspace: &mut Workspace,
     scratch: &mut [u8],
+    entries: &mut [VerificationSlot],
 ) -> Result<Manifest, Error> {
     if scratch.is_empty() {
         return Err(Error::BufferTooSmall);
     }
     let mut archive = Reader::new(source, workspace);
     let mut observed = Manifest::EMPTY;
-    while let Some(entry) = archive.next_entry().await? {
+    let mut count = 0;
+    loop {
+        let offset = archive.position;
+        let Some(entry) = archive.next_entry().await? else {
+            break;
+        };
+        if count == entries.len() {
+            return Err(Error::IndexFull);
+        }
         while archive.read(scratch).await? != 0 {}
+        let verified = archive.current_entry().ok_or(Error::InvalidZip)?;
+        entries[count] = VerificationSlot {
+            entry: Some(verified),
+            offset: u32::try_from(offset).map_err(|_| Error::UnsupportedZip)?,
+            seen: false,
+        };
+        count += 1;
         if let Some(table) = entry.table() {
-            let fingerprint = archive
-                .current_entry()
-                .and_then(|e| e.fingerprint())
-                .ok_or(Error::InvalidZip)?;
+            let fingerprint = verified.fingerprint().ok_or(Error::InvalidZip)?;
             observed.record(table, fingerprint)?;
         }
     }
-    archive.finish_archive(&observed).await?;
+    archive
+        .finish_archive_checked(&observed, Some(&mut entries[..count]))
+        .await?;
     Ok(observed)
 }
 
@@ -224,6 +258,7 @@ impl<'a, R: Read> Reader<'a, R> {
             name,
             name_len: bytes.len(),
             compression: member.compression,
+            flags: member.flags,
             compressed_size: Some(member.compressed_size),
             uncompressed_size: Some(member.uncompressed_size),
             crc: Some(member.crc),
@@ -306,6 +341,7 @@ impl<'a, R: Read> Reader<'a, R> {
             name: [0; 128],
             name_len,
             compression: u16_at(&h, 8),
+            flags,
             compressed_size: (!descriptor).then(|| u32_at(&h, 18)),
             uncompressed_size: (!descriptor).then(|| u32_at(&h, 22)),
             crc: (!descriptor).then(|| u32_at(&h, 14)),
@@ -395,6 +431,14 @@ impl<'a, R: Read> Reader<'a, R> {
     /// observed local table headers, EOCD offsets/counts, comment and body EOF.
     /// Call after `next_entry()` returned `None`, only on a stream starting at 0.
     pub async fn finish_archive(&mut self, observed: &Manifest) -> Result<(), Error> {
+        self.finish_archive_checked(observed, None).await
+    }
+
+    async fn finish_archive_checked(
+        &mut self,
+        observed: &Manifest,
+        mut verified: Option<&mut [VerificationSlot]>,
+    ) -> Result<(), Error> {
         if self.footer_finished {
             return Ok(());
         }
@@ -423,6 +467,24 @@ impl<'a, R: Read> Reader<'a, R> {
             }
             let mut name = [0; 128];
             self.exact(&mut name[..name_len]).await?;
+            if let Some(slots) = verified.as_deref_mut() {
+                let slot = slots
+                    .iter_mut()
+                    .find(|slot| slot.offset == u32_at(&h, 42))
+                    .ok_or(Error::InvalidZip)?;
+                let entry = slot.entry.ok_or(Error::InvalidZip)?;
+                if slot.seen
+                    || entry.name() != &name[..name_len]
+                    || entry.flags != u16_at(&h, 8)
+                    || entry.compression != u16_at(&h, 10)
+                    || entry.crc != Some(u32_at(&h, 16))
+                    || entry.compressed_size != Some(u32_at(&h, 20))
+                    || entry.uncompressed_size != Some(u32_at(&h, 24))
+                {
+                    return Err(Error::InvalidZip);
+                }
+                slot.seen = true;
+            }
             if let Some(table) = Table::from_filename(&name[..name_len]) {
                 directory.record(
                     table,
@@ -461,6 +523,9 @@ impl<'a, R: Read> Reader<'a, R> {
             return Err(Error::InvalidZip);
         }
         observed.check(&directory).map_err(|_| Error::InvalidZip)?;
+        if verified.is_some_and(|slots| slots.iter().any(|slot| !slot.seen)) {
+            return Err(Error::InvalidZip);
+        }
         self.discard(u16_at(&h, 20) as u64).await?;
         if self.start != self.end {
             return Err(Error::InvalidZip);
@@ -715,7 +780,8 @@ impl Directory {
         }
         let lower = length.saturating_sub(65557);
         let mut end = length;
-        let (offset, size, count, end_offset) = 'search: loop {
+        let mut candidate_error = Error::InvalidZip;
+        loop {
             let start = lower.max(end.saturating_sub(scratch.len() as u64));
             let n = (end - start) as usize;
             source
@@ -728,27 +794,36 @@ impl Directory {
                 if u32_at(b, 0) != END || start + i as u64 + 22 + u16_at(b, 20) as u64 != length {
                     continue;
                 }
-                if u16_at(b, 4) != 0
-                    || u16_at(b, 6) != 0
-                    || u16_at(b, 8) != u16_at(b, 10)
-                    || u16_at(b, 10) == u16::MAX
-                    || u32_at(b, 12) == u32::MAX
-                    || u32_at(b, 16) == u32::MAX
-                {
-                    return Err(Error::UnsupportedZip);
+                match Self::read_candidate(source, b, start + i as u64).await {
+                    Ok(directory) => return Ok(directory),
+                    Err(Error::Io(kind)) => return Err(Error::Io(kind)),
+                    Err(error) => candidate_error = error,
                 }
-                break 'search (
-                    u32_at(b, 16),
-                    u32_at(b, 12),
-                    u16_at(b, 10),
-                    start + i as u64,
-                );
             }
             if start == lower {
-                return Err(Error::InvalidZip);
+                return Err(candidate_error);
             }
             end = start + 21;
-        };
+        }
+    }
+
+    async fn read_candidate<R: Read + Seek>(
+        source: &mut R,
+        b: &[u8],
+        end_offset: u64,
+    ) -> Result<Self, Error> {
+        if u16_at(b, 4) != 0
+            || u16_at(b, 6) != 0
+            || u16_at(b, 8) != u16_at(b, 10)
+            || u16_at(b, 10) == u16::MAX
+            || u32_at(b, 12) == u32::MAX
+            || u32_at(b, 16) == u32::MAX
+        {
+            return Err(Error::UnsupportedZip);
+        }
+        let offset = u32_at(b, 16);
+        let size = u32_at(b, 12);
+        let count = u16_at(b, 10);
         if offset as u64 + size as u64 != end_offset {
             return Err(Error::InvalidZip);
         }

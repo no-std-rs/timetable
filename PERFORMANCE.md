@@ -30,9 +30,9 @@ Seven measured rounds after one warmup, from
 
 | Operation | Median |
 | --- | ---: |
-| Original metadata preparation | 20.507 ms |
-| Original query with retained metadata | 419.964 ms |
-| Complete original-only bootstrap and query | 442.895 ms |
+| Original metadata preparation | 17.778 ms |
+| Original query with retained metadata | 293.391 ms |
+| Complete original-only bootstrap and query | 308.529 ms |
 
 Other runs on this shared host ranged down to about 184 ms for the same query;
 these values are observations, not MCU latency guarantees. The final CSV keeps
@@ -63,9 +63,9 @@ the target ABI. No target execution or allocator is required.
 
 | Trip capacity | RISC-V 32-bit task state | Explicit reserves | Total | Fits 400,000 B |
 | ---: | ---: | ---: | ---: | :---: |
-| 1,024 | 132,520 B | 139,264 B | 271,784 B | Yes |
-| **2,048** | **177,576 B** | **139,264 B** | **316,840 B** | **Yes** |
-| 4,096 | 267,688 B | 139,264 B | 406,952 B | No |
+| 1,024 | 132,536 B | 139,264 B | 271,800 B | Yes |
+| **2,048** | **177,592 B** | **139,264 B** | **316,856 B** | **Yes** |
+| 4,096 | 267,704 B | 139,264 B | 406,968 B | No |
 
 Raw compiler results: [RISC-V](benchmarks/ram-riscv32.json),
 [x86_64](benchmarks/ram-x86_64.json). The equivalent 2,048-trip x86_64
@@ -85,7 +85,7 @@ The reserves are explicit assumptions, changeable through `memory::Reserves`:
 | Other application state/UI | 16,384 |
 | **Total** | **139,264** |
 
-The 32-bit baseline leaves **83,160 B** within 400,000 B. A real board transport
+The 32-bit baseline leaves **83,144 B** within 400,000 B. A real board transport
 changes the future layout and may exceed these allowances, so measure its stack
 high-water and account its driver, TLS and executor storage before deployment.
 The probe is an ABI baseline, not a full firmware map or measured physical peak.

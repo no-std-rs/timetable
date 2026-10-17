@@ -223,6 +223,15 @@ Firmware should place large buffers/indexes in suitably sized task/static
 storage rather than assuming a small stack can hold them. All buffers and
 indexes remain caller-owned; no hidden heap is used.
 
+Before publishing a downloaded ZIP cache, reopen the provisional storage and run
+`zip::verify` with a workspace, nonempty scratch buffer and one caller-owned
+`zip::VerificationSlot` per archive entry. It verifies every payload and matches
+directory names, flags, methods, sizes, CRCs and offsets to the local entries;
+insufficient slot capacity returns `IndexFull`.
+The host download example supplies 64 slots. `Feed::open` and `Directory::read`
+index the directory and do not verify payloads. Commit storage only after full
+verification succeeds.
+
 The examples now default to **2,048 trip slots, 128 service slots and 256 cached
 events**. The compiler-derived 32-bit RISC-V baseline plus explicit firmware
 reserves is about **317 KB of a 400,000-byte budget**. A 4,096-trip profile exceeds

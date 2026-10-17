@@ -257,7 +257,13 @@ impl Http {
         drop(file);
         // Verify every member before replacing the previous cached snapshot.
         let source = FileIo(File::open(&temporary)?);
-        zip::verify(source, &mut zip::Workspace::new(), &mut buf).await?;
+        zip::verify(
+            source,
+            &mut zip::Workspace::new(),
+            &mut buf,
+            &mut [zip::VerificationSlot::EMPTY; 64],
+        )
+        .await?;
         std::fs::rename(temporary, path)?;
         Ok(())
     }

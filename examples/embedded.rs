@@ -58,7 +58,9 @@ pub async fn collect_official<T: TcpConnect, D: Dns>(
 }
 
 /// Stream a pinned official archive to flash/SD using constant RAM. The caller
-/// commits the new cache snapshot only after validating it with `Feed::open`.
+/// reopens the provisional storage and runs `zip::verify` with a workspace,
+/// scratch buffer and one `VerificationSlot` per member before committing it.
+/// `Feed::open` indexes the directory and does not validate member payloads.
 pub async fn download<T: TcpConnect, D: Dns, W: Write>(
     client: &mut HttpClient<'_, T, D>,
     url: &str,
