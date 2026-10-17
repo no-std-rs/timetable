@@ -1,0 +1,25 @@
+[package]
+name = "timetable-display"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+description = "Bounded timetable groups, walking estimates and a round-screen Rust UI"
+publish = false
+
+[dependencies]
+gtfs = { path = "../gtfs" }
+heapless = { version = "0.9.3", features = ["serde"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde-json-core = "0.6"
+embedded-graphics = "0.8.2"
+embedded-io-async = "0.7"
+time = { version = "0.3.55", default-features = false }
+
+[dev-dependencies]
+stats_alloc = "0.1.10"
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+time = { version = "0.3.55", default-features = false, features = ["macros"] }
+
+[lints.rust]
+unsafe_code = "forbid"
