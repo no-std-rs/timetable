@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f5f1e8">
+  <meta name="description" content="Your lines, your stops, a little time to spare. A small Rust timetable for the round ESP32 display.">
+  <title>timetable — a little time to spare</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./installer.js"></script>
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="masthead wrap">
+    <a class="wordmark" href="#"><span class="seal" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="m22 2-5 11 6 5-8 12"/></svg></span>timetable<span class="wordmark-dot">.</span></a>
+    <a class="quiet-link" href="https://github.com/no-std-rs/timetable">Made in Rust <span aria-hidden="true">↗</span></a>
+  </header>
+  <main class="wrap">
+    <section class="hero" aria-labelledby="title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="red-dot"></span> A SMALL RITUAL FOR GOING PLACES</p>
+        <h1 id="title">A little time<br>to <em>spare.</em></h1>
+        <p class="intro">Your lines. Your stops. Just enough information<br class="desktop-break"> to know when it’s time to leave.</p>
+        <a class="button primary" href="#your-groups">Make it yours <span aria-hidden="true">↓</span></a>
+        <p class="hardware-note">For the GUITION 240 × 240 round ESP32-C3 display.</p>
+      </div>
+      <figure class="device-figure">
+        <div class="device-shell">
+          <div class="device-face" id="preview" aria-label="Illustration of your timetable display">
+            <svg class="gold-seam" viewBox="0 0 240 240" aria-hidden="true"><path d="m204 21-11 16 9 12 26 7"/></svg>
+            <button class="preview-group" id="preview-group" title="Preview the next group">Morning</button>
+            <div class="device-first"><span class="line-badge" id="preview-line">4</span><span class="device-arrival"><strong id="preview-minutes">12</strong><small>min</small></span></div>
+            <div class="device-direction" id="preview-direction">Górczyn PKM</div>
+            <div class="device-stop" id="preview-stop">Most Teatralny</div>
+            <div class="device-leave" id="preview-leave">Leave in 5 min</div>
+            <div class="device-walk" id="preview-walk">6m walk · 100% walk est.</div>
+            <div class="device-next"><span id="preview-next-line">12 · Starołęka PKM</span><b>21m</b></div>
+            <div class="device-next"><span id="preview-last-line">4 · Górczyn PKM</span><b>28m</b></div>
+            <div class="device-footer"><i></i>09:41 / SCHEDULED</div>
+          </div>
+        </div>
+        <figcaption>Illustrative times. The device reads the official timetable.</figcaption>
+      </figure>
+    </section>
+
+    <div class="setup-heading"><span class="eyebrow">SETTLE IN. THEN SET OFF.</span><p>One small display. Your everyday journeys.</p></div>
+    <form id="settings" autocomplete="off">
+      <section class="setup-section" id="your-groups" aria-labelledby="groups-title">
+        <div class="section-heading"><span class="step">01</span><div><h2 id="groups-title">The places you go.</h2><p>Keep different stops and directions together. Switch by touch, or by time of day.</p></div></div>
+        <div class="card groups-card">
+          <svg class="card-seam" viewBox="0 0 100 70" aria-hidden="true"><path d="m86 0-8 19 7 13-20 13 2 25"/></svg>
+          <div class="group-tabs" id="group-tabs" role="tablist" aria-label="Departure groups"></div>
+          <div class="group-toolbar"><label class="name-label" for="group-name">Group name<input id="group-name" maxlength="24" value="Morning" required></label><button type="button" id="remove-group" class="text-button danger">Remove group</button></div>
+          <div class="picks" id="picks"></div>
+          <button type="button" id="add-pick" class="add-pick"><span>+</span> Add a line &amp; stop</button>
+          <div class="schedule-toggle"><label><input type="checkbox" id="scheduled"> Use this group on a schedule</label><span>Poznań local time</span></div>
+          <div id="schedule" class="schedule" hidden>
+            <div id="days" class="days" role="group" aria-label="Days of week"></div>
+            <label>From<input type="time" id="start-time" value="06:00" required></label><span class="time-to">to</span><label>Until<input type="time" id="end-time" value="11:00" required></label>
+            <p class="fine-print">Overnight windows work too. If groups overlap, the first one wins. Touch can override a schedule for two hours.</p>
+          </div>
+          <div class="card-footer"><span>Up to 4 groups · 4 line/stop choices in each</span><button type="button" id="export-groups" class="text-button">Export groups ↗</button><label class="text-button import-label">Import<input type="file" id="import-groups" accept="application/json,.json" hidden></label></div>
+        </div>
+      </section>
+
+      <section class="setup-section" aria-labelledby="wifi-title">
+        <div class="section-heading"><span class="step">02</span><div><h2 id="wifi-title">A connection, then a little quiet.</h2><p>The display keeps its timetable nearby. Your Wi-Fi settings go straight to the device over USB.</p></div></div>
+        <div class="card wifi-card">
+          <label for="wifi-ssid">Wi-Fi name<input id="wifi-ssid" name="wifi_ssid" placeholder="Your 2.4 GHz network" required autocomplete="off"></label>
+          <label for="wifi-password">Password<span class="password-input"><input id="wifi-password" name="wifi_password" type="password" placeholder="Leave empty for an open network" autocomplete="new-password"><button type="button" id="show-password" aria-label="Show password">Show</button></span></label>
+          <p class="fine-print">Settings stay in this tab until you install. Nothing is uploaded or saved by this website.</p>
+        </div>
+      </section>
+
+      <section class="setup-section" aria-labelledby="install-title">
+        <div class="section-heading"><span class="step">03</span><div><h2 id="install-title">A small thing, ready to go.</h2><p>Connect the round display with a USB data cable. We’ll take it from here.</p></div></div>
+        <div class="card install-card">
+          <div class="release-row"><span class="release-state" id="release-state"><i></i> Checking the latest build</span><a id="revision" class="quiet-link" hidden></a></div>
+          <p id="status" role="status">Loading the installer…</p>
+          <button id="prepare" type="submit" class="button primary" disabled>Prepare USB install <span aria-hidden="true">↗</span></button>
+          <div id="install-area" hidden><esp-web-install-button id="installer"><button slot="activate" type="button" class="button primary">Install on display ↗</button><span slot="unsupported">Use desktop Chrome or Edge to install over USB.</span><span slot="not-allowed">Open this page over HTTPS or localhost to install.</span></esp-web-install-button></div>
+          <div class="install-notes"><p>Desktop Chrome or Edge · GUITION ESP32-2424S012-V1.0 · 4 MB flash</p><p>Installation replaces the device’s firmware and saved settings. Wi-Fi settings are stored in its local flash.</p></div>
+          <details class="download-details"><summary>Prefer to flash it yourself?</summary><p><a id="download" hidden download="timetable-display.bin">Download verified firmware</a><span id="no-download">A binary will be available after the first published build.</span></p><code id="digest"></code></details>
+        </div>
+      </section>
+    </form>
+
+    <section class="aftercare" aria-labelledby="after-title"><span class="little-seal" aria-hidden="true">+</span><div><h2 id="after-title">Less checking. More going.</h2><p>Swipe to change group. Tap the heading to see them all. Hold the screen to add a line, choose its stop or adjust your walk.</p><p class="fine-print">Times are scheduled, rather than live vehicle predictions. “Walk est.” assumes your walking time varies uniformly within the range you set; it isn’t a measured chance of the vehicle arriving on time. Conditional boarding services are marked on the device.</p></div></section>
+  </main>
+  <footer class="site-footer wrap"><span class="wordmark small">timetable.</span><span>Porcelain, a little gold, a little urgency.</span><a class="quiet-link" href="https://github.com/no-std-rs/timetable">Source &amp; build notes ↗</a></footer>
+
+  <dialog id="pick-dialog" aria-labelledby="pick-title"><form id="pick-form" method="dialog">
+    <div class="dialog-heading"><div><p class="eyebrow">ONE EVERYDAY JOURNEY</p><h2 id="pick-title">A line. A stop. Your pace.</h2></div><button type="button" id="cancel-pick" class="close-button" aria-label="Close">×</button></div>
+    <p id="catalog-status" class="fine-print">Loading Poznań routes and stops…</p>
+    <div class="field-pair"><label>Line<select id="route-select" required></select></label><label>Direction<select id="direction-select"><option value="-1">Either direction</option></select></label></div>
+    <label>Stop<select id="stop-select" required></select></label>
+    <div class="walk-control"><label for="walk-minutes">Time to walk there<span>In minutes, at your usual pace.</span></label><input id="walk-minutes" type="number" min="0" max="60" value="6" required></div>
+    <details class="estimate-details"><summary>Leave a little room</summary><div class="field-pair"><label>Walking variation ±<input type="number" id="walk-spread" min="0" max="15" value="1" required></label><label>Boarding buffer<input type="number" id="walk-margin" min="0" max="10" value="1" required></label></div><p class="fine-print">Minutes. The walking estimate uses this range; “leave in” includes your boarding buffer.</p></details>
+    <p id="pick-error" role="alert" class="error" hidden></p>
+    <div class="dialog-footer"><button type="button" id="delete-pick" class="text-button danger" hidden>Remove choice</button><button type="submit" class="button primary">Save choice <span aria-hidden="true">↗</span></button></div>
+  </form></dialog>
+</body>
+</html>

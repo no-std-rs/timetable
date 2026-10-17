@@ -1,0 +1,13 @@
+The GC9A01 panel initialization, board wiring, tiled DrawTarget, partition layout
+and ESP flashing/package workflow are adapted from no-std-rs/ubus-zero's
+examples/esp32c3-router-display and tools, under Apache-2.0.
+https://github.com/no-std-rs/ubus-zero
+That board setup derives from pawelchcki/razem-tag:
+https://github.com/pawelchcki/razem-tag/tree/c9bd439959b311bc16fd3fe44942d473badc6313
+
+The timetable UI, groups, catalogue and data pipeline are implemented here.
+
+certs/certum-trusted-root.der is Certum Trusted Root CA, SHA-256
+FE7696573855773E37A95E7AD4D9CC96C30157C15D31765BA9B15704E1AE78FD,
+matching Certum's published trust anchor and the platform-verified ZTM chain.
+https://www.certum.eu/en/cert_expertise_root_certificates/
