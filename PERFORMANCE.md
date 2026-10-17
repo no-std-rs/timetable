@@ -122,18 +122,18 @@ the complete ZIP; streaming bounds RAM, not total transferred bytes.
 ## Reproduce
 
 ```sh
-cargo run --release --example poznan -- download 20261015_20261031.zip poznan.zip
-cargo run --release --example bench_stream -- poznan.zip 4 20261017 129 7
+cargo run -p gtfs --release --example poznan -- download 20261015_20261031.zip poznan.zip
+cargo run -p gtfs --release --example bench_stream -- poznan.zip 4 20261017 129 7
 rustup target add riscv32imac-unknown-none-elf
 python3 checks/check_ram.py
 python3 checks/check_ram.py --target x86_64-unknown-linux-gnu
 
 # Tiny, network-independent regression used in CI:
-cargo run --release --example bench_stream -- tests/fixtures/gtfs.zip 4 20261017 S1 1
+cargo run -p gtfs --release --example bench_stream -- gtfs/tests/fixtures/gtfs.zip 4 20261017 S1 1
 
 # Direct streams with no ZIP file created:
-cargo run --release --example poznan -- original 20261015_20261031.zip departures 4 20261017 129
-cargo run --release --example poznan -- fallback https://files.mobilitydatabase.org/mdb-982/mdb-982-202610150044/mdb-982-202610150044.zip 20261015_20261031.zip 4 20261017 129
+cargo run -p gtfs --release --example poznan -- original 20261015_20261031.zip departures 4 20261017 129
+cargo run -p gtfs --release --example poznan -- fallback https://files.mobilitydatabase.org/mdb-982/mdb-982-202610150044/mdb-982-202610150044.zip 20261015_20261031.zip 4 20261017 129
 ```
 
 Historical links may disappear; list dated archives/snapshots before choosing a

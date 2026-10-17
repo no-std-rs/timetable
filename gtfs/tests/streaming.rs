@@ -1,6 +1,6 @@
 use embedded_io_async::{ErrorType, Read, Seek, SeekFrom};
 use futures::executor::block_on;
-use timetable::{
+use gtfs::{
     Date, Error, Feed, Id, IdSet, Table, Time, TripIndex, TripSlot, csv, http, poznan, stream, zip,
 };
 
@@ -476,8 +476,8 @@ fn bounded_event_cache_clears_after_late_errors_and_overflow() {
         trips.insert("T_A", 0, Some(0)).unwrap();
         trips.insert("T_C", 0, Some(0)).unwrap();
         trips.finish().unwrap();
-        let mut events = [timetable::query::DepartureSlot::<32>::EMPTY; 1];
-        let mut output = timetable::query::DepartureBuffer::new(&mut events);
+        let mut events = [gtfs::query::DepartureSlot::<32>::EMPTY; 1];
+        let mut output = gtfs::query::DepartureBuffer::new(&mut events);
         let mut work = zip::Workspace::new();
         stream::collect(
             Forward(Memory::new(FIXTURE, 7)),
@@ -547,25 +547,14 @@ fn trip_cursor_handles_misses_order_changes_and_long_unselected_ids() {
 fn ram_budgets_reject_overflow_and_oversized_tasks() {
     let task = async {};
     let usage =
-        timetable::memory::Usage::check(&task, 100, timetable::memory::Reserves::EMBEDDED, 400_000)
-            .unwrap();
+        gtfs::memory::Usage::check(&task, 100, gtfs::memory::Reserves::EMBEDDED, 400_000).unwrap();
     assert_eq!(usage.total, usage.task_state + 100 + 139_264);
     assert!(matches!(
-        timetable::memory::Usage::check(
-            &task,
-            usize::MAX,
-            timetable::memory::Reserves::EMBEDDED,
-            400_000
-        ),
+        gtfs::memory::Usage::check(&task, usize::MAX, gtfs::memory::Reserves::EMBEDDED, 400_000),
         Err(Error::RamBudgetExceeded)
     ));
     assert!(matches!(
-        timetable::memory::Usage::check(
-            &task,
-            400_000,
-            timetable::memory::Reserves::EMBEDDED,
-            400_000
-        ),
+        gtfs::memory::Usage::check(&task, 400_000, gtfs::memory::Reserves::EMBEDDED, 400_000),
         Err(Error::RamBudgetExceeded)
     ));
 }
@@ -597,8 +586,8 @@ fn cancelling_a_pending_stream_drops_provisional_events() {
         let mut trips = TripIndex::new(&mut slots);
         trips.insert("T_A", 0, None).unwrap();
         trips.finish().unwrap();
-        let mut events = [timetable::query::DepartureSlot::<32>::EMPTY; 8];
-        let mut output = timetable::query::DepartureBuffer::new(&mut events);
+        let mut events = [gtfs::query::DepartureSlot::<32>::EMPTY; 8];
+        let mut output = gtfs::query::DepartureBuffer::new(&mut events);
         let mut work = zip::Workspace::new();
         {
             let source = PausedFooter {

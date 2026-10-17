@@ -347,6 +347,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gtfs"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "csv-core",
+ "embedded-io-adapters",
+ "embedded-io-async",
+ "embedded-nal-async",
+ "futures",
+ "miniz_oxide",
+ "reqwless",
+ "stats_alloc",
+ "tokio",
+ "tokio-rustls",
+ "webpki-roots",
+]
+
+[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -707,24 +725,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "timetable"
-version = "0.1.0"
-dependencies = [
- "crc32fast",
- "csv-core",
- "embedded-io-adapters",
- "embedded-io-async",
- "embedded-nal-async",
- "futures",
- "miniz_oxide",
- "reqwless",
- "stats_alloc",
- "tokio",
- "tokio-rustls",
- "webpki-roots",
 ]
 
 [[package]]

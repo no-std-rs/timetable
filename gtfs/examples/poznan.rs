@@ -1,13 +1,13 @@
 //! Runnable host example. For allocator-free firmware networking see embedded.rs.
 mod support;
 
-use std::fs::File;
-use support::{AnyError, Counting, FileIo, Http, member};
-use timetable::{
+use gtfs::{
     Date, Error, Feed, Id, IdSet, Table, TripIndex, TripSlot, poznan,
     query::{DepartureBuffer, DepartureSlot},
     stream, zip,
 };
+use std::fs::File;
+use support::{AnyError, Counting, FileIo, Http, member};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), AnyError> {
@@ -233,11 +233,11 @@ async fn remote(http: &mut Http, url: &str, args: &[String]) -> Result<(), AnyEr
         member(&dir, Table::StopTimes)?,
         &mut work,
         |row| {
-            if let Some(trip) = cursor.find(row.required(timetable::csv::Column::TripId)?)? {
-                let id = row.required(timetable::csv::Column::StopId)?;
+            if let Some(trip) = cursor.find(row.required(gtfs::csv::Column::TripId)?)? {
+                let id = row.required(gtfs::csv::Column::StopId)?;
                 if dated {
                     if stop == Some(id) {
-                        print_departure(timetable::query::Departure {
+                        print_departure(gtfs::query::Departure {
                             route_index: trip.route_index,
                             direction: trip.direction,
                             event: row.stop_time()?,
@@ -253,7 +253,7 @@ async fn remote(http: &mut Http, url: &str, args: &[String]) -> Result<(), AnyEr
     .await?;
     if !dated {
         http.scan(url, length, member(&dir, Table::Stops)?, &mut work, |row| {
-            if stops.contains(row.required(timetable::csv::Column::StopId)?) {
+            if stops.contains(row.required(gtfs::csv::Column::StopId)?) {
                 let s = row.stop()?;
                 println!(
                     "{}\t{}\t{}",
@@ -512,7 +512,7 @@ fn print_buffer(output: &mut DepartureBuffer<'_, 32>) {
     }
 }
 
-fn print_departure(d: timetable::query::Departure<'_>) -> Result<(), Error> {
+fn print_departure(d: gtfs::query::Departure<'_>) -> Result<(), Error> {
     // GTFS pickup_type=1 means no boarding. Keep the restriction visible here.
     if let Some(time) = d.event.departure {
         println!(

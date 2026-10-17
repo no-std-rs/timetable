@@ -17,7 +17,7 @@ subprocess.run([
     "cargo", "rustc", "--manifest-path", str(root / "checks/ram/Cargo.toml"),
     "--locked", "--offline", "--release", "--target", args.target, "--", "--emit=llvm-ir",
 ], check=True, env=env)
-ir_file = max((target_dir / args.target / "release/deps").glob("timetable_ram_probe-*.ll"), key=lambda p: p.stat().st_mtime)
+ir_file = max((target_dir / args.target / "release/deps").glob("gtfs_ram_probe-*.ll"), key=lambda p: p.stat().st_mtime)
 ir = ir_file.read_text()
 
 def constant(name):

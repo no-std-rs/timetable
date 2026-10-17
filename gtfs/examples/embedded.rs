@@ -2,11 +2,11 @@
 //! Supply your network stack, DNS, verified TLS configuration and flash writer.
 use embedded_io_async::{Read, Write};
 use embedded_nal_async::{Dns, TcpConnect};
+use gtfs::{Error, Table, TripIndex, csv, query::DepartureBuffer, stream, zip};
 use reqwless::{
     client::HttpClient,
     request::{Method, RequestBuilder},
 };
-use timetable::{Error, Table, TripIndex, csv, query::DepartureBuffer, stream, zip};
 
 /// Everything retained from mirror bootstrap is caller-owned and bounded.
 /// Keep route/stop names in flash or stream them to the UI as needed.
@@ -112,7 +112,7 @@ pub async fn download<T: TcpConnect, D: Dns, W: Write>(
 pub async fn stream_routes<R: Read>(
     body: R,
     workspace: &mut zip::Workspace,
-    mut visit: impl FnMut(timetable::Route<'_>) -> Result<(), Error>,
+    mut visit: impl FnMut(gtfs::Route<'_>) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let mut archive = zip::Reader::new(body, workspace);
     while let Some(entry) = archive.next_entry().await? {

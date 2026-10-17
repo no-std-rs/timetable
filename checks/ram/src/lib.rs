@@ -1,7 +1,7 @@
 #![no_std]
 //! Compile this complete allocator-free workflow for the device ABI. LLVM folds
 //! size_of_val into a constant; check_ram.py reads it without running MCU code.
-use timetable::{
+use gtfs::{
     Date, Error, TripIndex, TripSlot, memory,
     query::{DepartureBuffer, DepartureSlot},
     stream, zip,

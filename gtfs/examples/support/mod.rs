@@ -3,17 +3,17 @@
 
 use embedded_io_adapters::tokio_1::FromTokio;
 use embedded_io_async::{ErrorType, Read, Seek, SeekFrom, Write};
+use gtfs::{
+    Error, Table, TripIndex, csv,
+    http::{ByteRange, RangeFetch, RangeReader},
+    stream, zip,
+};
 use reqwless::{
     TryBufRead,
     request::{Method, Request, RequestBuilder},
     response::Response,
 };
 use std::{fs::File, io, sync::Arc};
-use timetable::{
-    Error, Table, TripIndex, csv,
-    http::{ByteRange, RangeFetch, RangeReader},
-    stream, zip,
-};
 use tokio::net::TcpStream;
 use tokio_rustls::{
     TlsConnector,
@@ -328,7 +328,7 @@ impl Http {
         trips: &TripIndex<'_, N>,
         stops: &[&str],
         workspace: &mut zip::Workspace,
-        output: &mut timetable::query::DepartureBuffer<'_, O>,
+        output: &mut gtfs::query::DepartureBuffer<'_, O>,
     ) -> Result<(), AnyError> {
         output.clear();
         let mut socket = self.connect(url).await?;

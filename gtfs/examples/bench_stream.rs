@@ -2,13 +2,13 @@
 //! separately by the reqwless example. All files are opened before allocation tracking.
 use embedded_io_async::{ErrorType, Read};
 use futures::executor::block_on;
-use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
-use std::{alloc::System, fs::File, io, mem::size_of_val, time::Instant};
-use timetable::{
+use gtfs::{
     Error, TripIndex, TripSlot, memory,
     query::{DepartureBuffer, DepartureSlot},
     stream, zip,
 };
+use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
+use std::{alloc::System, fs::File, io, mem::size_of_val, time::Instant};
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
