@@ -2,6 +2,7 @@
 import io
 from pathlib import Path
 import zipfile
+import zlib
 
 ROOT = Path(__file__).parent / "fixtures"
 FILES = {
@@ -26,7 +27,7 @@ def archive(name, files, method=zipfile.ZIP_DEFLATED, descriptors=False, comment
         for path, content in files.items():
             info = zipfile.ZipInfo(path, date_time=(2026, 10, 17, 0, 0, 0))
             info.compress_type = method
-            z.writestr(info, content.encode())
+            z.writestr(info, content.encode() if isinstance(content, str) else content)
     (ROOT / name).write_bytes(out.getvalue())
 
 archive("gtfs.zip", FILES)
@@ -37,3 +38,19 @@ archive("stored.zip", {"routes.txt": FILES["routes.txt"]}, zipfile.ZIP_STORED)
 archive("calendar-dates-only.zip", {k:v for k,v in FILES.items() if k != "calendar.txt"})
 archive("shuffled.zip", {k:FILES[k] for k in ["trips.txt", "calendar_dates.txt", "stop_times.txt", "routes.txt", "calendar.txt", "stops.txt", "shapes.txt"]})
 archive("changed-trips.zip", {k:(v.replace("4,ALL,T_A", "5,ALL,T_A") if k == "trips.txt" else v) for k,v in FILES.items()})
+
+# This four-byte CRC preimage exercises a legal ambiguity in data descriptors.
+marker_crc_payload = bytes.fromhex("ac0a7ad5")
+assert zlib.crc32(marker_crc_payload) == 0x08074b50
+archive("marker-crc-signed.zip", {"rare-crc.bin": marker_crc_payload}, descriptors=True)
+signed = (ROOT / "marker-crc-signed.zip").read_bytes()
+name_size = int.from_bytes(signed[26:28], "little")
+extra_size = int.from_bytes(signed[28:30], "little")
+with zipfile.ZipFile(io.BytesIO(signed)) as z:
+    compressed_size = z.infolist()[0].compress_size
+descriptor = 30 + name_size + extra_size + compressed_size
+assert signed[descriptor:descriptor + 4] == b"PK\x07\x08"
+unsigned = bytearray(signed[:descriptor] + signed[descriptor + 4:])
+directory = int.from_bytes(unsigned[-6:-2], "little") - 4
+unsigned[-6:-2] = directory.to_bytes(4, "little")
+(ROOT / "marker-crc-unsigned.zip").write_bytes(unsigned)

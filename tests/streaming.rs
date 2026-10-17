@@ -249,6 +249,44 @@ fn directory_search_skips_false_end_records_inside_valid_comments() {
 }
 
 #[test]
+fn marker_valued_crc_accepts_both_descriptor_layouts() {
+    block_on(async {
+        for data in [
+            include_bytes!("fixtures/marker-crc-signed.zip").as_slice(),
+            include_bytes!("fixtures/marker-crc-unsigned.zip").as_slice(),
+        ] {
+            let mut workspace = zip::Workspace::new();
+            let mut reader = zip::Reader::new(Forward(Memory::new(data, 1)), &mut workspace);
+            assert_eq!(
+                reader.next_entry().await.unwrap().unwrap().name(),
+                b"rare-crc.bin"
+            );
+            let mut output = Vec::new();
+            let mut scratch = [0; 3];
+            loop {
+                let n = reader.read(&mut scratch).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                output.extend_from_slice(&scratch[..n]);
+            }
+            assert_eq!(output, [0xac, 0x0a, 0x7a, 0xd5]);
+            assert_eq!(crc32fast::hash(&output), 0x08074b50);
+            assert!(reader.next_entry().await.unwrap().is_none());
+            reader.finish_archive(&zip::Manifest::EMPTY).await.unwrap();
+            zip::verify(
+                Forward(Memory::new(data, 1)),
+                &mut workspace,
+                &mut [0; 3],
+                &mut [zip::VerificationSlot::EMPTY; 1],
+            )
+            .await
+            .unwrap();
+        }
+    });
+}
+
+#[test]
 fn official_queries_need_only_read_and_accept_arbitrary_member_order() {
     block_on(async {
         for data in [

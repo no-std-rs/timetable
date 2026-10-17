@@ -30,9 +30,9 @@ Seven measured rounds after one warmup, from
 
 | Operation | Median |
 | --- | ---: |
-| Original metadata preparation | 17.778 ms |
-| Original query with retained metadata | 293.391 ms |
-| Complete original-only bootstrap and query | 308.529 ms |
+| Original metadata preparation | 16.255 ms |
+| Original query with retained metadata | 249.696 ms |
+| Complete original-only bootstrap and query | 266.917 ms |
 
 Other runs on this shared host ranged down to about 184 ms for the same query;
 these values are observations, not MCU latency guarantees. The final CSV keeps
@@ -63,15 +63,15 @@ the target ABI. No target execution or allocator is required.
 
 | Trip capacity | RISC-V 32-bit task state | Explicit reserves | Total | Fits 400,000 B |
 | ---: | ---: | ---: | ---: | :---: |
-| 1,024 | 132,536 B | 139,264 B | 271,800 B | Yes |
-| **2,048** | **177,592 B** | **139,264 B** | **316,856 B** | **Yes** |
-| 4,096 | 267,704 B | 139,264 B | 406,968 B | No |
+| 1,024 | 132,584 B | 139,264 B | 271,848 B | Yes |
+| **2,048** | **177,640 B** | **139,264 B** | **316,904 B** | **Yes** |
+| 4,096 | 267,752 B | 139,264 B | 407,016 B | No |
 
 Raw compiler results: [RISC-V](benchmarks/ram-riscv32.json),
 [x86_64](benchmarks/ram-x86_64.json). The equivalent 2,048-trip x86_64
-slice-reader probe totals 346,384 B. The actual host file benchmark has larger
-source/timing bookkeeping and measures 235,368 B of task state, for a total
-budget of **374,632 B** with the same reserves.
+slice-reader probe totals 346,432 B. The actual host file benchmark has larger
+source/timing bookkeeping and measures 235,512 B of task state, for a total
+budget of **374,776 B** with the same reserves.
 
 The reserves are explicit assumptions, changeable through `memory::Reserves`:
 
@@ -85,7 +85,7 @@ The reserves are explicit assumptions, changeable through `memory::Reserves`:
 | Other application state/UI | 16,384 |
 | **Total** | **139,264** |
 
-The 32-bit baseline leaves **83,144 B** within 400,000 B. A real board transport
+The 32-bit baseline leaves **83,096 B** within 400,000 B. A real board transport
 changes the future layout and may exceed these allowances, so measure its stack
 high-water and account its driver, TLS and executor storage before deployment.
 The probe is an ABI baseline, not a full firmware map or measured physical peak.

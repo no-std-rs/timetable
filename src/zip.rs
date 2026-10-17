@@ -211,6 +211,7 @@ pub struct Reader<'a, R> {
     entries: u32,
     tail: u32,
     footer_finished: bool,
+    next_signature: Option<u32>,
 }
 
 impl<'a, R: Read> Reader<'a, R> {
@@ -235,6 +236,7 @@ impl<'a, R: Read> Reader<'a, R> {
             entries: 0,
             tail: 0,
             footer_finished: false,
+            next_signature: None,
         }
     }
 
@@ -315,7 +317,12 @@ impl<'a, R: Read> Reader<'a, R> {
             return Ok(None);
         }
         let mut h = [0; 30];
-        self.exact(&mut h[..4]).await?;
+        if let Some(signature) = self.next_signature.take() {
+            h[..4].copy_from_slice(&signature.to_le_bytes());
+            self.position += 4;
+        } else {
+            self.exact(&mut h[..4]).await?;
+        }
         match u32_at(&h, 0) {
             CENTRAL | END => {
                 self.archive_done = true;
@@ -363,15 +370,27 @@ impl<'a, R: Read> Reader<'a, R> {
         Ok(Some(entry))
     }
 
-    async fn descriptor(&mut self) -> Result<(u32, u32, u32), Error> {
+    async fn descriptor(&mut self, expected: (u32, u32, u32)) -> Result<(u32, u32, u32), Error> {
         let mut h = [0; 12];
-        self.exact(&mut h[..4]).await?;
-        if u32_at(&h, 0) == DESCRIPTOR {
-            self.exact(&mut h).await?;
-        } else {
-            self.exact(&mut h[4..]).await?;
+        self.exact(&mut h).await?;
+        let unsigned = (u32_at(&h, 0), u32_at(&h, 4), u32_at(&h, 8));
+        if unsigned.0 != DESCRIPTOR {
+            return Ok(unsigned);
         }
-        Ok((u32_at(&h, 0), u32_at(&h, 4), u32_at(&h, 8)))
+        if unsigned == expected && expected != (DESCRIPTOR, DESCRIPTOR, DESCRIPTOR) {
+            return Ok(unsigned);
+        }
+        let mut last = [0; 4];
+        self.exact(&mut last).await?;
+        let last = u32_at(&last, 0);
+        if unsigned == expected && last != DESCRIPTOR {
+            // All three words equal the marker: a fourth marker is a signed
+            // descriptor's size; any other word belongs to the next ZIP record.
+            self.next_signature = Some(last);
+            self.position -= 4;
+            return Ok(unsigned);
+        }
+        Ok((unsigned.1, unsigned.2, last))
     }
 
     /// Skip without inflating when sizes are known. CRC is checked only for fully read entries.
@@ -383,7 +402,15 @@ impl<'a, R: Read> Reader<'a, R> {
         if let Some(n) = self.remaining {
             self.discard(n as u64).await?;
             if self.current.is_some_and(|e| e.descriptor) {
-                self.descriptor().await?;
+                let entry = self.current.ok_or(Error::InvalidZip)?;
+                let expected = (
+                    entry.crc.ok_or(Error::InvalidZip)?,
+                    entry.compressed_size.ok_or(Error::InvalidZip)?,
+                    entry.uncompressed_size.ok_or(Error::InvalidZip)?,
+                );
+                if self.descriptor(expected).await? != expected {
+                    return Err(Error::InvalidZip);
+                }
             }
             self.remaining = Some(0);
             self.pending_start = self.pending_end;
@@ -401,7 +428,12 @@ impl<'a, R: Read> Reader<'a, R> {
             return Err(Error::SizeMismatch);
         }
         let (crc, compressed, uncompressed) = if entry.descriptor {
-            self.descriptor().await?
+            self.descriptor((
+                self.crc.clone().finalize(),
+                u32::try_from(self.compressed).map_err(|_| Error::SizeMismatch)?,
+                u32::try_from(self.uncompressed).map_err(|_| Error::SizeMismatch)?,
+            ))
+            .await?
         } else {
             (
                 entry.crc.unwrap(),
@@ -890,5 +922,48 @@ impl Directory {
             return Err(Error::InvalidZip);
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Bytes<'a>(&'a [u8]);
+    impl ErrorType for Bytes<'_> {
+        type Error = Error;
+    }
+    impl Read for Bytes<'_> {
+        async fn read(&mut self, out: &mut [u8]) -> Result<usize, Error> {
+            if out.is_empty() || self.0.is_empty() {
+                return Ok(0);
+            }
+            out[0] = self.0[0];
+            self.0 = &self.0[1..];
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn equal_marker_crc_and_sizes_preserve_the_following_record() {
+        // Exercise the descriptor framing directly, without constructing a
+        // 0x08074b50-byte payload to give the size fields this boundary value.
+        futures::executor::block_on(async {
+            for signed in [false, true] {
+                let size = if signed { 16 } else { 12 };
+                let mut bytes = [0u8; 38];
+                for word in bytes[..size].chunks_exact_mut(4) {
+                    word.copy_from_slice(&DESCRIPTOR.to_le_bytes());
+                }
+                bytes[size..size + 4].copy_from_slice(&END.to_le_bytes());
+                bytes[size + 16..size + 20].copy_from_slice(&(size as u32).to_le_bytes());
+                let mut workspace = Workspace::new();
+                let mut reader = Reader::new(Bytes(&bytes[..size + 22]), &mut workspace);
+                let expected = (DESCRIPTOR, DESCRIPTOR, DESCRIPTOR);
+                assert_eq!(reader.descriptor(expected).await.unwrap(), expected);
+                assert!(reader.next_entry().await.unwrap().is_none());
+                reader.finish_archive(&Manifest::EMPTY).await.unwrap();
+            }
+        });
     }
 }

@@ -3,23 +3,23 @@
   "profiles": [
     {
       "trips": 1024,
-      "task_bytes": 132536,
+      "task_bytes": 132584,
       "reserves_bytes": 139264,
-      "total_bytes": 271800,
+      "total_bytes": 271848,
       "fits_400000": true
     },
     {
       "trips": 2048,
-      "task_bytes": 177592,
+      "task_bytes": 177640,
       "reserves_bytes": 139264,
-      "total_bytes": 316856,
+      "total_bytes": 316904,
       "fits_400000": true
     },
     {
       "trips": 4096,
-      "task_bytes": 267704,
+      "task_bytes": 267752,
       "reserves_bytes": 139264,
-      "total_bytes": 406968,
+      "total_bytes": 407016,
       "fits_400000": false
     }
   ]
