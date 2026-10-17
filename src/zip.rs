@@ -952,7 +952,7 @@ mod tests {
             for signed in [false, true] {
                 let size = if signed { 16 } else { 12 };
                 let mut bytes = [0u8; 38];
-                for word in bytes[..size].chunks_exact_mut(4) {
+                for word in bytes[..size].as_chunks_mut::<4>().0 {
                     word.copy_from_slice(&DESCRIPTOR.to_le_bytes());
                 }
                 bytes[size..size + 4].copy_from_slice(&END.to_le_bytes());
