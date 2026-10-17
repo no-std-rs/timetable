@@ -36,6 +36,8 @@ archive("stored-descriptor.zip", FILES, zipfile.ZIP_STORED, descriptors=True)
 archive("comment.zip", {"routes.txt": FILES["routes.txt"]}, comment=b"x" * 137 + b"PK\x05\x06not-an-end")
 archive("stored.zip", {"routes.txt": FILES["routes.txt"]}, zipfile.ZIP_STORED)
 archive("calendar-dates-only.zip", {k:v for k,v in FILES.items() if k != "calendar.txt"})
+archive("no-stop-times.zip", {k:v for k,v in FILES.items() if k != "stop_times.txt"})
+archive("no-calendar.zip", {k:v for k,v in FILES.items() if k not in ["calendar.txt", "calendar_dates.txt"]})
 archive("shuffled.zip", {k:FILES[k] for k in ["trips.txt", "calendar_dates.txt", "stop_times.txt", "routes.txt", "calendar.txt", "stops.txt", "shapes.txt"]})
 archive("changed-trips.zip", {k:(v.replace("4,ALL,T_A", "5,ALL,T_A") if k == "trips.txt" else v) for k,v in FILES.items()})
 

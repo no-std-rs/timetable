@@ -255,15 +255,16 @@ impl Http {
         }
         file.sync_all()?;
         drop(file);
-        // Verify every member before replacing the previous cached snapshot.
+        // Verify every member and require the timetable tables before publishing.
         let source = FileIo(File::open(&temporary)?);
-        zip::verify(
+        let manifest = zip::verify(
             source,
             &mut zip::Workspace::new(),
             &mut buf,
             &mut [zip::VerificationSlot::EMPTY; 64],
         )
         .await?;
+        require_timetable_tables(&manifest)?;
         std::fs::rename(temporary, path)?;
         Ok(())
     }
@@ -443,4 +444,63 @@ impl RangeFetch for RangeHttp<'_> {
 
 pub fn member(directory: &zip::Directory, table: Table) -> Result<zip::Member, Error> {
     directory.member(table).ok_or(Error::MissingTable(table))
+}
+
+fn require_timetable_tables(manifest: &zip::Manifest) -> Result<(), Error> {
+    for table in [Table::Routes, Table::Stops, Table::Trips, Table::StopTimes] {
+        if manifest.get(table).is_none() {
+            return Err(Error::MissingTable(table));
+        }
+    }
+    if manifest.get(Table::Calendar).is_none() && manifest.get(Table::CalendarDates).is_none() {
+        return Err(Error::MissingTable(Table::Calendar));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_snapshots_require_timetable_tables_after_zip_verification() {
+        futures::executor::block_on(async {
+            for (data, expected) in [
+                (
+                    include_bytes!("../../tests/fixtures/gtfs.zip").as_slice(),
+                    Ok(()),
+                ),
+                (
+                    include_bytes!("../../tests/fixtures/calendar-dates-only.zip").as_slice(),
+                    Ok(()),
+                ),
+                (
+                    include_bytes!("../../tests/fixtures/no-stop-times.zip").as_slice(),
+                    Err(Error::MissingTable(Table::StopTimes)),
+                ),
+                (
+                    include_bytes!("../../tests/fixtures/no-calendar.zip").as_slice(),
+                    Err(Error::MissingTable(Table::Calendar)),
+                ),
+                (
+                    include_bytes!("../../tests/fixtures/stored.zip").as_slice(),
+                    Err(Error::MissingTable(Table::Stops)),
+                ),
+            ] {
+                let manifest = zip::verify(
+                    data,
+                    &mut zip::Workspace::new(),
+                    &mut [0; 1024],
+                    &mut [zip::VerificationSlot::EMPTY; 8],
+                )
+                .await
+                .unwrap();
+                assert_eq!(require_timetable_tables(&manifest), expected);
+            }
+            assert_eq!(
+                require_timetable_tables(&zip::Manifest::EMPTY),
+                Err(Error::MissingTable(Table::Routes))
+            );
+        });
+    }
 }

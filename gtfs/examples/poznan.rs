@@ -283,6 +283,8 @@ async fn select_mirror(
     services: &mut IdSet<'_, 32>,
     workspace: &mut zip::Workspace,
 ) -> Result<zip::Manifest, AnyError> {
+    // Reject incomplete metadata before falling back to a single original pass.
+    member(source.directory, Table::StopTimes)?;
     services.clear();
     trips.clear();
     if let Some(date) = selection.date {
@@ -521,4 +523,55 @@ fn print_departure(d: gtfs::query::Departure<'_>) -> Result<(), Error> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_mirror_metadata_fails_before_fetching_tables() {
+        futures::executor::block_on(async {
+            let mut source = FileIo(
+                File::open(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/no-stop-times.zip"
+                ))
+                .unwrap(),
+            );
+            let directory = zip::Directory::read(&mut source, &mut [0; 1024])
+                .await
+                .unwrap();
+            assert!(directory.member(Table::Trips).is_some());
+            assert!(directory.member(Table::Calendar).is_some());
+            let mut http = Http::new();
+            let mut trip_slots = [TripSlot::<32>::EMPTY; 8];
+            let mut trips = TripIndex::new(&mut trip_slots);
+            let mut service_slots = [Id::<32>::EMPTY; 8];
+            let mut services = IdSet::new(&mut service_slots);
+            let error = select_mirror(
+                &mut http,
+                Mirror {
+                    url: "invalid-url-prevents-network-access",
+                    length: 0,
+                    directory: &directory,
+                },
+                stream::Selection {
+                    routes: &["4"],
+                    direction: None,
+                    date: Some("20261017".parse().unwrap()),
+                },
+                &mut trips,
+                &mut services,
+                &mut zip::Workspace::new(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<Error>(),
+                Some(&Error::MissingTable(Table::StopTimes))
+            );
+            assert_eq!(http.requests, 0);
+        });
+    }
 }

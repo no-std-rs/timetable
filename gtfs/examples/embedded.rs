@@ -60,6 +60,8 @@ pub async fn collect_official<T: TcpConnect, D: Dns>(
 /// Stream a pinned official archive to flash/SD using constant RAM. The caller
 /// reopens the provisional storage and runs `zip::verify` with a workspace,
 /// scratch buffer and one `VerificationSlot` per member before committing it.
+/// Require routes, stops, trips, stop times and at least one calendar table in
+/// the returned manifest before replacing a working timetable snapshot.
 /// `Feed::open` indexes the directory and does not validate member payloads.
 pub async fn download<T: TcpConnect, D: Dns, W: Write>(
     client: &mut HttpClient<'_, T, D>,
