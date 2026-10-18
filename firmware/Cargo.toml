@@ -63,6 +63,9 @@ spin = { version = "0.9", default-features = false, features = ["portable_atomic
 # on the host, without bringing the radio or hardware into runtime libraries.
 embedded-tls = { version = "=0.19.0", default-features = false, features = ["rustpki", "p384", "rsa"] }
 linked_list_allocator = { version = "0.10", default-features = false }
+reqwless = { version = "=0.14.0", default-features = false }
+embedded-io = { version = "0.7", features = ["std"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [profile.dev]
 opt-level = "s"

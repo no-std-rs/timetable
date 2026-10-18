@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 extern crate alloc;
+mod http_request;
 mod rtc;
 mod tls_memory;
 mod transport;
