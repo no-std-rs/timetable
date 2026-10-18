@@ -196,6 +196,9 @@ test("one stop box browses serving lines before a line is chosen", async ({ page
   await page.locator("#stop-search").press("ArrowDown");
   await page.locator(`#stop-options [data-stop="${stop}"]`).click();
   await expect(page.locator("#save-pick")).toBeEnabled();
+  await page.locator("#stop-search").press("Escape");
+  await expect(page.locator("#pick-dialog")).toBeHidden();
+  await expect(page.locator("#preview-stop")).toHaveText(catalog.stops[stop].name);
 });
 test("keyboard groups and undo retain selections without overwriting later edits", async ({ page }) => {
   await prepare(page);

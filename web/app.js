@@ -328,10 +328,10 @@ $("stop-search").addEventListener("blur", () => {
 });
 $("stop-search").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    if ($("stop-options").hidden) return;
     event.preventDefault();
     event.stopPropagation();
-    closeStops();
+    if ($("stop-options").hidden) $("pick-dialog").close();
+    else closeStops();
   } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
     if ($("stop-options").hidden) fillStops();
