@@ -188,3 +188,19 @@ fn panel_sends_the_complete_wire_tile_without_a_second_row_buffer() {
     assert_eq!(writes[6].as_slice(), pixels);
     assert_eq!(writes.len(), 7);
 }
+
+#[test]
+fn panel_sleep_disables_display_and_scanning_before_cpu_sleep() {
+    struct Delay(u32);
+    impl embedded_hal::delay::DelayNs for Delay {
+        fn delay_ns(&mut self, ns: u32) {
+            self.0 += ns;
+        }
+    }
+    let spi = Spi::default();
+    let mut panel = Panel::new(spi.clone(), Pin);
+    let mut delay = Delay(0);
+    panel.sleep(&mut delay).unwrap();
+    assert_eq!(*spi.0.borrow(), [vec![0x28], vec![], vec![0x10], vec![]]);
+    assert_eq!(delay.0, 120_000_000);
+}

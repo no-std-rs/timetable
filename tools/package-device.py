@@ -34,7 +34,7 @@ def package(directory):
         'name': 'timetable', 'board': 'GUITION ESP32-2424S012-V1.0',
         'chip': 'ESP32-C3', 'revision': revision, 'dirty': dirty,
         'sha256': checksum, 'size': len(binary), 'flash_size': 4 * 1024 * 1024,
-        'config_offset': CONFIG_OFFSET, 'config_version': 1,
+        'config_offset': CONFIG_OFFSET, 'config_version': 2,
     }
     manifest = {
         'name': metadata['name'], 'version': f'main-{revision[:12]}',

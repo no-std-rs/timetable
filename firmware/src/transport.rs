@@ -39,8 +39,18 @@ impl From<gtfs::Error> for Error {
 }
 
 pub fn now() -> Option<i64> {
+    now_micros().map(|us| us.div_euclid(1_000_000))
+}
+pub fn now_micros() -> Option<i64> {
     let offset = UTC_OFFSET.load(Ordering::Acquire);
-    (offset != i64::MIN).then(|| offset + Instant::now().as_secs() as i64)
+    (offset != i64::MIN).then(|| offset + Instant::now().as_micros() as i64)
+}
+/// Restore the RTC-derived clock before using cached departure times or TLS.
+pub fn restore_clock(utc_micros: i64) {
+    UTC_OFFSET.store(
+        utc_micros - Instant::now().as_micros() as i64,
+        Ordering::Release,
+    );
 }
 struct Clock;
 impl TlsClock for Clock {
@@ -206,7 +216,9 @@ pub async fn synchronize(stack: Stack<'static>) -> Result<(), Error> {
         if !(1_704_067_200..4_102_444_800).contains(&unix) {
             return Err(Error::Clock);
         }
-        UTC_OFFSET.store(unix - Instant::now().as_secs() as i64, Ordering::Release);
+        let fraction = u32::from_be_bytes(response[44..48].try_into().unwrap());
+        let micros = unix * 1_000_000 + ((u64::from(fraction) * 1_000_000) >> 32) as i64;
+        restore_clock(micros);
         Ok(())
     })
     .await

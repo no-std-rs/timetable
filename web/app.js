@@ -205,43 +205,82 @@ $("show-password").addEventListener("click", () => {
   $("show-password").setAttribute("aria-label", show ? "Hide password" : "Show password");
   $("show-password").setAttribute("aria-pressed", String(show));
 });
-for (const id of ["wifi-ssid", "wifi-password"]) $(id).addEventListener("input", changed);
+for (const id of ["wifi-ssid", "wifi-password", "battery-mode"]) $(id).addEventListener("input", changed);
+const picker = { stop: null, matches: [], active: -1 };
+const stopLabel = (i) => {
+  const s = state.catalog.stops[i];
+  return `${s.name}${s.code ? ` · ${s.code}` : ""}`;
+};
+function closeStops() {
+  $("stop-options").hidden = true;
+  $("stop-search").setAttribute("aria-expanded", "false");
+  $("stop-search").removeAttribute("aria-activedescendant");
+  picker.active = -1;
+}
 function fillRoutes(selected = $("route-select").value) {
-  const direction = Number($("direction-select").value), stop = $("stop-select").value;
-  const matches = state.index.routes($("route-search").value);
-  $("route-select").replaceChildren(new Option(matches.length ? "Choose a line" : "No matching lines", ""));
+  const direction = Number($("direction-select").value);
+  const matches = state.index.routes($("route-search").value, picker.stop ?? -1);
+  $("route-select").replaceChildren(new Option(matches.length ? (picker.stop === null ? "Choose a line (or find a stop first)" : "Choose a line at this stop") : "No matching lines", ""));
   for (const i of matches) $("route-select").append(new Option(state.catalog.routes[i].line, String(i)));
   $("route-select").value = selected !== "" && matches.includes(Number(selected)) ? selected : "";
-  $("route-results").textContent = matches.length ? `${matches.length} ${matches.length === 1 ? "line" : "lines"} · search with or without Polish accents` : "No lines match. Try a line number or another destination.";
-  fillDirections(direction, stop);
+  $("route-results").textContent = matches.length ? `${matches.length} ${matches.length === 1 ? "line" : "lines"}${picker.stop === null ? " · choose here to search its stops" : ` serving ${stopLabel(picker.stop)}`}` : picker.stop === null ? "No lines match. Try another line number or destination." : "No lines match. Clear the line search to see all lines serving your stop.";
+  fillDirections(direction);
 }
-function fillDirections(value = -1, stop = $("stop-select").value) {
+function fillDirections(value = -1) {
   const selected = $("route-select").value, route = selected === "" ? -1 : Number(selected);
   const r = state.catalog.routes[route];
   $("direction-select").replaceChildren(new Option("Either direction", "-1"));
-  const directions = state.index.directions(route);
+  const directions = state.index.directions(route, picker.stop ?? -1);
   if (r) for (const i of directions) $("direction-select").append(new Option(r.headsigns[i] || `Direction ${i + 1}`, String(i)));
   $("direction-select").value = String(directions.includes(value) ? value : -1);
   $("direction-select").disabled = !r;
-  fillStops(stop);
-}
-function fillStops(selected = $("stop-select").value) {
-  if (!state.catalog) return;
-  const value = $("route-select").value, route = value === "" ? -1 : Number(value), direction = Number($("direction-select").value);
-  const stops = state.index.stops(route, direction, $("stop-search").value);
-  $("stop-select").replaceChildren(new Option(value === "" ? "Choose a line first" : stops.length ? "Choose a boarding stop" : "No matching stops", ""));
-  for (const s of stops) {
-    const stop = state.catalog.stops[s];
-    $("stop-select").append(new Option(`${stop.name}${stop.code ? ` \xB7 ${stop.code}` : ""}`, String(s)));
-  }
-  $("stop-select").value = selected !== "" && stops.includes(Number(selected)) ? String(selected) : "";
-  $("stop-select").disabled = value === "";
-  $("stop-search").disabled = value === "";
-  $("stop-results").textContent = value === "" ? "Choose your line, then its direction and boarding stop." : stops.length ? `${stops.length} boarding ${stops.length === 1 ? "stop" : "stops"} · names and platform codes` : "No boarding stops match. Clear the search or choose another direction.";
+  closeStops();
+  updateStopHint();
   updatePickAvailability();
 }
+function updateStopHint() {
+  $("stop-results").textContent = picker.stop === null
+    ? ($("route-select").value === "" ? "Search any stop, then browse its lines. Polish accents are optional." : "Search this line’s boarding stops. Choose the blank line option to search every stop.")
+    : `Selected: ${stopLabel(picker.stop)}. Choose a line and direction below.`;
+}
+function fillStops() {
+  const value = $("route-select").value, route = value === "" ? -1 : Number(value), direction = Number($("direction-select").value);
+  // A selected label is display text, not a search query.
+  const query = picker.stop === null ? $("stop-search").value : "";
+  picker.matches = route < 0 && !query.trim() ? [] : state.index.stops(route, direction, query);
+  picker.active = -1;
+  $("stop-options").replaceChildren();
+  for (const i of picker.matches) {
+    const stop = state.catalog.stops[i], option = element("div", void 0, "stop-option");
+    option.id = `stop-option-${i}`;
+    option.dataset.stop = String(i);
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", "false");
+    option.append(element("span", stop.name), element("small", stop.code));
+    // Keep DOM focus on the combobox while choosing with a pointer.
+    option.addEventListener("mousedown", (event) => event.preventDefault());
+    option.addEventListener("click", () => selectStop(i));
+    $("stop-options").append(option);
+  }
+  const open = picker.matches.length > 0;
+  $("stop-options").hidden = !open;
+  $("stop-search").setAttribute("aria-expanded", String(open));
+  $("stop-search").removeAttribute("aria-activedescendant");
+  $("stop-results").textContent = open ? `${picker.matches.length} boarding ${picker.matches.length === 1 ? "stop" : "stops"} · select a name and platform` : query.trim() ? "No boarding stops match. Try part of a name or a platform code." : "Type a stop name or platform code. Polish accents are optional.";
+}
+function selectStop(stop) {
+  picker.stop = stop;
+  $("stop-search").value = stopLabel(stop);
+  $("route-search").value = "";
+  closeStops();
+  fillRoutes();
+  $("stop-search").focus({ preventScroll: true });
+  // focus can open suggestions; a committed selection remains collapsed.
+  closeStops();
+  updateStopHint();
+}
 function updatePickAvailability() {
-  $("save-pick").disabled = $("route-select").value === "" || $("stop-select").value === "";
+  $("save-pick").disabled = $("route-select").value === "" || picker.stop === null;
 }
 function openPick(index) {
   state.editing = index;
@@ -255,9 +294,11 @@ function openPick(index) {
   $("route-search").value = $("stop-search").value = "";
   const route = p ? state.catalog.routes.findIndex((r) => r.id === p.route && r.line === p.line) : -1;
   const stop = p ? state.catalog.stops.findIndex((s) => s.id === p.stop && (p.stop_code ? s.code === p.stop_code : s.name === p.stop_name)) : -1;
+  picker.stop = stop >= 0 && state.index.stops(route, p?.direction ?? -1).includes(stop) ? stop : null;
+  if (picker.stop !== null) $("stop-search").value = stopLabel(picker.stop);
   fillRoutes(route < 0 ? "" : String(route));
-  fillDirections(p?.direction ?? -1, stop < 0 ? "" : String(stop));
-  if (p && (route < 0 || $("stop-select").value === "")) {
+  fillDirections(p?.direction ?? -1);
+  if (p && (route < 0 || picker.stop === null)) {
     $("pick-error").textContent = "This saved choice needs an updated line or stop. Choose it from the current catalogue.";
     $("pick-error").hidden = false;
   }
@@ -265,25 +306,59 @@ function openPick(index) {
   $("walk-spread").value = p?.spread ?? 1;
   $("walk-margin").value = p?.margin ?? 1;
   $("pick-dialog").showModal();
+  $("stop-search").focus({ preventScroll: true });
+  closeStops();
+  updateStopHint();
 }
 $("route-search").addEventListener("input", () => fillRoutes());
-$("stop-search").addEventListener("input", () => fillStops());
-for (const [search, select] of [["route-search", "route-select"], ["stop-search", "stop-select"]]) {
-  $(search).addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
+$("route-search").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  $("route-select").focus();
+});
+$("stop-search").addEventListener("input", () => {
+  picker.stop = null;
+  fillRoutes();
+  fillStops();
+});
+$("stop-search").addEventListener("focus", fillStops);
+$("stop-search").addEventListener("blur", () => {
+  closeStops();
+  if (picker.stop !== null) updateStopHint();
+});
+$("stop-search").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    if ($("stop-options").hidden) return;
     event.preventDefault();
-    $(select).focus();
-  });
-}
+    event.stopPropagation();
+    closeStops();
+  } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if ($("stop-options").hidden) fillStops();
+    if (!picker.matches.length) return;
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    picker.active = picker.active < 0 ? (step > 0 ? 0 : picker.matches.length - 1) : (picker.active + step + picker.matches.length) % picker.matches.length;
+    for (const [i, option] of [...$("stop-options").children].entries()) option.setAttribute("aria-selected", String(i === picker.active));
+    const option = $("stop-options").children[picker.active];
+    $("stop-search").setAttribute("aria-activedescendant", option.id);
+    option.scrollIntoView({ block: "nearest", behavior: "instant" });
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    if (!$("stop-options").hidden && picker.active >= 0) selectStop(picker.matches[picker.active]);
+    else if (picker.stop !== null) $("route-select").focus();
+  }
+});
 $("route-select").addEventListener("change", () => fillDirections());
-$("direction-select").addEventListener("change", () => fillStops());
-$("stop-select").addEventListener("change", updatePickAvailability);
+$("direction-select").addEventListener("change", () => {
+  closeStops();
+  updateStopHint();
+});
 $("pick-form").addEventListener("submit", (event) => {
   event.preventDefault();
   try {
-    const route = Number($("route-select").value), stop = Number($("stop-select").value);
+    const route = Number($("route-select").value), stop = picker.stop;
     const r = state.catalog.routes[route], s = state.catalog.stops[stop], direction = Number($("direction-select").value);
-    if (!r || !s || !$("route-select").value || !$("stop-select").value || !state.index.stops(route, direction).includes(stop)) throw new Error("Choose a line and one of its boarding stops.");
+    if (!r || !s || !$("route-select").value || stop === null || !state.index.stops(route, direction).includes(stop)) throw new Error("Choose a line and one of its boarding stops.");
     const p = { route: r.id, line: r.line, stop: s.id, stop_name: s.name, stop_code: s.code, headsign: direction < 0 ? "Both directions" : r.headsigns[direction], direction, walk: Number($("walk-minutes").value), spread: Number($("walk-spread").value), margin: Number($("walk-margin").value) };
     const draft = structuredClone(state.groups);
     if (state.editing === null) draft[state.active].picks.push(p);
@@ -361,7 +436,7 @@ $("settings").addEventListener("submit", (event) => {
       throw new Error("Give each group a short name for the display.");
     }
     if (!state.release || !state.firmwareUrl) throw new Error("The published firmware is not available yet.");
-    const settings = { wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value, automatic: state.automatic, groups: state.groups };
+    const settings = { wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value, automatic: state.automatic, battery: $("battery-mode").checked, groups: state.groups };
     const image = encodeSettingsPartition(settings), settingsUrl = URL.createObjectURL(new Blob([image], { type: "application/octet-stream" }));
     state.urls.push(settingsUrl);
     const manifest = manifestWithSettings(state.release, state.firmwareUrl, settingsUrl), url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));

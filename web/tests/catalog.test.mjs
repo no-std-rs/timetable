@@ -31,7 +31,22 @@ test("boarding stop searches preserve route and direction membership", () => {
   assert.deepEqual(index.stops(0, -1, "srodka"), []);
   assert.deepEqual(index.stops(2, -1), [2]);
   assert.deepEqual(index.directions(2), []);
-  assert.deepEqual(index.stops(-1), []);
+  assert.deepEqual(index.stops(-1), [0, 1, 2]);
+});
+test("stop-first search finds platforms globally and restricts lines and directions", () => {
+  const index = catalogIndex(catalog);
+  assert.deepEqual(index.stops(-1, -1, "LAKOWA lak01"), [0]);
+  assert.deepEqual(index.stops(-1, -1, "srodka"), [1]);
+  assert.deepEqual(index.routes("", 0), [0, 1]);
+  assert.deepEqual(index.routes("4", 0), [1, 0]);
+  assert.deepEqual(index.routes("", 1), [1]);
+  assert.deepEqual(index.directions(1, 0), [0]);
+  assert.deepEqual(index.directions(1, 1), [1]);
+  assert.deepEqual(index.directions(2, 2), []);
+  const duplicate = catalogIndex({ ...catalog, links: [...catalog.links, [1, 0, 2]] });
+  assert.deepEqual(duplicate.stops(1), [0, 1]);
+  assert.deepEqual(duplicate.routes("", 0), [0, 1]);
+  assert.deepEqual(duplicate.directions(1, 0), [0, 1]);
 });
 test("malformed catalogue links cannot become selectable choices", () => {
   for (const link of [[0, 99, 1], [-1, 0, 1], [0, 0, 8], null, [0, 0]]) {

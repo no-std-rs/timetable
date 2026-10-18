@@ -30,6 +30,10 @@ the walking time for each choice. Optionally schedule groups on selected days.
 touch while retaining every saved time window. Imports expose that same mode
 and offer Undo before further edits.
 Then enter Wi-Fi settings and use desktop Chrome or Edge to install over USB.
+Optional **Battery mode** sleeps after 30 seconds idle on the board. A tap wakes
+saved departures without Wi-Fi; a timer refreshes every three hours (five-minute
+retry after failure). Editors stay awake. See [battery mode](../docs/battery.md)
+for retention, wake wiring and the remaining physical-board checks.
 The website verifies SHA-256 before offering the binary. It sends settings as a
 separate USB image, never to a server, and clears credentials when leaving the
 page. The firmware image itself contains no credentials. Installation replaces
@@ -114,7 +118,7 @@ TLS borrows its verifier and connection instead of moving large async state.
 radio, heap, all async tasks and application state; alias dummy sections are
 excluded. It requires a separate 24 KiB available call stack and enforces the
 400,000-byte limit plus a **300,000-byte regression ceiling**. The measured
-release budget is **292,532 B**, down from **317,756 B**, with the same heap, stack
+release budget is **296,756 B**, down from **317,756 B**, with the same heap, stack
 reserve and application capacities. `RAM.json` reports each exact build.
 This is a linked-memory bound; physical stack/heap high-water and screen/radio/touch behaviour
 still require the physical board. No physical flash or hardware test has been
@@ -164,7 +168,9 @@ The bootloader/image format is compatible with ESP Web Tools.
 
 Board wiring and panel setup come from the neighbouring router demo; see
 [NOTICE](NOTICE). LCD SCK/MOSI/DC/CS/backlight are GPIO6/7/2/10/3; touch
-SDA/SCL/reset are GPIO4/5/1. Touch is polled because its interrupt shares GPIO10
-with LCD CS. SPI is 40 MHz. The factory partition ends at `0x3f0000`; the 64 KiB
+SDA/SCL/reset/interrupt are GPIO4/5/1/0. Touch is polled while awake; GPIO0 wakes
+deep sleep. GPIO10 is LCD CS. The [manufacturer schematic](../docs/battery.md)
+corrects the inherited demo's interrupt-pin note. SPI is 40 MHz.
+The factory partition ends at `0x3f0000`; the 64 KiB
 `timetable` partition contains independent settings banks at `0x3f0000` and
 `0x3f8000`. DIO/80 MHz matches this board.

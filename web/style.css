@@ -639,6 +639,40 @@
     font-size: .74rem;
     min-height: 1.5em;
   }
+  .stop-combobox {
+    margin-top: 6px;
+  }
+  .stop-options {
+    max-height: 220px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-top: 6px;
+    background: var(--ceramic);
+  }
+  .stop-option {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    min-height: 48px;
+    cursor: pointer;
+    font-size: .85rem;
+  }
+  .stop-option + .stop-option {
+    border-top: 1px solid var(--line);
+  }
+  .stop-option small {
+    font-size: .7rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .stop-option:hover,
+  .stop-option[aria-selected=true] {
+    background: var(--gold-pale);
+  }
   #pick-form .search-label {
     gap: 6px;
     margin-top: 18px;
