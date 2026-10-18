@@ -399,6 +399,9 @@ impl Builder {
             headings_before,
             committed: false,
         };
+        // Official stop_times rows are often grouped by trip. Cache exact hits
+        // and misses; an interleaved ID still falls back to binary search.
+        let mut last_trip: Option<(Id<32>, Option<usize>)> = None;
         let result = stream::scan(
             source,
             &[Table::StopTimes],
@@ -406,10 +409,20 @@ impl Builder {
             workspace,
             |row| {
                 let id = row.required(Column::TripId)?;
-                let Ok(index) = self
-                    .trips
-                    .binary_search_by(|t| t.id(&self.trip_ids).cmp(id.as_bytes()))
-                else {
+                let found = if let Some((key, found)) = &last_trip
+                    && key.as_str() == id
+                {
+                    *found
+                } else {
+                    let found = self
+                        .trips
+                        .binary_search_by(|t| t.id(&self.trip_ids).cmp(id.as_bytes()))
+                        .ok();
+                    // Long unselected IDs remain valid and are never shortened.
+                    last_trip = Id::new(id).ok().map(|key| (key, found));
+                    found
+                };
+                let Some(index) = found else {
                     return Ok(());
                 };
                 let t = self.trips[index];

@@ -38,4 +38,20 @@ write_archive('spring-dst.zip', {
                  .replace('20261018', '20260329')
     for path, content in files.items()
 })
+long_trip = 'a' * 32
+lookup = dict(files)
+lookup['trips.txt'] += f'R4,TODAY,{long_trip},Trip branch,0\n'
+rows = [
+    (long_trip, '23:00:00'), (long_trip, '23:01:00'),
+    ('miss', '23:02:00'), ('miss', '23:03:00'),
+    ('T1', '23:04:00'), (long_trip + 'x', '23:05:00'),
+    (long_trip + 'x', '23:06:00'), ('T1', '23:07:00'),
+    (long_trip, '23:08:00'), ('T2', '00:30:00'),
+]
+for variant, ordered in [('grouped', sorted(rows)), ('shuffled', rows)]:
+    lookup['stop_times.txt'] = (
+        'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,stop_headsign\n'
+        + ''.join(f'{trip},{at},{at},S1,{i + 1},0,Platform branch\n'
+                  for i, (trip, at) in enumerate(ordered)))
+    write_archive(f'lookup-{variant}.zip', lookup)
 module.build(destination / 'edge.zip', destination, '20261017')

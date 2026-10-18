@@ -207,3 +207,51 @@ test("a display name that is too long is shown at its group before installation"
   await page.locator("#prepare").click();
   await expect(page.locator("#install-area")).toBeVisible();
 });
+
+test("walking preview distinguishes a possible rush from an impossible walk", async ({ page }) => {
+  await prepare(page);
+  await page.locator("#add-pick").click();
+  const route = catalog.routes.findIndex((r) => r.line === "4");
+  await page.locator("#route-select").selectOption({ value: String(route) });
+  await chooseStop(page, route);
+  await page.locator("#walk-minutes").fill("12");
+  await page.getByText("Leave a little room", { exact: true }).click();
+  await page.locator("#walk-spread").fill("2");
+  await page.locator("#walk-margin").fill("1");
+  await page.locator("#save-pick").click();
+  await expect(page.locator("#preview-leave")).toHaveText("Leave now");
+  await expect(page.locator("#preview-walk")).toContainText("25% walk est.");
+  await page.locator(".pick-edit").click();
+  await page.locator("#walk-spread").fill("0");
+  await page.locator("#save-pick").click();
+  await expect(page.locator("#preview-leave")).toHaveText("Not enough walk time");
+  await expect(page.locator("#preview-walk")).toContainText("0% walk est.");
+  await page.locator(".pick-edit").click();
+  await page.locator("#walk-minutes").fill("0");
+  await page.locator("#walk-margin").fill("0");
+  await page.locator("#save-pick").click();
+  await expect(page.locator("#preview-leave")).toHaveText("Leave in 12 min");
+  await expect(page.locator("#preview-walk")).toContainText("100% walk est.");
+});
+
+test("weekday toggles keep keyboard focus and serialize the chosen days", async ({ page }) => {
+  await prepare(page);
+  await expect(page.locator("#prepare")).toBeEnabled();
+  await page.locator("#scheduled").check();
+  await page.getByRole("button", { name: "Monday", exact: true }).focus();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("button", { name: "Monday", exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Monday", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Tuesday", exact: true })).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("button", { name: "Tuesday", exact: true })).toBeFocused();
+  await page.locator("#wifi-ssid").fill("weekday-test-network");
+  await page.locator("#prepare").click();
+  const days = await page.evaluate(async () => {
+    const manifest = await (await fetch(document.querySelector("#installer").manifest)).json();
+    const bytes = await (await fetch(manifest.builds[0].parts[1].path)).arrayBuffer();
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 24, new DataView(bytes).getUint32(12, true)))).groups[0].days;
+  });
+  expect(days).toBe(28);
+});

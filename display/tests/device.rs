@@ -12,6 +12,112 @@ fn settings() -> Config {
         .0
 }
 
+#[test]
+fn retry_keeps_the_validated_board_and_does_not_save_settings() {
+    let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
+    for status in [model::Status::Offline, model::Status::Failed] {
+        let mut c = settings();
+        let original = c.clone();
+        let mut app = App {
+            status,
+            loaded_at: Some(100),
+            ..App::default()
+        };
+        app.departures.reset(100);
+        app.departures
+            .push(Departure {
+                at: 200,
+                group: 0,
+                pick: 0,
+                conditional: false,
+                headsign: 0,
+            })
+            .unwrap();
+        assert!(app.can_retry());
+        assert_eq!(
+            ui::tap(&mut app, &mut c, &catalog, 120, 212, false),
+            ui::Action::Refresh
+        );
+        assert!(!app.can_retry());
+        assert_eq!(app.screen, Screen::Board);
+        assert_eq!(app.loaded_at, Some(100));
+        assert_eq!(app.departures.get(0).unwrap().at, 200);
+        assert!(c == original);
+        app.status = status;
+        assert_eq!(
+            ui::tap(&mut app, &mut c, &catalog, 120, 212, true),
+            ui::Action::None
+        );
+        assert_eq!(app.screen, Screen::Picks);
+    }
+    for (status, save_failed) in [
+        (model::Status::Capacity, false),
+        (model::Status::Failed, true),
+    ] {
+        let mut c = settings();
+        let mut app = App {
+            status,
+            save_failed,
+            ..App::default()
+        };
+        assert!(!app.can_retry());
+        assert_eq!(
+            ui::tap(&mut app, &mut c, &catalog, 120, 212, false),
+            ui::Action::None
+        );
+        assert_eq!(app.screen, Screen::Picks);
+    }
+}
+
+#[test]
+fn grouped_and_interleaved_trip_lookups_keep_exact_hits_and_misses() {
+    futures::executor::block_on(async {
+        let catalog = Catalog::new(include_bytes!("fixtures/catalog.bin")).unwrap();
+        let stop = catalog.stop(0).unwrap();
+        let mut c = settings();
+        let p = &mut c.groups[0].picks[0];
+        p.route = "R4".try_into().unwrap();
+        p.stop = "S1".try_into().unwrap();
+        p.stop_code.clear();
+        p.stop_name = stop.name.try_into().unwrap();
+        let now = time::macros::datetime!(2026-10-17 20:30 UTC).unix_timestamp();
+        let mut results = std::vec::Vec::new();
+        for source in [
+            include_bytes!("fixtures/lookup-grouped.zip").as_slice(),
+            include_bytes!("fixtures/lookup-shuffled.zip").as_slice(),
+        ] {
+            let mut builder = timetable_display::feed::Builder::new("20261017".parse().unwrap());
+            let mut workspace = gtfs::zip::Workspace::new();
+            builder.begin(now).unwrap();
+            builder
+                .calendars(source, 7, &c, &mut workspace)
+                .await
+                .unwrap();
+            builder.trips(source, &c, &mut workspace).await.unwrap();
+            builder
+                .departures(source, &c, &mut workspace)
+                .await
+                .unwrap();
+            builder.events.sort();
+            results.push(builder.events.iter().collect::<std::vec::Vec<_>>());
+        }
+        assert_eq!(results[0], results[1]);
+        let today = clock::service_epoch("20261017".parse().unwrap()).unwrap();
+        let tomorrow = clock::service_epoch("20261018".parse().unwrap()).unwrap();
+        assert_eq!(
+            results[0]
+                .iter()
+                .map(|event| event.at)
+                .collect::<std::vec::Vec<_>>(),
+            [0, 1, 4, 7, 8]
+                .map(|minute| today + 23 * 3600 + minute * 60)
+                .into_iter()
+                .chain([tomorrow + 30 * 60])
+                .collect::<std::vec::Vec<_>>()
+        );
+    });
+}
+
 struct PausedFooter<'a>(&'a [u8]);
 impl embedded_io_async::ErrorType for PausedFooter<'_> {
     type Error = core::convert::Infallible;

@@ -287,6 +287,8 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                     d,
                     if group.picks.is_empty() {
                         "Hold to add lines + stops"
+                    } else if app.can_retry() {
+                        "Tap below to retry"
                     } else {
                         "Scheduled times from ZTM"
                     },
@@ -298,16 +300,24 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 label(d, "Swipe to change group", 120, 158, MUTED, true)?;
             }
             let mut foot = String::<40>::new();
-            if let Some(local) = clock::warsaw(now).filter(|_| app.clock.is_some()) {
+            let fault = app.can_retry() || app.status == Status::Capacity;
+            if !fault && let Some(local) = clock::warsaw(now).filter(|_| app.clock.is_some()) {
                 let _ = write!(foot, "{:02}:{:02} / ", local.hour(), local.minute());
             }
             let _ = foot.push_str(if app.save_failed {
                 "NOT SAVED"
-            } else if matches!(
-                app.status,
-                Status::Offline | Status::Failed | Status::Capacity
-            ) {
-                "OFFLINE"
+            } else if app.status == Status::Offline {
+                "OFFLINE / TAP RETRY"
+            } else if app.status == Status::Failed {
+                "FAILED / TAP RETRY"
+            } else if app.status == Status::Capacity {
+                "TOO MANY / HOLD EDIT"
+            } else if app.status == Status::Connecting {
+                "CONNECTING"
+            } else if app.status == Status::Syncing {
+                "SYNCING"
+            } else if app.status == Status::Loading {
+                "UPDATING"
             } else if now < app.manual_until
                 || !config.automatic
                 || !config.groups.iter().any(|g| g.days != 0)
@@ -321,16 +331,22 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 &foot,
                 120,
                 212,
-                if app.save_failed { CHILLI } else { MUTED },
+                if app.save_failed || fault {
+                    CHILLI
+                } else {
+                    MUTED
+                },
                 true,
             )?;
-            Circle::new(Point::new(57, 214), 4)
-                .into_styled(PrimitiveStyle::with_fill(if app.status == Status::Ready {
-                    GOLD
-                } else {
-                    CHILLI
-                }))
-                .draw(d)?;
+            if !fault {
+                Circle::new(Point::new(57, 214), 4)
+                    .into_styled(PrimitiveStyle::with_fill(if app.status == Status::Ready {
+                        GOLD
+                    } else {
+                        CHILLI
+                    }))
+                    .draw(d)?;
+            }
         }
         Screen::Groups => {
             for (i, g) in config.groups.iter().enumerate() {

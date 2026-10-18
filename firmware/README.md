@@ -11,7 +11,8 @@ chilli red for the main action and departure urgency.
 [Desktop installer preview](../docs/previews/installer-desktop.png) ·
 [Mobile installer preview](../docs/previews/installer-mobile.png) ·
 [Searchable stop picker](../docs/previews/installer-picker-mobile.png) ·
-[Device editor](../docs/previews/device-walk.png).
+[Device editor](../docs/previews/device-walk.png) ·
+[Offline board with retry](../docs/previews/device-offline.png).
 These previews use illustrative departures; the device image comes from the
 actual Rust renderer, not a photo of hardware.
 
@@ -37,6 +38,8 @@ On the display:
 - **Swipe left/right:** change group, overriding automatic selection for two hours.
 - **Tap the heading:** choose a group or return to the automatic schedule.
 - **Hold the screen:** edit the current group. Tap a saved choice or “Add”.
+- **Tap an offline/failed footer:** retry the update while keeping cached times.
+  Holding still opens the editor. A capacity error asks you to edit the selection.
 - **Choose a line and stop:** swipe vertically or tap the bottom arrows for more.
   The stop page's bottom-centre control cycles either direction / 0 / 1.
 - **Adjust your walk:** left/right decrements/increments walking time, its
@@ -89,6 +92,12 @@ failure never publishes provisional results. The previous/current/next
 service-day window covers Poznań's normal after-midnight trips; feeds with service times
 extending past two civil days need a wider application policy.
 
+The footer marks connection, clock synchronization and timetable updates even
+while a cached board stays visible. Downloads yield to other ready executor
+tasks after each 2 KiB of HTTP stream reads. This is a scheduling point rather
+than a measured physical touch-latency bound; TLS handshakes and decompression
+also contribute work. A manual retry interrupts the failed clock-sync wait too.
+
 Both application crates are `no_std` and use no allocator. Radio and RSA TLS use
 a fixed **64 KiB heap**. The panel's **7.5 KiB tile** borrows the idle 8 KiB
 settings scratch buffer, with no framebuffer or pixel conversion buffer.
@@ -99,7 +108,7 @@ TLS borrows its verifier and connection instead of moving large async state.
 radio, heap, all async tasks and application state; alias dummy sections are
 excluded. It requires a separate 24 KiB available call stack and enforces the
 400,000-byte limit plus a **300,000-byte regression ceiling**. The measured
-release budget fell from **317,756 B to 292,364 B**, with the same heap, stack
+release budget is **292,516 B**, down from **317,756 B**, with the same heap, stack
 reserve and application capacities. `RAM.json` reports each exact build.
 This is a linked-memory bound; physical stack/heap high-water and screen/radio/touch behaviour
 still require the physical board. No physical flash or hardware test has been
