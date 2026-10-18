@@ -15,10 +15,12 @@ Battery mode is off by default. Enable it to sleep the screen and CPU after
 three hours. Cached wakes do not initialize Wi-Fi. Group imports leave this
 device preference unchanged. See [battery operation and hardware limits](../docs/battery.md).
 
-Search any stop by name or platform code in one combobox, then browse the lines
-and directions serving that platform. Polish accents are optional. You can also
-start with a line number or destination; stop results then stay within that line
-and direction. Names and platform codes appear together in selectable results.
+Search any stop by name or platform code in one combobox. Platforms with the
+same name share one result, with all their serving lines. Choose a line and
+destination to resolve the exact boarding platform; the hint shows its code,
+next stop and actual destinations. Multiple platforms in one direction remain
+separate choices. Polish accents are optional for search, while distinct accented
+names remain distinct groups. You can also start with a line number or destination.
 Arrow keys browse; Enter commits the highlighted stop; Escape closes the list.
 Results include actual destinations and the next stop, so same-name platforms
 can be distinguished by their route rather than a guessed odd/even platform
@@ -39,7 +41,7 @@ Import uses a keyboard-accessible button and offers Undo, including the previous
 group switching mode. Invalid imports leave groups and any existing Undo intact.
 Failed catalogue or firmware downloads have
 retry controls that retain group edits. Browser history restores those edits,
-clears Wi-Fi credentials and resets password visibility. Search Enter moves to
+restores saved settings and resets password visibility. Search Enter moves to
 the choices; it does not submit an unfinished edit.
 Weekday toggles retain keyboard focus after updating. The walking preview
 distinguishes a possible rush from insufficient walking time, matching the
@@ -50,9 +52,27 @@ settings format, size and SHA-256, then creates local Blob URLs for the factory
 image, CRC-protected settings and ESP Web Tools manifest. The settings image
 replaces both flash banks, so a previous device-side generation cannot override
 a fresh installation. Any edit invalidates the prepared installation.
-No local storage, analytics or third-party runtime
-scripts are used; ESP Web Tools 10.4.0 is pinned and bundled locally. Credentials
-are cleared on page navigation and sent only over the user-selected USB port.
+Settings are remembered in this browser by default: groups, schedules, walking
+preferences, power mode and Wi-Fi credentials. The page explains this beside an
+opt-out checkbox and a Forget button; disable it on a shared computer. Forget
+erases the stored snapshot while leaving the current tab editable. Storage
+failures show a message and keep editing usable. Passwords are hidden after
+navigation. Group exports still exclude credentials. No analytics or remote
+settings service is used; credentials reach the device only over the selected
+USB port. ESP Web Tools 10.4.0 is pinned and bundled locally.
+
+PL/EN controls translate the page, picker, validation and diagnostics without
+changing editable names, stop names or prepared settings. The browser language
+sets the initial choice; an explicit choice is saved locally. The USB flashing
+dialog is provided by ESP Web Tools and remains in English.
+
+“Read device logs over USB” opens a passive 115200-baud serial monitor in desktop
+Chrome or Edge on HTTPS/localhost. It never writes flash or changes reset/control
+lines. Close the flasher/other serial monitors first; press the device's RESET
+button to capture startup. Disconnect logs before installing. The view keeps the
+latest 65,536 characters, supports Clear and Download, and releases the port on
+disconnect. Logs are not saved to browser storage or uploaded. Reconnect if a
+reset or USB removal changes the port.
 
 ```sh
 npm --prefix web ci

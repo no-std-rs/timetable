@@ -127,3 +127,31 @@ test("different destination signs still share physical trunks and suffixes", asy
   }
   assert.ok(checked, "official line 1 has a long common trunk with different destination signs");
 });
+
+test("named stops unite platform lines and direction choices without merging physical IDs", () => {
+  const index = catalogIndex(pathsCatalog), group = index.groupOf[0];
+  assert.equal(index.groupOf[1], group);
+  assert.deepEqual(index.groups[group].stops, [0, 1]);
+  assert.deepEqual(index.stopGroups(-1, "central"), [group]);
+  assert.deepEqual(index.stopGroups(-1, "c02"), [group]);
+  assert.deepEqual(index.groupRoutes("", group), [0]);
+  assert.deepEqual(index.boardingChoices(0, group).map(c => [c.stop, c.direction]), [[0, 0], [1, 1]]);
+  assert.ok(index.boardingChoices(0, group).every(c => !c.all));
+  const c = structuredClone(pathsCatalog); c.links.push([0, 1, 1]);
+  const mixed = catalogIndex(c).boardingChoices(0, group);
+  assert.ok(mixed.some(c => c.stop === 1 && c.direction === 0));
+  assert.ok(mixed.some(c => c.stop === 1 && c.direction === -1 && c.all));
+  assert.equal(new Set(mixed.map(c => c.key)).size, mixed.length);
+  const unsigned = catalogIndex(catalog);
+  assert.deepEqual(unsigned.boardingChoices(2, unsigned.groupOf[2]).map(c => [c.stop, c.direction, c.all]), [[2, -1, false]]);
+});
+test("stop grouping keeps distinct accented names and unions routes across platforms", () => {
+  const c = structuredClone(catalog);
+  c.stops.push({ id: "S3", name: "ŁĄKOWA", code: "LAK02" }, { id: "S4", name: "Lakowa", code: "X01" });
+  c.links.push([2, 3, 4], [2, 4, 4]);
+  const index = catalogIndex(c);
+  assert.equal(index.groupOf[0], index.groupOf[3]);
+  assert.notEqual(index.groupOf[0], index.groupOf[4]);
+  assert.deepEqual(index.groupRoutes("", index.groupOf[0]), [0, 1, 2]);
+  assert.deepEqual(index.boardingChoices(2, index.groupOf[0]).map(c => c.stop), [3]);
+});

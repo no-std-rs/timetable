@@ -16,6 +16,18 @@ export function catalogIndex(catalog) {
   const codes = catalog.stops.map((stop) => searchText(stop.code));
   const links = catalog.routes.map(() => []);
   const serving = catalog.stops.map(() => new Set());
+  const groups = [], groupOf = [], byName = new Map();
+  catalog.stops.forEach((stop, i) => {
+    // Identity keeps Polish accents: search normalization is deliberately wider.
+    const name = stop.name.normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase("pl");
+    if (!byName.has(name)) {
+      byName.set(name, groups.length);
+      groups.push({ name: stop.name, stops: [] });
+    }
+    const group = byName.get(name);
+    groups[group].stops.push(i);
+    groupOf[i] = group;
+  });
   for (const link of catalog.links) {
     if (!Array.isArray(link) || link.length !== 3) throw new Error("The route catalogue has an invalid stop link.");
     const [route, stop, bits] = link;
@@ -26,7 +38,8 @@ export function catalogIndex(catalog) {
   }
   const terms = (query) => searchText(query).trim().split(/\s+/).filter(Boolean);
   const matches = (text, query) => query.every((term) => text.includes(term));
-  return {
+  const index = {
+    groups, groupOf,
     topology: routeTopology(catalog),
     routes(query = "", stop = -1) {
       const words = terms(query), exact = searchText(query).trim();
@@ -44,5 +57,24 @@ export function catalogIndex(catalog) {
     directions(route, stop = -1) {
       return [0, 1].filter((direction) => (links[route] ?? []).some((link) => (stop < 0 || link.stop === stop) && link.bits & 1 << direction));
     },
+    stopGroups(route = -1, query = "") {
+      return [...new Set(index.stops(route, -1, query).map(stop => groupOf[stop]))];
+    },
+    groupRoutes(query = "", group = -1) {
+      const allowed = group < 0 ? null : new Set((groups[group]?.stops ?? []).flatMap(stop => [...serving[stop]]));
+      return index.routes(query).filter(route => !allowed || allowed.has(route));
+    },
+    boardingChoices(route, group) {
+      const members = new Set(groups[group]?.stops ?? []), bits = new Map();
+      for (const link of links[route] ?? []) if (members.has(link.stop)) bits.set(link.stop, (bits.get(link.stop) ?? 0) | link.bits);
+      return [...bits].flatMap(([stop, mask]) => {
+        const directions = [0, 1].filter(d => mask & 1 << d);
+        // -1 always queries one exact platform. Never combine different stop IDs
+        // into the firmware's one-stop slot, even when their names match.
+        if (mask & 4 || (mask & 3) === 3) directions.push(-1);
+        return directions.map(direction => ({ stop, direction, all: direction < 0 && !!(mask & 3), key: `${stop}:${direction}` }));
+      });
+    },
   };
+  return index;
 }

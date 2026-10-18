@@ -7,7 +7,7 @@ import sys
 root = Path(__file__).resolve().parents[1]
 firmware, site = map(Path, sys.argv[1:3])
 site.mkdir(parents=True, exist_ok=True)
-for name in ['index.html', 'style.css', 'app.js', 'config.js', 'catalog-search.js', 'route-topology.js', 'favicon.svg']:
+for name in ['index.html', 'style.css', 'app.js', 'config.js', 'catalog-search.js', 'route-topology.js', 'i18n.js', 'settings-store.js', 'serial-logs.js', 'favicon.svg']:
     shutil.copyfile(root / 'web' / name, site / name)
 shutil.copyfile(root / 'web/dist/installer.js', site / 'installer.js')
 shutil.copyfile(root / 'catalog/catalog.json', site / 'catalog.json')

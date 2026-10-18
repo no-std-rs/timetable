@@ -13,13 +13,13 @@
 <body>
   <header class="masthead wrap">
     <a class="wordmark" href="#"><span class="seal" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="m22 2-5 11 6 5-8 12"/></svg></span>timetable<span class="wordmark-dot">.</span></a>
-    <a class="quiet-link" href="https://github.com/no-std-rs/timetable">Made in Rust <span aria-hidden="true">↗</span></a>
+    <div class="masthead-actions"><div class="language-switch" role="group" aria-label="Page language"><button type="button" data-language="pl" lang="pl" aria-label="Polski" aria-pressed="false">PL</button><button type="button" data-language="en" lang="en" aria-label="English" aria-pressed="true">EN</button></div><a class="quiet-link" href="https://github.com/no-std-rs/timetable">Made in Rust <span aria-hidden="true">↗</span></a></div>
   </header>
   <main class="wrap">
     <section class="hero" aria-labelledby="title">
       <div class="hero-copy">
         <p class="eyebrow"><span class="red-dot"></span> A SMALL RITUAL FOR GOING PLACES</p>
-        <h1 id="title">A little time<br>to <em>spare.</em></h1>
+        <h1 id="title">A little time<br><em>to spare.</em></h1>
         <p class="intro">Your lines. Your stops. Just enough information<br class="desktop-break"> to know when it’s time to leave.</p>
         <a class="button primary" href="#your-groups">Make it yours <span aria-hidden="true">↓</span></a>
         <p class="hardware-note">For the GUITION 240 × 240 round ESP32-C3 display.</p>
@@ -76,9 +76,11 @@
       <section class="setup-section" aria-labelledby="wifi-title">
         <div class="section-heading"><span class="step">02</span><div><h2 id="wifi-title">A connection, then a little quiet.</h2><p>The display keeps its timetable nearby. Your Wi-Fi settings go straight to the device over USB.</p></div></div>
         <div class="card wifi-card">
-          <label for="wifi-ssid">Wi-Fi name<input id="wifi-ssid" name="wifi_ssid" placeholder="Your 2.4 GHz network" required autocomplete="off"></label>
-          <label for="wifi-password">Password<span class="password-input"><input id="wifi-password" name="wifi_password" type="password" placeholder="Leave empty for an open network" autocomplete="new-password"><button type="button" id="show-password" aria-label="Show password" aria-pressed="false">Show</button></span></label>
-          <p class="fine-print">Settings stay in this tab until you install. Nothing is uploaded or saved by this website.</p>
+          <label for="wifi-ssid">Wi-Fi name<input id="wifi-ssid" maxlength="32" name="wifi_ssid" placeholder="Your 2.4 GHz network" required autocomplete="off"></label>
+          <label for="wifi-password">Password<span class="password-input"><input id="wifi-password" maxlength="64" name="wifi_password" type="password" placeholder="Leave empty for an open network" autocomplete="new-password"><button type="button" id="show-password" aria-label="Show password" aria-pressed="false">Show</button></span></label>
+          <div class="remember-settings"><label><input type="checkbox" id="remember-settings" checked> Remember settings in this browser</label><button type="button" id="forget-settings" class="text-button">Forget saved settings</button></div>
+          <p class="fine-print">Groups, Wi-Fi name and password are saved only in this browser when remembering is on. They are never uploaded. Turn it off on a shared computer.</p>
+          <p id="storage-status" class="fine-print" role="status"></p>
           <div class="schedule-toggle"><label><input type="checkbox" id="battery-mode" aria-describedby="battery-hint"> Battery mode</label></div>
           <p id="battery-hint" class="fine-print">Sleep after 30 seconds of inactivity. Tap to wake with saved departures; Wi-Fi refreshes every three hours. Leave off for an always-visible display.</p>
         </div>
@@ -91,7 +93,14 @@
           <p id="status" role="status">Loading the installer…</p>
           <button type="button" id="retry-release" class="text-button" hidden>Retry firmware download</button>
           <button id="prepare" type="submit" class="button primary" disabled>Prepare USB install <span aria-hidden="true">↗</span></button>
-          <div id="install-area" hidden><esp-web-install-button id="installer"><button slot="activate" type="button" class="button primary">Install on display ↗</button><span slot="unsupported">Use desktop Chrome or Edge to install over USB.</span><span slot="not-allowed">Open this page over HTTPS or localhost to install.</span></esp-web-install-button></div>
+          <div id="install-area" hidden><esp-web-install-button id="installer"><button id="install-action" slot="activate" type="button" class="button primary">Install on display ↗</button><span slot="unsupported">Use desktop Chrome or Edge to install over USB.</span><span slot="not-allowed">Open this page over HTTPS or localhost to install.</span></esp-web-install-button></div>
+          <details id="logs-panel" class="download-details">
+            <summary>Read device logs over USB</summary>
+            <p>Connect without reinstalling to diagnose Wi-Fi or startup. Logs stay here. Press the board’s RESET button to capture startup; reconnect if its USB port disappears.</p>
+            <div class="log-actions"><button type="button" id="connect-logs" class="text-button">Connect and read logs</button><button type="button" id="disconnect-logs" class="text-button" disabled>Disconnect</button><button type="button" id="clear-logs" class="text-button">Clear logs</button><button type="button" id="save-logs" class="text-button" disabled>Save logs</button></div>
+            <p id="logs-status" class="fine-print" role="status">Not connected</p>
+            <pre id="log-output" class="log-output" tabindex="0" aria-label="Device serial logs"></pre>
+          </details>
           <div class="install-notes"><p>Desktop Chrome or Edge · GUITION ESP32-2424S012-V1.0 · 4 MB flash</p><p>Installation replaces the device’s firmware and saved settings. Wi-Fi settings are stored in its local flash.</p></div>
           <details class="download-details"><summary>Prefer to flash it yourself?</summary><p><a id="download" hidden download="timetable-display.bin">Download verified firmware</a><span id="no-download">A binary will be available after the first published build.</span></p><code id="digest"></code></details>
           <details class="download-details"><summary>Black screen or USB won’t connect?</summary><p>Hold the board’s BOOT button while reconnecting USB, then release it. Select the newly appeared port and install again. This starts the chip’s built-in flasher and bypasses the current app; installing different firmware first is unnecessary.</p></details>
@@ -104,7 +113,7 @@
   <footer class="site-footer wrap"><span class="wordmark small">timetable.</span><span>Porcelain, a little gold, a little urgency.</span><a class="quiet-link" href="https://github.com/no-std-rs/timetable">Source &amp; build notes ↗</a></footer>
 
   <dialog id="pick-dialog" aria-labelledby="pick-title"><form id="pick-form" method="dialog">
-    <div class="dialog-heading"><div><p class="eyebrow">ONE EVERYDAY JOURNEY</p><h2 id="pick-title">A line. A stop. Your pace.</h2></div><button type="button" id="cancel-pick" class="close-button" aria-label="Close">×</button></div>
+    <div class="dialog-heading"><div><p class="eyebrow">ONE EVERYDAY JOURNEY</p><h2 id="pick-title">A line. A stop. Your pace.</h2></div><div class="dialog-actions"><div class="language-switch" role="group" aria-label="Page language"><button type="button" data-language="pl" lang="pl" aria-label="Polski" aria-pressed="false">PL</button><button type="button" data-language="en" lang="en" aria-label="English" aria-pressed="true">EN</button></div><button type="button" id="cancel-pick" class="close-button" aria-label="Close">×</button></div></div>
     <p id="catalog-status" class="fine-print">Loading Poznań routes and stops…</p>
     <label class="search-label" for="stop-search">Boarding stop</label>
     <div class="stop-combobox">
@@ -115,6 +124,7 @@
     <label class="search-label">Narrow lines (optional)<input type="search" id="route-search" placeholder="Line number or destination" aria-controls="route-select" autocomplete="off" spellcheck="false"></label>
     <div class="field-pair"><label>Line<select id="route-select" required aria-describedby="route-results"></select></label><label>Towards<select id="direction-select"><option value="-1">Either direction</option></select></label></div>
     <p id="route-results" class="picker-hint" role="status"></p>
+    <p id="platform-hint" class="platform-hint" role="status" hidden></p>
     <details id="route-map" class="route-map" open hidden>
       <summary><span id="route-map-title">Follow the line</span><small id="route-map-count"></small></summary>
       <p class="picker-hint">Follow the connections, then choose your boarding platform. This is a route diagram, not a street map.</p>

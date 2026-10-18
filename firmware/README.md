@@ -36,8 +36,8 @@ saved departures without Wi-Fi; a timer refreshes every three hours (five-minute
 retry after failure). Editors stay awake. See [battery mode](../docs/battery.md)
 for retention, wake wiring and the remaining physical-board checks.
 The website verifies SHA-256 before offering the binary. It sends settings as a
-separate USB image, never to a server, and clears credentials when leaving the
-page. The firmware image itself contains no credentials. Installation replaces
+separate USB image, never to a server. The page remembers settings locally by
+default; turn off Remember or use Forget on a shared computer. The firmware image itself contains no credentials. Installation replaces
 the device's previous firmware and saved settings; device flash settings are
 not encrypted.
 
@@ -45,6 +45,15 @@ If the screen stays black or the USB connection fails, hold **BOOT** while
 reconnecting USB, release it, and select the new port in the installer. This
 uses the ROM flasher without running the app; another firmware is unnecessary
 as an intermediate step. See [boot failure and recovery](../docs/boot-recovery.md).
+
+For Wi-Fi troubleshooting, open **Read device logs over USB** in the installer,
+connect at 115200 baud and press RESET. Disconnect the monitor before flashing.
+Startup logs distinguish radio initialization, station configuration,
+association, DHCP/IPv4, NTP clock synchronization and timetable download.
+Association failures include the driver reason and RSSI; DHCP and clock failures
+have bounded retries. Diagnostics do not log SSID or passwords. A 2.4 GHz WPA2
+network is supported, but physical logs are needed to diagnose a device stuck
+on Connecting. This change does not establish a hardware Wi-Fi fix.
 
 On the display:
 
@@ -130,10 +139,10 @@ epoch; access reconstructs full `i64` timestamps, including after 2038.
 TLS borrows its verifier and connection instead of moving large async state.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **297,180 B**,
+excluded. The static-plus-minimum-stack regression account is **297,724 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 52,000 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 51,456 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
