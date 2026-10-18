@@ -1,7 +1,16 @@
 # Poznań browse catalogue
 
 `catalog.bin` and `catalog.json` describe the same routes, physical stops and
-directional route/stop membership. They contain no departure times. Source:
+directional route/stop membership. The JSON also has browser-only ordered trip
+patterns reconstructed by sorting each trip's numeric `stop_sequence`. They
+preserve branches, repeated visits, per-stop headsigns and pickup restrictions.
+Ordering and per-call overrides follow the [GTFS stop-times specification](https://gtfs.org/documentation/schedule/reference/#stop_timestxt).
+`patterns.calls` stores `[stop_index, pickup_type, optional_stop_headsign]`;
+indices address `stops` followed by `via_stops`. The latter contains graph-only
+non-boarding platforms and is never offered for boarding. `patterns.trips` counts
+matching trips in the snapshot, for initial preview ordering; it is not a daily
+frequency or an assertion that a path runs today. Flash format and bytes are
+unchanged by the browser extension. They contain no departure times. Source:
 [ZTM's official GTFS archive listing](https://www.ztm.poznan.pl/otwarte-dane/gtfsfiles/).
 The generation date and source ZIP SHA-256 are in `provenance.json`.
 

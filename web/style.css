@@ -431,6 +431,7 @@
     width: 100%;
     height: 53px;
   }
+  .device-mode { font-size: 8px; color: var(--muted); margin-top: -12px; margin-bottom: 10px; }
   .preview-journey {
     display: contents;
   }
@@ -664,11 +665,37 @@
   .stop-option + .stop-option {
     border-top: 1px solid var(--line);
   }
-  .stop-option small {
+  .stop-code {
     font-size: .7rem;
     color: var(--muted);
     white-space: nowrap;
   }
+  .stop-copy { display: grid; gap: 4px; min-width: 0; }
+  .stop-option .stop-context { font-size: .69rem; color: var(--muted); line-height: 1.6; }
+  .route-map { margin-block: 20px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--gold-pale); }
+  .route-map summary { display: flex; flex-wrap: wrap; gap: 5px 12px; justify-content: space-between; color: var(--ink); font-size: .85rem; font-weight: 600; }
+  .route-map summary small { color: var(--muted); font-size: .69rem; font-weight: 400; }
+  .path-label { margin-top: 14px; font-size: .72rem; }
+  #path-select { min-width: 0; width: 100%; font-size: .76rem; }
+  #route-graph { display: block; width: 100%; margin-block: 8px; overflow: visible; }
+  .graph-path { fill: none; stroke: var(--line); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; cursor: pointer; }
+  .graph-path.active { stroke: var(--gold); stroke-width: 4; }
+  .graph-stop { fill: var(--ceramic); stroke: var(--muted); stroke-width: 1; cursor: pointer; }
+  .graph-stop.active { stroke: var(--gold); stroke-width: 2; }
+  .graph-stop.selected { fill: var(--chilli); stroke: var(--chilli); }
+  .graph-stop.no-pickup { cursor: default; fill: var(--line); }
+  .route-stops { list-style: none; padding: 0; margin: 0; max-height: 270px; overflow-y: auto; overscroll-behavior: contain; }
+  .route-stops li { position: relative; padding-left: 21px; }
+  .route-stops li::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; background: var(--gold); }
+  .route-stops li:first-child::before { top: 24px; }
+  .route-stops li:last-child::before { bottom: calc(100% - 24px); }
+  .route-stops li::after { content: ""; position: absolute; left: 3px; top: 20px; width: 8px; height: 8px; border: 2px solid var(--gold); border-radius: 50%; background: var(--ceramic); pointer-events: none; }
+  .route-stop { display: grid; text-align: left; width: 100%; min-height: 52px; gap: 3px; padding: 9px 10px; border-radius: 8px; }
+  .route-stop:hover, .route-stop[aria-pressed=true] { background: var(--ceramic); }
+  .route-stop[aria-pressed=true] { box-shadow: inset 3px 0 var(--chilli); }
+  .route-stop-name { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: .8rem; }
+  .route-stop-name small, .route-stop-note { color: var(--muted); font-size: .67rem; }
+  .route-stop:disabled { opacity: .65; cursor: default; }
   .stop-option:hover,
   .stop-option[aria-selected=true] {
     background: var(--gold-pale);

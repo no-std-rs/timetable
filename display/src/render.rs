@@ -77,6 +77,48 @@ fn short(value: &str, count: usize) -> String<96> {
     }
     out
 }
+
+/// Old checks show their date rather than a deceptively recent-looking time.
+pub fn freshness_line(app: &App) -> String<40> {
+    let mut text = String::new();
+    if let Some(checked) = app.freshness.checked_at.and_then(clock::warsaw) {
+        if app
+            .clock
+            .and_then(clock::warsaw)
+            .is_some_and(|now| now.date() == checked.date())
+        {
+            let _ = write!(text, "Chk{:02}:{:02}", checked.hour(), checked.minute());
+        } else {
+            let _ = write!(text, "Chk{:02}/{:02}", checked.day(), checked.month() as u8);
+        }
+    } else {
+        let _ = text.push_str("Chk --:--");
+    }
+    if let Some(source) = app.freshness.source_updated_at.and_then(clock::warsaw) {
+        let _ = write!(text, " Src{:02}/{:02}", source.day(), source.month() as u8);
+    } else {
+        let _ = text.push_str(" Src --/--");
+    }
+    text
+}
+
+fn timestamp(stamp: Option<i64>, unknown: &str) -> String<40> {
+    let mut text = String::new();
+    if let Some(local) = stamp.and_then(clock::warsaw) {
+        let _ = write!(
+            text,
+            "{:02}/{:02}/{:04} {:02}:{:02}",
+            local.day(),
+            local.month() as u8,
+            local.year(),
+            local.hour(),
+            local.minute()
+        );
+    } else {
+        let _ = text.push_str(unknown);
+    }
+    text
+}
 fn pill<D: DrawTarget<Color = Rgb565>>(
     d: &mut D,
     x: i32,
@@ -191,6 +233,7 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
         Screen::Routes => "Choose a line",
         Screen::Stops => "Choose a stop",
         Screen::Walk => "Your walk",
+        Screen::Freshness => "Timetable age",
     };
     label(d, title, 120, 24, INK, true)?;
     if app.screen != Screen::Board {
@@ -321,7 +364,7 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                     if group.picks.is_empty() {
                         "Hold to add lines + stops"
                     } else if app.can_retry() {
-                        "Tap below to retry"
+                        "Tap status above to retry"
                     } else {
                         "Scheduled times from ZTM"
                     },
@@ -365,7 +408,7 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 d,
                 &foot,
                 120,
-                212,
+                42,
                 if app.save_failed || app.sleep_failed || fault {
                     CHILLI
                 } else {
@@ -376,7 +419,7 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
             if !fault {
                 draw_visible(
                     d,
-                    &Circle::new(Point::new(57, 214), 4).into_styled(PrimitiveStyle::with_fill(
+                    &Circle::new(Point::new(47, 44), 4).into_styled(PrimitiveStyle::with_fill(
                         if app.status == Status::Ready {
                             GOLD
                         } else {
@@ -385,6 +428,41 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                     )),
                 )?;
             }
+            label(d, &freshness_line(app), 120, 212, MUTED, true)?;
+        }
+        Screen::Freshness => {
+            label(d, "Last successful check", 120, 62, MUTED, true)?;
+            label(
+                d,
+                &timestamp(app.freshness.checked_at, "Not checked yet"),
+                120,
+                80,
+                INK,
+                true,
+            )?;
+            label(d, "Source last updated", 120, 119, MUTED, true)?;
+            label(
+                d,
+                &timestamp(app.freshness.source_updated_at, "Not supplied"),
+                120,
+                137,
+                INK,
+                true,
+            )?;
+            label(d, "Oldest source file used", 120, 155, MUTED, true)?;
+            label(d, "Times in Poznan", 120, 178, MUTED, true)?;
+            label(
+                d,
+                if app.can_retry() {
+                    "Retry now"
+                } else {
+                    "Tap to return"
+                },
+                120,
+                207,
+                if app.can_retry() { CHILLI } else { MUTED },
+                true,
+            )?;
         }
         Screen::Groups => {
             for (i, g) in config.groups.iter().enumerate() {

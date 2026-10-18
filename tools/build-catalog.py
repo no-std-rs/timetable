@@ -27,6 +27,7 @@ def build(source, destination, date):
         routes = {r['route_id']: r for r in rows('routes.txt')}
         stops = {s['stop_id']: s for s in rows('stops.txt')}
         trips = {}
+        trip_calls = defaultdict(list)
         heads = defaultdict(Counter)
         links = defaultdict(int)
         for trip in rows('trips.txt'):
@@ -34,13 +35,18 @@ def build(source, destination, date):
             if direction not in ('', '0', '1'):
                 raise ValueError('invalid direction_id')
             bit = 4 if direction == '' else 1 << int(direction)
-            trips[trip['trip_id']] = (trip['route_id'], bit)
+            trips[trip['trip_id']] = (trip['route_id'], bit, trip.get('trip_headsign', ''))
             if direction:
                 heads[(trip['route_id'], int(direction))][trip.get('trip_headsign', '')] += 1
         for row in rows('stop_times.txt'):
-            if row.get('pickup_type') == '1':
+            pickup = int(row.get('pickup_type') or '0')
+            sequence = int(row['stop_sequence'])
+            if pickup not in range(4) or sequence < 0 or row['stop_id'] not in stops:
+                raise ValueError('invalid stop time')
+            trip_calls[row['trip_id']].append((sequence, row['stop_id'], pickup, row.get('stop_headsign', '')))
+            if pickup == 1:
                 continue
-            route, bit = trips[row['trip_id']]
+            route, bit, _ = trips[row['trip_id']]
             links[(route, row['stop_id'])] |= bit
     route_ids = sorted(routes, key=lambda key: (routes[key].get('route_short_name', '').zfill(8), key))
     stop_ids = sorted({s for _, s in links}, key=lambda key: (stops[key].get('stop_name', ''), stops[key].get('stop_code', ''), key))
@@ -74,13 +80,31 @@ def build(source, destination, date):
         name, code = label(s.get('stop_name', ''), 64), s.get('stop_code', '')
         payload += field(key, 32) + field(name, 64) + field(code, 16)
         browser_stops.append({'id': key, 'name': name, 'code': code})
+    # Browser-only route geometry: keep the flash catalogue byte-for-byte stable.
+    # Non-boarding terminals still belong in a path, but never become choices.
+    via_ids = sorted({call[1] for calls in trip_calls.values() for call in calls} - si.keys())
+    via_stops = [{'id': key, 'name': label(stops[key].get('stop_name', ''), 64), 'code': stops[key].get('stop_code', '')} for key in via_ids]
+    graph_indices = {**si, **{key: len(si) + i for i, key in enumerate(via_ids)}}
+    patterns = Counter()
+    for trip, calls in trip_calls.items():
+        route, bit, headsign = trips[trip]
+        calls.sort()
+        if len({call[0] for call in calls}) != len(calls):
+            raise ValueError('duplicate trip stop_sequence')
+        ordered = tuple((graph_indices[stop], pickup, label(override, 64)) for _, stop, pickup, override in calls)
+        patterns[(ri[route], -1 if bit == 4 else bit - 1, label(headsign, 64), ordered)] += 1
+    browser_patterns = [
+        {'route': route, 'direction': direction, 'headsign': headsign,
+         'calls': [[stop, pickup, override] if override else [stop, pickup] for stop, pickup, override in calls], 'trips': count}
+        for (route, direction, headsign, calls), count in sorted(patterns.items())
+    ]
     browser_links = [[ri[r], si[s], bits] for (r, s), bits in sorted(links.items(), key=lambda item: (ri[item[0][0]], si[item[0][1]]))]
     for route, stop, bits in browser_links:
         payload += struct.pack('<HHBB', route, stop, bits, 0)
     header = b'TTCAT001' + date.encode('ascii') + struct.pack('<HHIII', len(ri), len(si), len(links), zlib.crc32(payload), 0)
     metadata = {'provider': 'ZTM Poznań', 'date': date, 'source': 'https://www.ztm.poznan.pl/otwarte-dane/gtfsfiles/', 'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
     destination.joinpath('catalog.bin').write_bytes(header + payload)
-    destination.joinpath('catalog.json').write_text(json.dumps({**metadata, 'routes': browser_routes, 'stops': browser_stops, 'links': browser_links}, ensure_ascii=False, separators=(',', ':')) + '\n')
+    destination.joinpath('catalog.json').write_text(json.dumps({**metadata, 'routes': browser_routes, 'stops': browser_stops, 'links': browser_links, 'via_stops': via_stops, 'patterns': browser_patterns}, ensure_ascii=False, separators=(',', ':')) + '\n')
     destination.joinpath('provenance.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + '\n')
     print(f'{len(ri)} routes, {len(si)} stops, {len(links)} route/stop links; {len(header + payload)} flash bytes')
 

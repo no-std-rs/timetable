@@ -21,6 +21,10 @@ fn retry_keeps_the_validated_board_and_does_not_save_settings() {
         let mut app = App {
             status,
             loaded_at: Some(100),
+            freshness: timetable_display::freshness::Freshness {
+                checked_at: Some(105),
+                source_updated_at: Some(90),
+            },
             ..App::default()
         };
         app.departures.reset(100);
@@ -35,12 +39,14 @@ fn retry_keeps_the_validated_board_and_does_not_save_settings() {
             .unwrap();
         assert!(app.can_retry());
         assert_eq!(
-            ui::tap(&mut app, &mut c, &catalog, 120, 212, false),
+            ui::tap(&mut app, &mut c, &catalog, 120, 42, false),
             ui::Action::Refresh
         );
         assert!(!app.can_retry());
         assert_eq!(app.screen, Screen::Board);
         assert_eq!(app.loaded_at, Some(100));
+        assert_eq!(app.freshness.checked_at, Some(105));
+        assert_eq!(app.freshness.source_updated_at, Some(90));
         assert_eq!(app.departures.get(0).unwrap().at, 200);
         assert!(c == original);
         app.status = status;
@@ -65,7 +71,7 @@ fn retry_keeps_the_validated_board_and_does_not_save_settings() {
             ui::tap(&mut app, &mut c, &catalog, 120, 212, false),
             ui::Action::None
         );
-        assert_eq!(app.screen, Screen::Picks);
+        assert_eq!(app.screen, Screen::Freshness);
     }
 }
 

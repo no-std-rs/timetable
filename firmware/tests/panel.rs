@@ -45,6 +45,8 @@ fn shared_settings_scratch_renders_every_screen_like_a_full_framebuffer() {
         (Screen::Routes, Status::Ready, None),
         (Screen::Stops, Status::Ready, None),
         (Screen::Walk, Status::Ready, None),
+        (Screen::Freshness, Status::Ready, None),
+        (Screen::Freshness, Status::Failed, None),
     ] {
         app.screen = screen;
         app.status = status;
@@ -52,6 +54,11 @@ fn shared_settings_scratch_renders_every_screen_like_a_full_framebuffer() {
             .try_into()
             .unwrap();
         app.clock = Some(1_792_301_400);
+        app.loaded_at = app.clock;
+        app.freshness = timetable_display::freshness::Freshness {
+            checked_at: app.clock,
+            source_updated_at: app.clock.map(|now| now - 3 * 86400),
+        };
         app.departures.reset(app.clock.unwrap());
         if let Some(minutes) = minutes {
             // Include the largest supported countdown, small/large line fonts,

@@ -78,15 +78,25 @@ def audit(frames, stack):
     ])
     nor_read = frame('esp_storage', 'ReadNorFlash', '4read')
     task = frame('TaskStorage', '4poll')
-    timeout = frame('TimeoutFuture', '4poll')
+    # In the pinned compiler these same network frames can be outlined as
+    # TimeoutFuture::poll or Http::request. Verify the retained call boundary;
+    # sum both families if they coexist, so nesting is never undercounted.
+    request_frames = []
+    for parts in [('TimeoutFuture', '4poll'), ('timetable_display9transport4Http7request',)]:
+        matches = [size for name, size in frames if all(part in name for part in parts)]
+        if matches:
+            request_frames.append(max(matches))
+    if not request_frames:
+        raise ValueError('missing audited timeout/request frame')
+    request = sum(request_frames)
     paths = {
         'boot_state': main + initialize + frame('create_state'),
         'boot_settings': main + initialize + load + frame('settings', 'load_banks') + parser,
         'boot_partition': main + initialize + load + frame('has_settings_partition') + nor_read,
         'boot_network': main + frame('start_network'),
         'save_validation': main + frame('timetable_display4save') + frame('config6decode') + parser,
-        'runtime_inflate': task + timeout + frame('gtfs', 'next_entry'),
-        'runtime_tls': task + timeout + frame('embedded_tls', 'TlsConnection', '4open')
+        'runtime_inflate': task + request + frame('gtfs', 'next_entry'),
+        'runtime_tls': task + request + frame('embedded_tls', 'TlsConnection', '4open')
             + frame('process_server_verify') + frame('pki', 'verify_signature')
             + frame('der', 'from_der') + frame('ContextSpecific', 'decode_explicit')
             + frame('SliceReader', '6decode') + frame('header', 'Header', '6decode')

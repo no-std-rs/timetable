@@ -46,7 +46,7 @@ audited boot paths above 24 KiB including 4 KiB headroom, and audited runtime
 paths whose frame sum plus headroom exceeds linker-available stack. The
 original binary is rejected for its 56,544-byte frame.
 
-The [current scoped report](../benchmarks/device-boot-stack.json) includes
+The [post-fix boot report](../benchmarks/device-boot-stack.json) includes
 14,480 bytes for settings startup, 17,920 for partition loading and a conservative
 43,680-byte TLS path sum, before the explicit 4,096-byte headroom. A conservative
 sum uses the largest matching generic-function frame even when the exact

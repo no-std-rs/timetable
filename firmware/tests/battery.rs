@@ -20,6 +20,10 @@ fn board() -> (Config, App) {
         group: 1,
         clock: Some(BASE),
         loaded_at: Some(BASE),
+        freshness: timetable_display::freshness::Freshness {
+            checked_at: Some(BASE),
+            source_updated_at: Some(BASE - 86400),
+        },
         manual_until: BASE + 7200,
         status: Status::Ready,
         ..App::default()
@@ -79,6 +83,7 @@ fn full_cache_survives_sleep_with_exact_times_names_and_manual_group() {
         assert_eq!(app.headsigns.get(i), original.headsigns.get(i));
     }
     assert_eq!(app.loaded_at, Some(BASE));
+    assert_eq!(app.freshness, original.freshness);
     app.tick(&c, app.clock.unwrap());
     assert_eq!(app.group, 1);
     app.tick(&c, BASE + 7201);
@@ -119,9 +124,9 @@ fn corrupt_or_mismatched_retention_never_changes_the_app() {
         (68, 33),
         (70, 0),
         (72, 0),
-        (82, 32),
-        (83, 255),
-        (2128, 255),
+        (98, 32),
+        (99, 255),
+        (2144, 255),
     ] {
         let mut bad = valid;
         bad[at] = value;
@@ -156,6 +161,44 @@ fn repeated_short_sleeps_preserve_subsecond_time_and_deadline() {
     }
     assert_eq!(utc, BASE * 1_000_000 + 2_123_456);
     assert_eq!(remaining, 0);
+    assert_eq!(app.freshness.checked_at, Some(BASE));
+    assert_eq!(app.freshness.source_updated_at, Some(BASE - 86400));
+}
+
+#[test]
+fn invalid_retained_freshness_never_replaces_the_visible_snapshot() {
+    let (config, original) = board();
+    let valid = image(&original);
+    let mut app = App {
+        loaded_at: Some(77),
+        freshness: timetable_display::freshness::Freshness {
+            checked_at: Some(88),
+            source_updated_at: Some(66),
+        },
+        ..App::default()
+    };
+    let before = app.freshness;
+    for (offset, value) in [(80, BASE - 1), (88, BASE + 1)] {
+        let mut bad = valid;
+        bad[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        seal(&mut bad);
+        assert!(battery::restore(&mut bad, &config, 42, ANCHOR + 1, &mut app).is_err());
+        assert_eq!(app.freshness, before);
+        assert_eq!(app.loaded_at, Some(77));
+    }
+    app.freshness.source_updated_at = Some(99);
+    assert!(
+        battery::save(
+            &mut valid.clone(),
+            &app,
+            42,
+            ANCHOR,
+            PERIOD,
+            Some(BASE * 1_000_000),
+            0
+        )
+        .is_err()
+    );
 }
 
 #[test]

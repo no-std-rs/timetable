@@ -15,6 +15,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --all-targets --locked
       - run: cargo test --workspace --doc --locked
+      - run: python3 -m unittest discover -s tools/tests
       - run: python3 display/tests/make_fixtures.py
       - run: git diff --exit-code -- display/tests/fixtures
       - run: cargo check -p gtfs --lib --locked --target riscv32imac-unknown-none-elf

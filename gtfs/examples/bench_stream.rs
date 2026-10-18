@@ -45,6 +45,7 @@ struct Metrics {
     checksum: u64,
     prepare_future: usize,
     query_future: usize,
+    source_updated_at: Option<i64>,
 }
 
 async fn workflow<const TRIPS: usize>(
@@ -106,6 +107,7 @@ async fn workflow<const TRIPS: usize>(
         checksum,
         prepare_future,
         query_future,
+        source_updated_at: manifest.updated_at(),
     })
 }
 
@@ -142,6 +144,10 @@ fn bench<const TRIPS: usize>(
                 memory::DEVICE_RAM,
                 result.prepare_future,
                 result.query_future
+            );
+            eprintln!(
+                "source table modification time (UTC Unix seconds): {:?}",
+                result.source_updated_at
             );
             continue;
         }

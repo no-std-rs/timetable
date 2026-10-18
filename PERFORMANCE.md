@@ -330,3 +330,36 @@ including the unchanged 64 KiB heap, 296,996 bytes with the unchanged minimum
 existing 300,000-byte static/minimum-reserve ceiling remains unchanged; the full
 linked-memory account separately fits 400,000 bytes. Hardware cold boot, USB
 reflashing and stack high-water remain unverified. See [recovery and analysis](docs/boot-recovery.md).
+
+## Timetable freshness
+
+The compact board footer distinguishes the last successful check from the source
+update date. A tap shows full timestamps in Poznań time. Failed updates and RTC
+cache restores preserve both values. HTTP Last-Modified is preferred; when it is
+absent, the forward ZIP parser reads fixed-size UTC Info-ZIP UT metadata from the
+central directory. It exposes the newest recognized table timestamp only after
+directory, EOCD and body EOF validation. Multiple archives use their oldest
+source time. Missing, malformed or ambiguous metadata remains unknown.
+
+The pinned original ZIP above returns UTC Unix timestamp `1791966267` from its
+tables, independently of its service-validity filename. Seven alternating
+before/after host rounds against main `d4b662c4`, Rust 1.97.1 release, retain all
+63 events and checksum `a71a50c86748e8c0`, with zero allocations, reallocations
+and allocated bytes in every round. [Raw rounds](benchmarks/device-freshness-stream.csv)
+show metadata medians 16.508 → 17.515 ms and query medians 275.166 → 267.590 ms.
+These shared-host samples do not establish a speed improvement or MCU timings.
+The actual host workflow future grows 144 bytes to 235,656 bytes; the isolated
+32-bit GTFS profile grows 48 bytes to 316,952 bytes including reserves. The display
+query/reserve probe grows 80 bytes to 250,392 bytes.
+
+The [linked RAM report](benchmarks/device-freshness-ram.json), built with firmware's
+pinned Rust 1.95.0, records **272,604 B static**, 184 bytes above the boot-fixed
+base, including the unchanged 64 KiB heap. With the unchanged 24 KiB minimum
+stack reserve, the regression account is **297,180 B**, below 300,000 B. Including
+all 52,000 bytes of available stack, the linked account remains **324,604 B**.
+The [stack audit](benchmarks/device-freshness-stack.json) records a conservative
+44,032-byte TLS path plus 4,096-byte headroom, below that available stack. The
+guard recognizes the pinned compiler's outlined HTTP request frame as well as
+the previous timeout frame, summing both if present. Its limits are unchanged;
+both current and boot-fixed base ELFs pass, and the original overflowing ELF
+still fails. These are compiler/linker checks, not physical RAM high-water data.

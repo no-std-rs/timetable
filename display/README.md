@@ -55,9 +55,18 @@ Firmware swaps results into the visible app only after the entire refresh
 succeeds and the selected settings still match its revision. `App::publish`
 installs events and their matching headsign table together. The prior
 validated snapshot survives a failed background refresh.
-An offline or failed footer offers a retry that keeps that snapshot and does
+An offline or failed status above the board offers a retry that keeps that snapshot and does
 not write settings. Updating, clock-sync and capacity states have distinct
 labels; holding still opens the editor.
+The compact footer separates last successful check time from source update time.
+Tap it for full dates, years and local times. Checks from
+earlier local dates display a date, preventing an old time from looking current.
+Failed/cancelled refreshes and cached sleep wakes never advance either timestamp.
+Source time uses HTTP Last-Modified, or the newest recognized GTFS table's UTC
+modification time inside its ZIP. With multiple archives, the oldest source wins.
+Missing or ambiguous metadata remains unknown; validity dates never substitute.
+See [HTTP validator semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-last-modified)
+and the [Info-ZIP extended timestamp format](https://libzip.org/specifications/extrafld.txt).
 
 The settings protocol is versioned, bounded to 8 KiB, and CRC-protected over
 generation, length and JSON. Firmware alternates two flash banks and verifies

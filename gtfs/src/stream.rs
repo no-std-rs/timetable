@@ -69,6 +69,7 @@ pub async fn scan_with_limits<R: Read, const ROW: usize, const FIELDS: usize>(
         }
     }
     archive.finish_archive(&observed).await?;
+    observed.set_updated_at(archive.updated_at());
     if let Some(expected) = expected {
         expected.check(&observed)?;
     }

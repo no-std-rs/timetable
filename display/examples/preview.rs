@@ -37,6 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App {
         clock: Some(now),
         loaded_at: Some(now),
+        freshness: timetable_display::freshness::Freshness {
+            checked_at: Some(now - 120),
+            source_updated_at: Some(now - 3 * 86400),
+        },
         status: Status::Ready,
         ..App::default()
     };
@@ -75,6 +79,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if mode == "urgent" {
         app.departures.truncate(1);
         app.clock = Some(now + 11 * 60);
+    } else if mode == "freshness" {
+        app.screen = Screen::Freshness;
     }
     let mut frame = Frame([Rgb565::BLACK; 240 * 240]);
     render::draw(&mut frame, &app, &c, &catalog)?;

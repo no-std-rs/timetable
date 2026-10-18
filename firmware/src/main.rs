@@ -660,14 +660,15 @@ async fn refresh(
     builder: &mut Builder,
     workspace: &mut gtfs::zip::Workspace,
     c: &Config,
-) -> Result<(), Error> {
+) -> Result<timetable_display::freshness::Freshness, Error> {
     builder.begin(transport::now().ok_or(Error::Clock)?)?;
     if c.groups.iter().all(|g| g.picks.is_empty()) {
-        return Ok(());
+        return Ok(timetable_display::freshness::Freshness::default());
     }
     let mut listing = Archives::new(builder.dates, builder.day_mask());
-    http.get(gtfs::poznan::LIST_URL, &mut listing).await?;
+    let _ = http.get(gtfs::poznan::LIST_URL, &mut listing).await?;
     let sources = listing.sources().ok_or(Error::MissingArchive)?;
+    let mut times = timetable_display::freshness::SourceTimes::default();
     for (name, mask) in sources {
         if mask == 0 {
             continue;
@@ -676,19 +677,34 @@ async fn refresh(
         let mut url = [0; 192];
         let url = name.url(&mut url)?;
         for phase in [Phase::Calendars(mask), Phase::Trips, Phase::Departures] {
-            http.get(
-                url,
-                &mut Pass {
-                    builder,
-                    workspace,
-                    config: c,
-                    phase,
-                },
-            )
-            .await?;
+            let modified = http
+                .get(
+                    url,
+                    &mut Pass {
+                        builder,
+                        workspace,
+                        config: c,
+                        phase,
+                    },
+                )
+                .await?;
+            // ZTM's PHP download omits Last-Modified. Its ZIP does contain UTC
+            // GTFS table timestamps; use the validated calendar-pass manifest
+            // for this same uncompressed snapshot, never the service date.
+            let modified = modified.or_else(|| {
+                builder
+                    .manifest
+                    .as_ref()
+                    .and_then(gtfs::zip::Manifest::updated_at)
+                    .filter(|stamp| transport::now().is_some_and(|now| (0..=now).contains(stamp)))
+            });
+            times.observe(modified);
         }
     }
-    Ok(())
+    Ok(timetable_display::freshness::Freshness {
+        checked_at: Some(transport::now().ok_or(Error::Clock)?),
+        source_updated_at: times.updated_at(),
+    })
 }
 #[embassy_executor::task]
 async fn timetable(
@@ -751,12 +767,13 @@ async fn timetable(
                 continue;
             }
             match result {
-                Ok(()) => {
+                Ok(freshness) => {
                     s.app.publish(
                         core::mem::take(&mut builder.events),
                         core::mem::take(&mut builder.headsigns),
                         builder.now,
                     );
+                    s.app.freshness = freshness;
                 }
                 Err(Error::Feed(gtfs::Error::IndexFull | gtfs::Error::IdTooLong)) => {
                     s.app.status = Status::Capacity

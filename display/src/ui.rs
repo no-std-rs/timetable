@@ -104,19 +104,34 @@ pub fn tap(
     }
     match app.screen {
         Screen::Board => {
-            if !held && y > 190 && app.can_retry() {
+            if !held && (38..58).contains(&y) && app.can_retry() {
                 app.status = if app.status == Status::Offline {
                     Status::Connecting
                 } else {
                     Status::Loading
                 };
                 return Action::Refresh;
-            } else if held || y > 190 {
+            } else if held {
+                app.screen = Screen::Picks;
+            } else if y >= 200 || (38..58).contains(&y) {
+                app.screen = Screen::Freshness;
+            } else if y > 190 {
                 app.screen = Screen::Picks;
             } else if y < 50 {
                 app.screen = Screen::Groups;
             }
             app.cursor = 0;
+        }
+        Screen::Freshness => {
+            app.screen = Screen::Board;
+            if y >= 190 && app.can_retry() {
+                app.status = if app.status == Status::Offline {
+                    Status::Connecting
+                } else {
+                    Status::Loading
+                };
+                return Action::Refresh;
+            }
         }
         Screen::Groups => {
             if (52..196).contains(&y) {
@@ -273,6 +288,7 @@ pub fn tap(
                 if changed {
                     app.departures.clear();
                     app.loaded_at = None;
+                    app.freshness = crate::freshness::Freshness::default();
                     app.status = Status::Loading;
                 }
                 return Action::Save { refresh: changed };
