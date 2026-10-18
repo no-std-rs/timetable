@@ -2,6 +2,7 @@
 #![no_main]
 extern crate alloc;
 mod rtc;
+mod tls_memory;
 mod transport;
 
 use embassy_executor::Spawner;
@@ -538,7 +539,19 @@ fn start_network(
     shared: &'static Shared,
 ) {
     info!("Wi-Fi: initializing radio");
-    let (controller, interfaces) = esp_radio::wifi::new(wifi, Default::default()).unwrap();
+    // Keep radio buffers small for this single streaming connection.
+    // Leave heap for RSA: DMA buffers persist for the radio's lifetime, while
+    // aggregation and queued packets compete with certificate verification.
+    let config = esp_radio::wifi::ControllerConfig::default()
+        .with_static_rx_buf_num(2)
+        .with_dynamic_rx_buf_num(2)
+        .with_dynamic_tx_buf_num(2)
+        .with_rx_queue_size(2)
+        .with_tx_queue_size(2)
+        .with_rx_ba_win(0) // Unused when RX aggregation is disabled, as in ESP-IDF.
+        .with_ampdu_rx_enable(false)
+        .with_ampdu_tx_enable(false);
+    let (controller, interfaces) = esp_radio::wifi::new(wifi, config).unwrap();
     info!("Wi-Fi: radio initialized");
     let mut seed = [0; 8];
     Rng::new().read(&mut seed);

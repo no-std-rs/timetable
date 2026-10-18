@@ -1,4 +1,5 @@
 //! Verified TLS 1.3 over embassy-net; reqwless decodes each streaming HTTP body.
+use crate::tls_memory::HeapCheckedVerifier;
 use embassy_net::{
     Stack,
     dns::DnsQueryType,
@@ -61,7 +62,7 @@ impl TlsClock for Clock {
 
 struct Provider {
     rng: Trng,
-    verifier: CertVerifier<'static, Aes128GcmSha256, Clock, 8192>,
+    verifier: HeapCheckedVerifier<CertVerifier<'static, Aes128GcmSha256, Clock, 8192>>,
 }
 impl CryptoProvider for Provider {
     type CipherSuite = Aes128GcmSha256;
@@ -138,21 +139,37 @@ impl Http {
         let mut tls_rx = [0; 16 * 1024 + 256];
         let mut tls_tx = [0; 2048 + 256];
         let mut tls = TlsConnection::new(socket, &mut tls_rx, &mut tls_tx);
+        log::info!(
+            "TLS: starting verified handshake; {} B heap free",
+            esp_alloc::HEAP.free()
+        );
         {
             let tls_config = TlsConfig::new()
                 .with_server_name(HOST)
                 .enable_rsa_signatures();
             let mut provider = Provider {
                 rng: Trng::try_new().map_err(|_| Error::Tls)?,
-                verifier: CertVerifier::new(Certificate::X509(include_bytes!(
-                    "../certs/certum-trusted-root.der"
-                ))),
+                verifier: HeapCheckedVerifier::new(
+                    CertVerifier::new(Certificate::X509(include_bytes!(
+                        "../certs/certum-trusted-root.der"
+                    ))),
+                    || esp_alloc::HEAP.free(),
+                ),
             };
             // Keep the 8 KiB verifier out of owned async-context copies.
             tls.open(TlsContext::new(&tls_config, &mut provider))
                 .await
-                .map_err(|_| Error::Tls)?;
+                .map_err(|error| {
+                    log::warn!(
+                        "TLS handshake failed: {:?}; {} B heap free",
+                        error,
+                        esp_alloc::HEAP.free()
+                    );
+                    Error::Tls
+                })?;
         }
+        log::info!("TLS: handshake verified");
+        crate::log_heap();
         // Keep the live TLS connection in place while reqwless borrows it.
         let mut stream = Io(Cooperative::new(&mut tls));
         let mut headers = [0; 2048];
