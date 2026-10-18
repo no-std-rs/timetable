@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 gtfs = { path = "../../gtfs" }
+timetable-display = { path = "../../display" }
 
 [workspace]
 

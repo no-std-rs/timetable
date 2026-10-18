@@ -1,3 +1,9 @@
 target/
 *.zip
+!display/tests/fixtures/*.zip
 !gtfs/tests/fixtures/*.zip
+node_modules/
+dist/
+test-results/
+playwright-report/
+__pycache__/

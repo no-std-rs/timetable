@@ -35,6 +35,13 @@ for capacity in [1024, 2048, 4096]:
     task = constant(f"task_state_bytes_{capacity}")
     total = task + reserve
     rows.append(dict(trips=capacity, task_bytes=task, reserves_bytes=reserve, total_bytes=total, fits_400000=total <= 400_000))
-print(json.dumps(dict(target=args.target, profiles=rows), indent=2))
+display_task = constant("display_task_bytes")
+display_reserves = constant("display_reserves_bytes")
+display = dict(task_bytes=display_task, reserves_bytes=display_reserves,
+               total_bytes=display_task + display_reserves,
+               fits_400000=display_task + display_reserves <= 400_000)
+print(json.dumps(dict(target=args.target, profiles=rows, display=display), indent=2))
 if not rows[1]["fits_400000"]:
     raise SystemExit("2048-trip embedded profile exceeds the 400,000-byte budget")
+if not display['fits_400000']:
+    raise SystemExit("display query and firmware reserves exceed the 400,000-byte budget")
