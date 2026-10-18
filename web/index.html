@@ -5,6 +5,7 @@
   <meta name="theme-color" content="#f5f1e8">
   <meta name="description" content="Your lines, your stops, a little time to spare. A small Rust timetable for the round ESP32 display.">
   <title>timetable — a little time to spare</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./installer.js"></script>
   <script type="module" src="./app.js"></script>
@@ -113,6 +114,14 @@
     <label class="search-label">Narrow lines (optional)<input type="search" id="route-search" placeholder="Line number or destination" aria-controls="route-select" autocomplete="off" spellcheck="false"></label>
     <div class="field-pair"><label>Line<select id="route-select" required aria-describedby="route-results"></select></label><label>Towards<select id="direction-select"><option value="-1">Either direction</option></select></label></div>
     <p id="route-results" class="picker-hint" role="status"></p>
+    <details id="route-map" class="route-map" open hidden>
+      <summary><span id="route-map-title">Follow the line</span><small id="route-map-count"></small></summary>
+      <p class="picker-hint">Follow the connections, then choose your boarding platform. This is a route diagram, not a street map.</p>
+      <label class="path-label" for="path-select">Preview a path<select id="path-select" aria-describedby="path-hint"></select></label>
+      <svg id="route-graph" viewBox="0 0 600 160" aria-hidden="true" focusable="false"></svg>
+      <ol id="route-stops" class="route-stops" aria-label="Stops along the previewed path"></ol>
+      <p id="path-hint" class="picker-hint">Tap a stop to choose its platform and direction. Your timetable includes every path serving that choice.</p>
+    </details>
     <div class="walk-control"><label for="walk-minutes">Time to walk there<span>In minutes, at your usual pace.</span></label><input id="walk-minutes" type="number" min="0" max="60" value="6" required></div>
     <details class="estimate-details"><summary>Leave a little room</summary><div class="field-pair"><label>Walking variation ±<input type="number" id="walk-spread" min="0" max="15" value="1" required></label><label>Boarding buffer<input type="number" id="walk-margin" min="0" max="10" value="1" required></label></div><p class="fine-print">Minutes. The walking estimate uses this range; “leave in” includes your boarding buffer.</p></details>
     <p id="pick-error" role="alert" class="error" hidden></p>

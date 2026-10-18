@@ -1,3 +1,4 @@
+import { routeTopology } from "./route-topology.js";
 // Build both directions once; stop-first browsing never rescans all route links.
 export function searchText(value) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[łŁ]/g, "l").toLowerCase();
@@ -26,6 +27,7 @@ export function catalogIndex(catalog) {
   const terms = (query) => searchText(query).trim().split(/\s+/).filter(Boolean);
   const matches = (text, query) => query.every((term) => text.includes(term));
   return {
+    topology: routeTopology(catalog),
     routes(query = "", stop = -1) {
       const words = terms(query), exact = searchText(query).trim();
       return routes.flatMap((text, i) => (stop < 0 || serving[stop]?.has(i)) && matches(text, words) ? [i] : [])

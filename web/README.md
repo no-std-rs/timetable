@@ -20,6 +20,15 @@ and directions serving that platform. Polish accents are optional. You can also
 start with a line number or destination; stop results then stay within that line
 and direction. Names and platform codes appear together in selectable results.
 Arrow keys browse; Enter commits the highlighted stop; Escape closes the list.
+Results include actual destinations and the next stop, so same-name platforms
+can be distinguished by their route rather than a guessed odd/even platform
+code. Choosing a line reveals a diagram of its ordered paths, including forks,
+rejoins and repeated stops. Preview another path, then choose a platform from
+the diagram or its keyboard-accessible stop list. Non-boarding terminals remain
+visible but disabled. Picking a call sets its exact platform and direction;
+previewing a path alone does not change the choice. Saved timetables include
+all paths serving that platform/direction. Paths describe the catalogue
+snapshot, not a claim of current service or a geographical street map.
 A line and boarding stop must be selected explicitly. Saved choices reopen
 intact; outdated identities ask for an updated choice. Forward and reverse
 catalogue indexes are built once. Empty groups have an empty preview.

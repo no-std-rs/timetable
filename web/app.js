@@ -1,5 +1,6 @@
 import { encodeSettingsPartition, manifestWithSettings, validateConfig, walkingChance } from "./config.js";
 import { catalogIndex } from "./catalog-search.js";
+import { pathGraph } from "./route-topology.js";
 const $ = (id) => document.getElementById(id);
 const element = (tag, text, className) => {
   const e = document.createElement(tag);
@@ -206,7 +207,7 @@ $("show-password").addEventListener("click", () => {
   $("show-password").setAttribute("aria-pressed", String(show));
 });
 for (const id of ["wifi-ssid", "wifi-password", "battery-mode"]) $(id).addEventListener("input", changed);
-const picker = { stop: null, matches: [], active: -1 };
+const picker = { stop: null, matches: [], active: -1, path: null };
 const stopLabel = (i) => {
   const s = state.catalog.stops[i];
   return `${s.name}${s.code ? ` · ${s.code}` : ""}`;
@@ -231,17 +232,26 @@ function fillDirections(value = -1) {
   const r = state.catalog.routes[route];
   $("direction-select").replaceChildren(new Option("Either direction", "-1"));
   const directions = state.index.directions(route, picker.stop ?? -1);
-  if (r) for (const i of directions) $("direction-select").append(new Option(r.headsigns[i] || `Direction ${i + 1}`, String(i)));
+  if (r) for (const i of directions) $("direction-select").append(new Option(directionName(route, i) || `Direction ${i + 1}`, String(i)));
   $("direction-select").value = String(directions.includes(value) ? value : -1);
   $("direction-select").disabled = !r;
   closeStops();
   updateStopHint();
   updatePickAvailability();
+  renderRouteMap();
+}
+function directionName(route, direction) {
+  return state.index.topology.contexts(picker.stop, route, direction)[0]?.headsign || state.catalog.routes[route]?.headsigns[direction] || "";
+}
+function stopContext(stop, route = -1, direction = -1) {
+  const contexts = state.index.topology.contexts(stop, route, direction);
+  return contexts.slice(0, 2).map(c => `${route < 0 ? `${state.catalog.routes[c.route].line} ` : ""}→ ${c.headsign}${c.next !== undefined ? ` · next ${state.index.topology.stops[c.next].name}` : " · last stop"}`).join(" / ")
+    + (contexts.length > 2 ? ` · +${contexts.length - 2} other paths` : "");
 }
 function updateStopHint() {
   $("stop-results").textContent = picker.stop === null
     ? ($("route-select").value === "" ? "Search any stop, then browse its lines. Polish accents are optional." : "Search this line’s boarding stops. Choose the blank line option to search every stop.")
-    : `Selected: ${stopLabel(picker.stop)}. Choose a line and direction below.`;
+    : `Selected: ${stopLabel(picker.stop)}. ${stopContext(picker.stop, $("route-select").value === "" ? -1 : Number($("route-select").value), Number($("direction-select").value))}`;
 }
 function fillStops() {
   const value = $("route-select").value, route = value === "" ? -1 : Number(value), direction = Number($("direction-select").value);
@@ -256,7 +266,10 @@ function fillStops() {
     option.dataset.stop = String(i);
     option.setAttribute("role", "option");
     option.setAttribute("aria-selected", "false");
-    option.append(element("span", stop.name), element("small", stop.code));
+    const copy = element("span", undefined, "stop-copy"), context = stopContext(i, route, direction);
+    copy.append(element("span", stop.name));
+    if (context) copy.append(element("small", context, "stop-context"));
+    option.append(copy, element("small", stop.code, "stop-code"));
     // Keep DOM focus on the combobox while choosing with a pointer.
     option.addEventListener("mousedown", (event) => event.preventDefault());
     option.addEventListener("click", () => selectStop(i));
@@ -270,6 +283,7 @@ function fillStops() {
 }
 function selectStop(stop) {
   picker.stop = stop;
+  picker.path = null;
   $("stop-search").value = stopLabel(stop);
   $("route-search").value = "";
   closeStops();
@@ -282,8 +296,86 @@ function selectStop(stop) {
 function updatePickAvailability() {
   $("save-pick").disabled = $("route-select").value === "" || picker.stop === null;
 }
+function renderRouteMap() {
+  const value = $("route-select").value, route = value === "" ? -1 : Number(value), direction = Number($("direction-select").value);
+  const topology = state.index.topology, ids = topology.paths(route, direction);
+  $("route-map").hidden = !ids.length;
+  if (!ids.length) { picker.path = null; return; }
+  if (!ids.includes(picker.path)) {
+    picker.path = ids.find(id => topology.patterns[id].calls.some(c => c[0] === picker.stop && c[1] !== 1)) ?? ids[0];
+  }
+  const pathLabel = id => {
+    const p = topology.patterns[id], base = topology.patterns[ids.find(other => topology.patterns[other].direction === p.direction)];
+    const split = p.calls.findIndex((call, i) => call[0] !== base.calls[i]?.[0]);
+    const via = p.calls[split >= 0 ? split : 0];
+    return `${p.headsign || topology.stops[p.calls.at(-1)[0]].name} · via ${topology.stops[via[0]].name} · ${p.calls.length} stops`;
+  };
+  $("path-select").replaceChildren(...ids.map(id => new Option(pathLabel(id), String(id))));
+  $("path-select").value = String(picker.path);
+  $("path-select").disabled = ids.length === 1;
+  $("route-map-title").textContent = `Follow line ${state.catalog.routes[route].line}`;
+  $("route-map-count").textContent = `${ids.length} ${ids.length === 1 ? "path" : "paths"} in this snapshot`;
+  const visibleIds = ids.filter(id => topology.patterns[id].direction === topology.patterns[picker.path].direction);
+  const graph = pathGraph(topology.patterns, visibleIds), svg = $("route-graph");
+  svg.replaceChildren();
+  const draw = (tag, attributes) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
+    svg.append(node);
+    return node;
+  };
+  // The detailed button list below provides names and full-size keyboard/touch
+  // targets; the overview preserves all forks without crowding it with labels.
+  for (const id of [...visibleIds.filter(id => id !== picker.path), picker.path]) {
+    const points = graph.paths.get(id).map(n => `${graph.nodes[n].x},${graph.nodes[n].y}`).join(" ");
+    const line = draw("polyline", { points, class: id === picker.path ? "graph-path active" : "graph-path" });
+    line.addEventListener("click", () => { picker.path = id; renderRouteMap(); });
+  }
+  graph.nodes.forEach((node, n) => {
+    const active = graph.paths.get(picker.path).includes(n), selected = node.call[0] === picker.stop;
+    const dot = draw("circle", { cx: node.x, cy: node.y, r: selected ? 5 : active ? 3.5 : 2.5, "data-stop": node.call[0], class: `graph-stop${active ? " active" : ""}${selected ? " selected" : ""}${node.call[1] === 1 ? " no-pickup" : ""}` });
+    const title = document.createElementNS(svg.namespaceURI, "title");
+    title.textContent = `${topology.stops[node.call[0]].name} · ${topology.stops[node.call[0]].code}${node.call[1] === 1 ? " · no boarding" : ""}`;
+    dot.append(title);
+    if (node.call[1] !== 1) dot.addEventListener("click", () => {
+      const id = active ? picker.path : visibleIds.find(id => graph.paths.get(id).includes(n));
+      chooseRouteCall(id, graph.paths.get(id).indexOf(n));
+    });
+  });
+  const p = topology.patterns[picker.path], list = $("route-stops");
+  list.replaceChildren();
+  p.calls.forEach((call, at) => {
+    const stop = topology.stops[call[0]], row = element("li"), button = element("button", undefined, "route-stop");
+    button.type = "button";
+    button.dataset.stop = String(call[0]);
+    button.dataset.call = String(at);
+    button.disabled = call[1] === 1;
+    button.setAttribute("aria-pressed", String(call[0] === picker.stop));
+    const title = element("span", undefined, "route-stop-name");
+    title.append(element("span", stop.name), element("small", stop.code));
+    const next = p.calls[at + 1];
+    const note = call[1] === 1 ? "No boarding here" : call[1] === 2 ? "Call to arrange boarding" : call[1] === 3 ? "Arrange boarding with driver" : next ? `Next: ${topology.stops[next[0]].name}` : "Last stop";
+    button.append(title, element("small", note, "route-stop-note"));
+    button.addEventListener("click", () => chooseRouteCall(picker.path, at));
+    row.append(button);
+    list.append(row);
+  });
+}
+function chooseRouteCall(id, at) {
+  const p = state.index.topology.patterns[id], call = p.calls[at];
+  if (call[1] === 1) return;
+  selectStop(call[0]);
+  picker.path = id;
+  fillDirections(p.direction);
+}
+$("path-select").addEventListener("change", () => {
+  picker.path = Number($("path-select").value);
+  // A path is a preview, not an additional filter on saved timetable queries.
+  renderRouteMap();
+});
 function openPick(index) {
   state.editing = index;
+  picker.path = null;
   $("pick-error").hidden = true;
   $("delete-pick").hidden = index === null;
   if (!state.catalog) {
@@ -352,6 +444,7 @@ $("route-select").addEventListener("change", () => fillDirections());
 $("direction-select").addEventListener("change", () => {
   closeStops();
   updateStopHint();
+  renderRouteMap();
 });
 $("pick-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -359,7 +452,7 @@ $("pick-form").addEventListener("submit", (event) => {
     const route = Number($("route-select").value), stop = picker.stop;
     const r = state.catalog.routes[route], s = state.catalog.stops[stop], direction = Number($("direction-select").value);
     if (!r || !s || !$("route-select").value || stop === null || !state.index.stops(route, direction).includes(stop)) throw new Error("Choose a line and one of its boarding stops.");
-    const p = { route: r.id, line: r.line, stop: s.id, stop_name: s.name, stop_code: s.code, headsign: direction < 0 ? "Both directions" : r.headsigns[direction], direction, walk: Number($("walk-minutes").value), spread: Number($("walk-spread").value), margin: Number($("walk-margin").value) };
+    const p = { route: r.id, line: r.line, stop: s.id, stop_name: s.name, stop_code: s.code, headsign: direction < 0 ? "Both directions" : directionName(route, direction), direction, walk: Number($("walk-minutes").value), spread: Number($("walk-spread").value), margin: Number($("walk-margin").value) };
     const draft = structuredClone(state.groups);
     if (state.editing === null) draft[state.active].picks.push(p);
     else draft[state.active].picks[state.editing] = p;

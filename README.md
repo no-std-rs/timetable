@@ -35,6 +35,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --all-targets --locked
 cargo test --workspace --doc --locked
+python3 -m unittest discover -s tools/tests
 python3 display/tests/make_fixtures.py
 git diff --exit-code -- display/tests/fixtures
 rustup target add riscv32imac-unknown-none-elf

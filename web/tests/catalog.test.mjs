@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { catalogIndex, searchText } from "../catalog-search.js";
+import { pathGraph } from "../route-topology.js";
+import { readFile } from "node:fs/promises";
 
 const catalog = {
   routes: [
@@ -53,4 +55,75 @@ test("malformed catalogue links cannot become selectable choices", () => {
     assert.throws(() => catalogIndex({ ...catalog, links: [link] }), /invalid stop link/);
   }
   assert.throws(() => catalogIndex({ ...catalog, routes: [null] }), /catalogue is invalid/);
+});
+
+const pathsCatalog = {
+  routes: [{ id: "R", line: "4", headsigns: ["East", "West"] }],
+  stops: [
+    { id: "OUT", name: "Central", code: "C01" },
+    { id: "IN", name: "Central", code: "C02" },
+    { id: "NEXT", name: "East street", code: "E01" },
+    { id: "VIA", name: "Branch", code: "B01" },
+    { id: "WEST", name: "West street", code: "W01" },
+  ],
+  via_stops: [{ id: "END", name: "East terminal", code: "E99" }],
+  links: [[0, 0, 1], [0, 1, 2], [0, 2, 1], [0, 3, 1], [0, 4, 2]],
+  patterns: [
+    { route: 0, direction: 0, headsign: "East", calls: [[0, 0], [2, 0], [5, 1]], trips: 10 },
+    { route: 0, direction: 0, headsign: "East", calls: [[0, 0], [3, 2], [2, 0], [5, 1]], trips: 2 },
+    { route: 0, direction: 1, headsign: "West", calls: [[1, 0], [4, 0]], trips: 12 },
+    { route: 0, direction: 0, headsign: "East", calls: [[0, 0], [2, 0], [0, 0, "Loop East"], [5, 1]], trips: 1 },
+  ],
+};
+test("same-name platforms use actual ordered paths, stop headsigns and boarding calls", () => {
+  const index = catalogIndex(pathsCatalog), t = index.topology;
+  assert.deepEqual(index.stops(0, -1, "central"), [0, 1]);
+  assert.equal(t.contexts(0, 0, 0)[0].headsign, "East");
+  assert.equal(t.contexts(0, 0, 0)[0].next, 2);
+  assert.equal(t.contexts(1, 0, 1)[0].headsign, "West");
+  assert.equal(t.contexts(1, 0, 1)[0].next, 4);
+  assert.ok(t.contexts(0).some(c => c.headsign === "Loop East" && c.next === 5));
+  assert.deepEqual(t.contexts(5), []);
+  assert.ok(!index.stops(0).includes(5));
+  assert.deepEqual(t.paths(0, 0), [0, 1, 3]);
+  assert.deepEqual(t.paths(0, 1), [2]);
+});
+test("route graph shares forks and rejoins without collapsing repeated visits", () => {
+  const graph = pathGraph(pathsCatalog.patterns, [0, 1, 3]);
+  const straight = graph.paths.get(0), branch = graph.paths.get(1), loop = graph.paths.get(3);
+  assert.equal(straight[0], branch[0]);
+  assert.equal(straight.at(-1), branch.at(-1));
+  const simple = pathGraph(pathsCatalog.patterns, [0, 1]);
+  assert.equal(simple.paths.get(0).at(-2), simple.paths.get(1).at(-2));
+  assert.notEqual(loop[0], loop[2]);
+  const actualEdges = new Set([...graph.paths.values()].flatMap(path => path.slice(1).map((n, i) => `${path[i]}:${n}`)));
+  graph.nodes.forEach((node, i) => node.children.forEach(child => {
+    assert.ok(actualEdges.has(`${i}:${child}`));
+    assert.ok(graph.nodes[child].rank > node.rank);
+  }));
+});
+test("malformed paths cannot offer a platform outside boarding membership", () => {
+  for (const patch of [{ direction: 2 }, { route: -1 }, { calls: [[99, 0]] }, { calls: [[5, 0]] }, { calls: [[1, 0]] }, { calls: [[0, 4]] }, { calls: [[0, 0, null]] }, { trips: 0 }]) {
+    assert.throws(() => catalogIndex({ ...pathsCatalog, patterns: [{ ...pathsCatalog.patterns[0], ...patch }] }));
+  }
+});
+test("different destination signs still share physical trunks and suffixes", async () => {
+  const patterns = pathsCatalog.patterns.slice(0, 2).map((p, i) => ({ ...p, calls: p.calls.map(c => [c[0], c[1], i ? "Other destination" : "Main destination"]) }));
+  const g = pathGraph(patterns, [0, 1]);
+  assert.equal(g.paths.get(0)[0], g.paths.get(1)[0]);
+  assert.equal(g.paths.get(0).at(-2), g.paths.get(1).at(-2));
+  const actual = JSON.parse(await readFile(new URL("../../catalog/catalog.json", import.meta.url)));
+  const route = actual.routes.findIndex(r => r.line === "1");
+  const candidates = actual.patterns.map((p, id) => ({ p, id })).filter(({ p }) => p.route === route && p.direction === 0);
+  let checked = false;
+  for (const a of candidates) for (const b of candidates) {
+    if (a.id >= b.id || a.p.calls[0][2] === b.p.calls[0][2]) continue;
+    let count = 0;
+    while (a.p.calls[count] && b.p.calls[count] && a.p.calls[count][0] === b.p.calls[count][0] && a.p.calls[count][1] === b.p.calls[count][1]) count++;
+    if (count < 20) continue;
+    const graph = pathGraph(actual.patterns, [a.id, b.id]);
+    assert.deepEqual(graph.paths.get(a.id).slice(0, count), graph.paths.get(b.id).slice(0, count));
+    checked = true;
+  }
+  assert.ok(checked, "official line 1 has a long common trunk with different destination signs");
 });
