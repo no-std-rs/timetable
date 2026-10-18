@@ -26,5 +26,6 @@ The flash format has a 32-byte header (`TTCAT001`, date, counts and payload CRC)
 168-byte route records, 112-byte stop records and 6-byte route/stop links. IDs
 are exact UTF-8, up to 32 bytes; overflowing IDs fail generation. Human labels
 may be clipped on a UTF-8 boundary to fixed display fields. Direction flags
-preserve both known directions and trips without `direction_id`. The reader
+use bits 1/2 for directions 0/1 and bit 4 for trips without `direction_id`;
+directionless trips are offered only under either direction. The reader
 validates lengths, CRC, strings and link bounds before browsing flash in place.

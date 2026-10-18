@@ -56,6 +56,8 @@ struct Resolved {
     stop: Id<32>,
     route_exact: bool,
     route_ambiguous: bool,
+    stop_exact: bool,
+    stop_ambiguous: bool,
 }
 
 struct Service {
@@ -127,6 +129,8 @@ impl Builder {
                 stop: Id::EMPTY,
                 route_exact: false,
                 route_ambiguous: false,
+                stop_exact: false,
+                stop_ambiguous: false,
             }; crate::config::MAX_GROUPS * crate::config::MAX_PICKS],
             events: Vec::new(),
             headsigns: Headings::default(),
@@ -177,6 +181,8 @@ impl Builder {
             stop: Id::EMPTY,
             route_exact: false,
             route_ambiguous: false,
+            stop_exact: false,
+            stop_ambiguous: false,
         });
         let manifest = stream::scan(
             source,
@@ -217,10 +223,15 @@ impl Builder {
                                         && s.name
                                             .is_some_and(|name| stop_label(name) == pick.stop_name))
                                 {
-                                    if !resolved.stop.as_str().is_empty() {
-                                        return Err(Error::InvalidField("ambiguous stop code"));
+                                    if s.id == pick.stop {
+                                        resolved.stop = Id::new(s.id)?;
+                                        resolved.stop_exact = true;
+                                        resolved.stop_ambiguous = false;
+                                    } else if !resolved.stop_exact {
+                                        resolved.stop_ambiguous |=
+                                            !resolved.stop.as_str().is_empty();
+                                        resolved.stop = Id::new(s.id)?;
                                     }
-                                    resolved.stop = Id::new(s.id)?;
                                 }
                             }
                         }
@@ -270,6 +281,9 @@ impl Builder {
                 if r.route_ambiguous {
                     return Err(Error::InvalidField("ambiguous line"));
                 }
+                if r.stop_ambiguous {
+                    return Err(Error::InvalidField("ambiguous stop code"));
+                }
                 if r.route.as_str().is_empty() || r.stop.as_str().is_empty() {
                     return Err(Error::InvalidField("selection no longer exists"));
                 }
@@ -290,6 +304,13 @@ impl Builder {
             .ok_or(Error::MissingTable(Table::Trips))?;
         self.trips.clear();
         self.trip_ids.clear();
+        let mut staged = Staged {
+            before: self.events.len(),
+            events: &mut self.events,
+            headings_before: self.headsigns.checkpoint(),
+            headsigns: &mut self.headsigns,
+            committed: false,
+        };
         stream::scan(source, &[Table::Trips], Some(expected), workspace, |row| {
             let t = row.trip()?;
             let days = self
@@ -325,7 +346,7 @@ impl Builder {
                 self.trip_ids
                     .extend_from_slice(t.id.as_bytes())
                     .map_err(|_| Error::IndexFull)?;
-                let headsign = self.headsigns.insert(t.headsign.unwrap_or(""))?;
+                let headsign = staged.headsigns.insert(t.headsign.unwrap_or(""))?;
                 self.trips
                     .push(Trip {
                         offset,
@@ -348,6 +369,7 @@ impl Builder {
         {
             return Err(Error::DuplicateTrip);
         }
+        staged.committed = true;
         Ok(())
     }
     pub async fn departures<R: Read>(

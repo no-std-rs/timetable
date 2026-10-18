@@ -148,6 +148,7 @@ fn editing_is_provisional_and_manual_groups_expire_after_two_hours() {
             headsign: 0,
         }])
         .unwrap(),
+        model::Headings::default(),
         200,
     );
     assert!(app.upcoming().next().is_none());
@@ -235,7 +236,12 @@ fn evening_queries_include_next_day_service_and_rollback_headsigns() {
     futures::executor::block_on(async {
         let catalog = Catalog::new(include_bytes!("fixtures/catalog.bin")).unwrap();
         // The drop-off-only terminus is not a selectable boarding stop.
-        assert_eq!(catalog.stop_count(), 1);
+        assert_eq!(catalog.stop_count(), 2);
+        assert!((0..catalog.stop_count()).any(|i| catalog.stop(i).unwrap().id == "S3"));
+        assert!((0..catalog.stop_count()).all(|i| catalog.stop(i).unwrap().id != "S2"));
+        assert_eq!(catalog.route_stops(1, -1).count(), 1);
+        assert_eq!(catalog.route_stops(1, 0).count(), 0);
+        assert_eq!(catalog.route_stops(1, 1).count(), 0);
         let stop = catalog.stop(0).unwrap();
         let mut c = settings();
         let p = &mut c.groups[0].picks[0];
@@ -253,6 +259,21 @@ fn evening_queries_include_next_day_service_and_rollback_headsigns() {
             .calendars(source, 7, &c, &mut workspace)
             .await
             .unwrap();
+        assert!(
+            builder
+                .trips(&source[..source.len() - 1], &c, &mut workspace)
+                .await
+                .is_err()
+        );
+        assert_eq!(builder.headsigns.get(0), None);
+        use futures::FutureExt;
+        assert!(
+            builder
+                .trips(PausedFooter(source), &c, &mut workspace)
+                .now_or_never()
+                .is_none()
+        );
+        assert_eq!(builder.headsigns.get(0), None);
         builder.trips(source, &c, &mut workspace).await.unwrap();
         assert_eq!(builder.headsigns.get(0), Some("Trip branch"));
         assert_eq!(builder.headsigns.get(1), None);
@@ -264,7 +285,6 @@ fn evening_queries_include_next_day_service_and_rollback_headsigns() {
         );
         assert!(builder.events.is_empty());
         assert_eq!(builder.headsigns.get(1), None);
-        use futures::FutureExt;
         assert!(
             builder
                 .departures(PausedFooter(source), &c, &mut workspace)
@@ -287,11 +307,43 @@ fn evening_queries_include_next_day_service_and_rollback_headsigns() {
             builder.headsigns.get(builder.events[1].headsign),
             Some("Platform branch")
         );
+        let mut app = App::default();
+        app.headsigns.insert("Old snapshot destination").unwrap();
+        app.publish(
+            core::mem::take(&mut builder.events),
+            core::mem::take(&mut builder.headsigns),
+            now,
+        );
+        assert_eq!(
+            app.headsigns.get(app.departures[1].headsign),
+            Some("Platform branch")
+        );
         // When the saved exact route disappears, duplicate public names fail.
         c.groups[0].picks[0].route = "old-route".try_into().unwrap();
         assert!(matches!(
             builder.calendars(source, 7, &c, &mut workspace).await,
             Err(gtfs::Error::InvalidField("ambiguous line"))
+        ));
+        let p = &mut c.groups[0].picks[0];
+        p.route = "R5".try_into().unwrap();
+        p.stop = "S3".try_into().unwrap();
+        p.stop_code = "T02".try_into().unwrap();
+        p.direction = -1;
+        builder.begin(now).unwrap();
+        builder
+            .calendars(source, 7, &c, &mut workspace)
+            .await
+            .unwrap();
+        builder.trips(source, &c, &mut workspace).await.unwrap();
+        builder
+            .departures(source, &c, &mut workspace)
+            .await
+            .unwrap();
+        assert_eq!(builder.events.len(), 1);
+        c.groups[0].picks[0].stop = "stale-stop".try_into().unwrap();
+        assert!(matches!(
+            builder.calendars(source, 7, &c, &mut workspace).await,
+            Err(gtfs::Error::InvalidField("ambiguous stop code"))
         ));
     });
 }

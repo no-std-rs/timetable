@@ -78,7 +78,7 @@ impl<'a> Catalog<'a> {
         {
             if word(link, 0) >= routes
                 || word(link, 2) >= stops
-                || !(1..=3).contains(&link[4])
+                || !(1..=7).contains(&link[4])
                 || link[5] != 0
             {
                 return None;

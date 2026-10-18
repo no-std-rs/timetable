@@ -33,7 +33,7 @@ def build(source, destination, date):
             direction = trip.get('direction_id', '')
             if direction not in ('', '0', '1'):
                 raise ValueError('invalid direction_id')
-            bit = 3 if direction == '' else 1 << int(direction)
+            bit = 4 if direction == '' else 1 << int(direction)
             trips[trip['trip_id']] = (trip['route_id'], bit)
             if direction:
                 heads[(trip['route_id'], int(direction))][trip.get('trip_headsign', '')] += 1

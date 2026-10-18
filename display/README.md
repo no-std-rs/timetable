@@ -36,7 +36,8 @@ display labels may be clipped to the screen's supported Latin-2 font.
 Callbacks and new query results remain provisional until footer and snapshot
 validation finish. Error or cancellation rolls back the current departure pass.
 Firmware swaps results into the visible app only after the entire refresh
-succeeds and the selected settings still match its revision. The prior
+succeeds and the selected settings still match its revision. `App::publish`
+installs events and their matching headsign table together. The prior
 validated snapshot survives a failed background refresh.
 
 The settings protocol is versioned, bounded to 8 KiB, and CRC-protected over

@@ -153,9 +153,15 @@ impl App {
 
     /// Keep the previous validated snapshot on failed refreshes. Publishing is
     /// one operation, after both the GTFS footer and all capacities are checked.
-    pub fn publish(&mut self, mut events: Vec<Departure, MAX_DEPARTURES>, now: i64) {
+    pub fn publish(
+        &mut self,
+        mut events: Vec<Departure, MAX_DEPARTURES>,
+        headsigns: Headings,
+        now: i64,
+    ) {
         events.sort_unstable_by_key(|d| (d.at, d.group, d.pick));
         self.departures = events;
+        self.headsigns = headsigns;
         self.loaded_at = Some(now);
         self.status = Status::Ready;
     }
