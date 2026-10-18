@@ -90,14 +90,23 @@ service-day window covers Poznań's normal after-midnight trips; feeds with serv
 extending past two civil days need a wider application policy.
 
 Both application crates are `no_std` and use no allocator. Radio and RSA TLS use
-a fixed **64 KiB heap**. The panel uses a **7.5 KiB tile**, with no framebuffer.
+a fixed **64 KiB heap**. The panel's **7.5 KiB tile** borrows the idle 8 KiB
+settings scratch buffer, with no framebuffer or pixel conversion buffer.
+Each 512-entry departure cache stores four-byte entries with one shared UTC
+epoch; access reconstructs full `i64` timestamps, including after 2038.
+TLS borrows its verifier and connection instead of moving large async state.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
 excluded. It requires a separate 24 KiB available call stack and enforces the
-400,000-byte limit. `RAM.json` in each artifact reports that exact build. This is
-a linked-memory bound; stack/heap high-water and screen/radio/touch behaviour
+400,000-byte limit plus a **300,000-byte regression ceiling**. The measured
+release budget fell from **317,756 B to 292,364 B**, with the same heap, stack
+reserve and application capacities. `RAM.json` reports each exact build.
+This is a linked-memory bound; physical stack/heap high-water and screen/radio/touch behaviour
 still require the physical board. No physical flash or hardware test has been
-performed as part of this implementation.
+performed as part of this implementation. Serial logs report allocator current,
+peak-since-boot and total bytes after startup and refresh attempts, including
+allocations already freed by the TLS handshake. Keep the full heap allowance
+until these logs and physical stack measurements justify reducing it.
 
 The fixed app limits are four groups, four choices each, 1,024 active trips in a
 16 KiB exact ID pool, 64 distinct service IDs across the date window (including
@@ -124,7 +133,7 @@ From `firmware/`:
 
 ```sh
 cargo fmt --all --check
-cargo test --lib --locked --target x86_64-unknown-linux-gnu
+cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
 cargo clippy --locked --release --features firmware -- -D warnings
 cargo build --locked --release --features firmware
 # Only with a connected matching board and intentional replacement:

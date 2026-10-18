@@ -7,6 +7,7 @@ use embedded_hal::{delay::DelayNs, digital::OutputPin, spi::SpiBus};
 
 pub const WIDTH: usize = 240;
 pub const TILE_ROWS: usize = 16;
+pub const TILE_BYTES: usize = WIDTH * TILE_ROWS * 2;
 
 pub struct Panel<SPI, DC> {
     spi: SPI,
@@ -105,11 +106,7 @@ impl<SPI: SpiBus, DC: OutputPin<Error = Infallible>> Panel<SPI, DC> {
         self.command(0x29, &[])
     }
 
-    pub fn write_tile(
-        &mut self,
-        y: u16,
-        pixels: &[Rgb565; WIDTH * TILE_ROWS],
-    ) -> Result<(), SPI::Error> {
+    pub fn write_tile(&mut self, y: u16, pixels: &[u8; TILE_BYTES]) -> Result<(), SPI::Error> {
         self.command(0x2A, &[0, 0, 0, 239])?;
         let end = y + TILE_ROWS as u16 - 1;
         self.command(
@@ -117,21 +114,16 @@ impl<SPI: SpiBus, DC: OutputPin<Error = Infallible>> Panel<SPI, DC> {
             &[(y >> 8) as u8, y as u8, (end >> 8) as u8, end as u8],
         )?;
         self.command(0x2C, &[])?;
-        let mut bytes = [0u8; WIDTH * 2];
-        for row in pixels.chunks_exact(WIDTH) {
-            for (pixel, bytes) in row.iter().zip(bytes.chunks_exact_mut(2)) {
-                bytes.copy_from_slice(&pixel.into_storage().to_be_bytes());
-            }
-            self.spi.write(&bytes)?;
-        }
+        self.spi.write(pixels)?;
         self.spi.flush()
     }
 }
 
-/// Clip drawing to 16 rows, using 7.5 KiB instead of a 112.5 KiB framebuffer.
+/// Clip drawing to 16 rows, stored in the panel's big-endian RGB565 wire format.
+/// The board borrows these 7.5 KiB from its idle settings scratch buffer.
 pub struct Tile<'a> {
     pub y: u16,
-    pub pixels: &'a mut [Rgb565; WIDTH * TILE_ROWS],
+    pub pixels: &'a mut [u8; TILE_BYTES],
 }
 
 impl OriginDimensions for Tile<'_> {
@@ -152,7 +144,9 @@ impl DrawTarget for Tile<'_> {
             if (0..240).contains(&p.x)
                 && (i32::from(self.y)..i32::from(self.y) + TILE_ROWS as i32).contains(&p.y)
             {
-                self.pixels[(p.y - i32::from(self.y)) as usize * WIDTH + p.x as usize] = color;
+                let offset = ((p.y - i32::from(self.y)) as usize * WIDTH + p.x as usize) * 2;
+                self.pixels[offset..offset + 2]
+                    .copy_from_slice(&color.into_storage().to_be_bytes());
             }
         }
         Ok(())
@@ -164,7 +158,8 @@ impl DrawTarget for Tile<'_> {
             Size::new(240, TILE_ROWS as u32),
         ));
         for p in clip.points() {
-            self.pixels[(p.y - i32::from(self.y)) as usize * WIDTH + p.x as usize] = color;
+            let offset = ((p.y - i32::from(self.y)) as usize * WIDTH + p.x as usize) * 2;
+            self.pixels[offset..offset + 2].copy_from_slice(&color.into_storage().to_be_bytes());
         }
         Ok(())
     }

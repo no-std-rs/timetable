@@ -38,7 +38,7 @@ embedded-hal = "1"
 esp-hal = { version = "=1.1.1", features = ["esp32c3", "unstable", "log-04", "exception-handler"], optional = true }
 esp-rtos = { version = "0.3", features = ["esp32c3", "esp-radio", "embassy"], optional = true }
 esp-radio = { version = "0.18", features = ["esp32c3", "wifi", "log-04", "unstable"], optional = true }
-esp-alloc = { version = "0.10", optional = true }
+esp-alloc = { version = "0.10", features = ["internal-heap-stats"], optional = true }
 esp-backtrace = { version = "0.19", features = ["esp32c3", "panic-handler", "println"], optional = true }
 esp-println = { version = "0.17", default-features = false, features = ["esp32c3", "jtag-serial", "log-04"], optional = true }
 esp-bootloader-esp-idf = { version = "0.5", features = ["esp32c3"], optional = true }

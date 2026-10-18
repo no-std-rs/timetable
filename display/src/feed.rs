@@ -3,7 +3,8 @@
 //! must match the same manifest. No new events are published on a late error.
 use crate::{
     Config, Departure, clock,
-    model::{Headings, MAX_DEPARTURES},
+    departures::{Departures, HORIZON_SECONDS},
+    model::Headings,
 };
 use embedded_io_async::Read;
 use gtfs::{Date, Error, Id, Table, csv::Column, stream, zip};
@@ -15,7 +16,7 @@ pub const MAX_SERVICES: usize = 64;
 pub const TRIP_ID_BYTES: usize = 16 * 1024;
 
 struct Staged<'a> {
-    events: &'a mut Vec<Departure, MAX_DEPARTURES>,
+    events: &'a mut Departures,
     before: usize,
     headsigns: &'a mut Headings,
     headings_before: (usize, usize),
@@ -71,7 +72,7 @@ pub struct Builder {
     trips: Vec<Trip, MAX_TRIPS>,
     trip_ids: Vec<u8, TRIP_ID_BYTES>,
     resolved: [Resolved; crate::config::MAX_GROUPS * crate::config::MAX_PICKS],
-    pub events: Vec<Departure, MAX_DEPARTURES>,
+    pub events: Departures,
     pub headsigns: Headings,
     /// Mask bits 0/1/2 select yesterday/today/tomorrow for one archive.
     pub dates: [Date; 3],
@@ -132,7 +133,7 @@ impl Builder {
                 stop_exact: false,
                 stop_ambiguous: false,
             }; crate::config::MAX_GROUPS * crate::config::MAX_PICKS],
-            events: Vec::new(),
+            events: Departures::new(0),
             headsigns: Headings::default(),
             dates: [
                 clock::previous(today).unwrap_or(today),
@@ -151,14 +152,16 @@ impl Builder {
             clock::next(date).ok_or(Error::InvalidDate)?,
         ];
         self.now = now;
-        self.events.clear();
+        self.events.reset(now);
         self.headsigns.clear();
         self.manifest = None;
         Ok(())
     }
     /// Include tomorrow when its GTFS service epoch enters the six-hour horizon.
     pub fn day_mask(&self) -> u8 {
-        if clock::service_epoch(self.dates[2]).is_some_and(|epoch| epoch <= self.now + 6 * 3600) {
+        if clock::service_epoch(self.dates[2])
+            .is_some_and(|epoch| epoch <= self.now + HORIZON_SECONDS)
+        {
             7
         } else {
             3
@@ -431,23 +434,20 @@ impl Builder {
                             let at = epoch + i64::from(departure.seconds());
                             if t.flags & (1 << day) != 0
                                 && at > self.now
-                                && at <= self.now + 6 * 3600
+                                && at <= self.now + HORIZON_SECONDS
                             {
                                 let headsign = if let Some(name) = event.headsign {
                                     staged.headsigns.insert(name)?
                                 } else {
                                     t.headsign
                                 };
-                                staged
-                                    .events
-                                    .push(Departure {
-                                        at,
-                                        group: group as u8,
-                                        pick: pick as u8,
-                                        conditional: event.pickup_type != 0,
-                                        headsign,
-                                    })
-                                    .map_err(|_| Error::IndexFull)?;
+                                staged.events.push(Departure {
+                                    at,
+                                    group: group as u8,
+                                    pick: pick as u8,
+                                    conditional: event.pickup_type != 0,
+                                    headsign,
+                                })?;
                             }
                         }
                     }

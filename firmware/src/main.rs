@@ -8,7 +8,6 @@ use embassy_futures::select::{Either, select};
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
 use embassy_time::{Duration, Instant, Timer};
-use embedded_graphics::{pixelcolor::Rgb565, prelude::RgbColor};
 use embedded_io_async::Read;
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use esp_backtrace as _;
@@ -43,12 +42,20 @@ struct State {
 type Shared = Mutex<CriticalSectionRawMutex, State>;
 static STATE: StaticCell<Shared> = StaticCell::new();
 static NET: StaticCell<StackResources<4>> = StaticCell::new();
-static PIXELS: StaticCell<[Rgb565; panel::WIDTH * panel::TILE_ROWS]> = StaticCell::new();
 static SETTINGS: StaticCell<[u8; config::IMAGE_SIZE]> = StaticCell::new();
+const _: () = assert!(panel::TILE_BYTES <= config::IMAGE_SIZE);
 static FEED: StaticCell<Builder> = StaticCell::new();
 static WORKSPACE: StaticCell<gtfs::zip::Workspace> = StaticCell::new();
 static REFRESH: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 esp_bootloader_esp_idf::esp_app_desc!();
+
+fn log_heap() {
+    let stats = esp_alloc::HEAP.stats();
+    info!(
+        "Heap usage: {} B current / {} B peak / {} B capacity",
+        stats.current_usage, stats.max_usage, stats.size
+    );
+}
 
 fn load(
     flash: &mut FlashStorage<'_>,
@@ -142,11 +149,11 @@ async fn main(spawner: Spawner) -> ! {
     reset.set_high();
     delay.delay_millis(400);
     let _ = touch.write(0x15, &[0xfe, 1]);
-    let pixels = PIXELS.init([Rgb565::BLACK; panel::WIDTH * panel::TILE_ROWS]);
     let scratch = SETTINGS.init([0; config::IMAGE_SIZE]);
     let mut flash = FlashStorage::new(p.FLASH);
     let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
     let Some((settings, mut generation, mut bank)) = load(&mut flash, scratch) else {
+        let pixels = scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
         for y in (0..240).step_by(panel::TILE_ROWS) {
             render::setup(&mut panel::Tile { y, pixels }).unwrap();
             panel.write_tile(y, pixels).unwrap();
@@ -180,6 +187,7 @@ async fn main(spawner: Spawner) -> ! {
         )
         .unwrap(),
     );
+    log_heap();
     let mut down_at = None;
     let mut start = (0u16, 0u16);
     let mut end = start;
@@ -233,6 +241,8 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
         if now >= redraw {
+            // This task saves settings and draws sequentially in the same RAM.
+            let pixels = scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
             let mut s = shared.lock().await;
             if let Some(utc) = transport::now() {
                 let State { config: c, app, .. } = &mut *s;
@@ -385,6 +395,7 @@ async fn timetable(
             REFRESH.wait(),
         )
         .await;
+        log_heap();
         let result = match result {
             Either::First(r) => r,
             Either::Second(()) => continue,

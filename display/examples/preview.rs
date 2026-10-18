@@ -40,6 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         status: Status::Ready,
         ..App::default()
     };
+    app.departures.reset(now);
     for minutes in [12, 21, 28] {
         app.departures
             .push(Departure {

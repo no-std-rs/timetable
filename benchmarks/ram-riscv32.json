@@ -22,5 +22,12 @@
       "total_bytes": 407016,
       "fits_400000": false
     }
-  ]
+  ],
+  "display": {
+    "task_bytes": 90480,
+    "reserves_bytes": 159776,
+    "departure_cache_bytes": 2064,
+    "total_bytes": 250256,
+    "fits_400000": true
+  }
 }
