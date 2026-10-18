@@ -23,10 +23,13 @@ conditional pickup. No-boarding and untimed events are omitted.
 
 `feed::Builder` uses three verified forward passes through a pinned original ZIP:
 resolve line names/stop codes and calendars, select active trips, then collect
-future departures. Today and yesterday are evaluated together to handle 25:xx
-departures. The device retains a six-hour horizon, not a whole day's timetable.
+future departures. Yesterday supplies 25:xx departures, and tomorrow is included
+when the six-hour horizon crosses midnight. Mask bits 0/1/2 refer to yesterday,
+today and tomorrow; `day_mask()` reports which dates need archives.
+The device retains a six-hour horizon, not a whole day's timetable.
 Selected trip IDs remain exact in a 16 KiB shared byte buffer; there is a
-1,024-trip limit, 32 service IDs per day, a 1 KiB shared headsign buffer and
+1,024-trip limit, 64 distinct service IDs across the date window (including
+removals), a 1 KiB shared headsign buffer and
 512 departure slots. Capacity failures are errors. IDs are never shortened;
 display labels may be clipped to the screen's supported Latin-2 font.
 

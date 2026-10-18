@@ -7,6 +7,13 @@ pub struct Headings {
     spans: Vec<(u16, u8), 32>,
 }
 impl Headings {
+    pub(crate) fn checkpoint(&self) -> (usize, usize) {
+        (self.bytes.len(), self.spans.len())
+    }
+    pub(crate) fn restore(&mut self, (bytes, spans): (usize, usize)) {
+        self.bytes.truncate(bytes);
+        self.spans.truncate(spans);
+    }
     pub fn clear(&mut self) {
         self.bytes.clear();
         self.spans.clear();

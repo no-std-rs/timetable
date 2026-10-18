@@ -39,12 +39,24 @@ pub fn service_epoch(date: GtfsDate) -> Option<i64> {
 }
 
 pub fn previous(date: GtfsDate) -> Option<GtfsDate> {
+    adjacent(date, false)
+}
+
+pub fn next(date: GtfsDate) -> Option<GtfsDate> {
+    adjacent(date, true)
+}
+
+fn adjacent(date: GtfsDate, forward: bool) -> Option<GtfsDate> {
     let d = Date::from_calendar_date(
         date.year().into(),
         Month::try_from(date.month()).ok()?,
         date.day(),
     )
-    .ok()?
-    .previous_day()?;
+    .ok()?;
+    let d = if forward {
+        d.next_day()?
+    } else {
+        d.previous_day()?
+    };
     GtfsDate::new(d.year().try_into().ok()?, d.month() as u8, d.day()).ok()
 }

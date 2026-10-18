@@ -38,6 +38,8 @@ def build(source, destination, date):
             if direction:
                 heads[(trip['route_id'], int(direction))][trip.get('trip_headsign', '')] += 1
         for row in rows('stop_times.txt'):
+            if row.get('pickup_type') == '1':
+                continue
             route, bit = trips[row['trip_id']]
             links[(route, row['stop_id'])] |= bit
     route_ids = sorted(routes, key=lambda key: (routes[key].get('route_short_name', '').zfill(8), key))
@@ -57,18 +59,20 @@ def build(source, destination, date):
         if b'\0' in data:
             raise ValueError('NUL in field')
         return data.ljust(size, b'\0')
+    def label(value, size):
+        return field(value, size, True).rstrip(b'\0').decode('utf-8')
     browser_routes, browser_stops = [], []
     payload = bytearray()
     for key in route_ids:
         r = routes[key]
-        directions = [clean(heads[(key, d)].most_common(1)[0][0]) if heads[(key, d)] else '' for d in [0, 1]]
+        directions = [label(heads[(key, d)].most_common(1)[0][0], 64) if heads[(key, d)] else '' for d in [0, 1]]
         line = r.get('route_short_name') or key
         payload += field(key, 32) + field(line, 8) + b''.join(field(h, 64, True) for h in directions)
         browser_routes.append({'id': key, 'line': line, 'headsigns': directions})
     for key in stop_ids:
         s = stops[key]
-        name, code = clean(s.get('stop_name', '')), clean(s.get('stop_code', ''))
-        payload += field(key, 32) + field(name, 64, True) + field(code, 16, True)
+        name, code = label(s.get('stop_name', ''), 64), s.get('stop_code', '')
+        payload += field(key, 32) + field(name, 64) + field(code, 16)
         browser_stops.append({'id': key, 'name': name, 'code': code})
     browser_links = [[ri[r], si[s], bits] for (r, s), bits in sorted(links.items(), key=lambda item: (ri[item[0][0]], si[item[0][1]]))]
     for route, stop, bits in browser_links:

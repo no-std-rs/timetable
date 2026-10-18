@@ -296,7 +296,10 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 Status::Offline | Status::Failed | Status::Capacity
             ) {
                 "OFFLINE"
-            } else if now < app.manual_until {
+            } else if now < app.manual_until
+                || !config.automatic
+                || !config.groups.iter().any(|g| g.days != 0)
+            {
                 "MANUAL"
             } else {
                 "SCHEDULED"

@@ -229,3 +229,69 @@ fn previous_service_day_supplies_a_25_hour_departure_after_midnight() {
         assert_eq!((date.day(), date.hour(), date.minute()), (18, 1, 10));
     });
 }
+
+#[test]
+fn evening_queries_include_next_day_service_and_rollback_headsigns() {
+    futures::executor::block_on(async {
+        let catalog = Catalog::new(include_bytes!("fixtures/catalog.bin")).unwrap();
+        // The drop-off-only terminus is not a selectable boarding stop.
+        assert_eq!(catalog.stop_count(), 1);
+        let stop = catalog.stop(0).unwrap();
+        let mut c = settings();
+        let p = &mut c.groups[0].picks[0];
+        p.route = "R4".try_into().unwrap();
+        p.stop = stop.id.try_into().unwrap();
+        p.stop_code.clear();
+        p.stop_name = stop.name.try_into().unwrap();
+        let now = time::macros::datetime!(2026-10-17 20:30 UTC).unix_timestamp();
+        let source = include_bytes!("fixtures/edge.zip").as_slice();
+        let mut builder = timetable_display::feed::Builder::new("20261017".parse().unwrap());
+        let mut workspace = gtfs::zip::Workspace::new();
+        builder.begin(now).unwrap();
+        assert_eq!(builder.day_mask(), 7);
+        builder
+            .calendars(source, 7, &c, &mut workspace)
+            .await
+            .unwrap();
+        builder.trips(source, &c, &mut workspace).await.unwrap();
+        assert_eq!(builder.headsigns.get(0), Some("Trip branch"));
+        assert_eq!(builder.headsigns.get(1), None);
+        assert!(
+            builder
+                .departures(&source[..source.len() - 1], &c, &mut workspace)
+                .await
+                .is_err()
+        );
+        assert!(builder.events.is_empty());
+        assert_eq!(builder.headsigns.get(1), None);
+        use futures::FutureExt;
+        assert!(
+            builder
+                .departures(PausedFooter(source), &c, &mut workspace)
+                .now_or_never()
+                .is_none()
+        );
+        assert_eq!(builder.headsigns.get(1), None);
+        builder
+            .departures(source, &c, &mut workspace)
+            .await
+            .unwrap();
+        builder.events.sort_unstable_by_key(|d| d.at);
+        assert_eq!(builder.events.len(), 2);
+        let tomorrow = clock::warsaw(builder.events[1].at).unwrap();
+        assert_eq!(
+            (tomorrow.day(), tomorrow.hour(), tomorrow.minute()),
+            (18, 0, 30)
+        );
+        assert_eq!(
+            builder.headsigns.get(builder.events[1].headsign),
+            Some("Platform branch")
+        );
+        // When the saved exact route disappears, duplicate public names fail.
+        c.groups[0].picks[0].route = "old-route".try_into().unwrap();
+        assert!(matches!(
+            builder.calendars(source, 7, &c, &mut workspace).await,
+            Err(gtfs::Error::InvalidField("ambiguous line"))
+        ));
+    });
+}

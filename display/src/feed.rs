@@ -10,18 +10,22 @@ use gtfs::{Date, Error, Id, Table, csv::Column, stream, zip};
 use heapless::Vec;
 
 pub const MAX_TRIPS: usize = 1024;
-pub const MAX_SERVICES: usize = 32;
+/// Distinct service IDs across yesterday, today and tomorrow, including removals.
+pub const MAX_SERVICES: usize = 64;
 pub const TRIP_ID_BYTES: usize = 16 * 1024;
 
 struct Staged<'a> {
     events: &'a mut Vec<Departure, MAX_DEPARTURES>,
     before: usize,
+    headsigns: &'a mut Headings,
+    headings_before: (usize, usize),
     committed: bool,
 }
 impl Drop for Staged<'_> {
     fn drop(&mut self) {
         if !self.committed {
             self.events.truncate(self.before);
+            self.headsigns.restore(self.headings_before);
         }
     }
 }
@@ -39,7 +43,7 @@ impl Trip {
         &bytes[self.offset as usize..self.offset as usize + self.length as usize]
     }
     fn direction(&self) -> i8 {
-        match self.flags >> 2 {
+        match self.flags >> 3 {
             0 => 0,
             1 => 1,
             _ => -1,
@@ -50,54 +54,111 @@ impl Trip {
 struct Resolved {
     route: Id<32>,
     stop: Id<32>,
+    route_exact: bool,
+    route_ambiguous: bool,
+}
+
+struct Service {
+    id: Id<32>,
+    active: u8,
+    removed: u8,
 }
 
 pub struct Builder {
-    services: [Vec<Id<32>, MAX_SERVICES>; 2],
-    removed: [Vec<Id<32>, MAX_SERVICES>; 2],
+    services: Vec<Service, MAX_SERVICES>,
     trips: Vec<Trip, MAX_TRIPS>,
     trip_ids: Vec<u8, TRIP_ID_BYTES>,
     resolved: [Resolved; crate::config::MAX_GROUPS * crate::config::MAX_PICKS],
     pub events: Vec<Departure, MAX_DEPARTURES>,
     pub headsigns: Headings,
-    pub dates: [Date; 2],
+    /// Mask bits 0/1/2 select yesterday/today/tomorrow for one archive.
+    pub dates: [Date; 3],
     pub now: i64,
     pub manifest: Option<zip::Manifest>,
 }
 
-fn insert<const N: usize>(set: &mut Vec<Id<32>, N>, id: &str) -> Result<(), Error> {
-    if !set.iter().any(|v| v.as_str() == id) {
-        set.push(Id::new(id)?).map_err(|_| Error::IndexFull)?;
+fn service<'a>(
+    set: &'a mut Vec<Service, MAX_SERVICES>,
+    id: &str,
+) -> Result<&'a mut Service, Error> {
+    let index = if let Some(i) = set.iter().position(|s| s.id.as_str() == id) {
+        i
+    } else {
+        set.push(Service {
+            id: Id::new(id)?,
+            active: 0,
+            removed: 0,
+        })
+        .map_err(|_| Error::IndexFull)?;
+        set.len() - 1
+    };
+    Ok(&mut set[index])
+}
+
+// Match the catalogue's lossy human label only when no stable stop code exists.
+fn stop_label(name: &str) -> heapless::String<64> {
+    let mut label = heapless::String::<64>::new();
+    for word in name.split_whitespace() {
+        for c in (!label.is_empty())
+            .then_some(' ')
+            .into_iter()
+            .chain(word.chars().filter(|c| *c != '\0'))
+        {
+            if label.push(c).is_err() {
+                while label.len() > 61 {
+                    label.pop();
+                }
+                label.push_str("...").unwrap();
+                return label;
+            }
+        }
     }
-    Ok(())
+    label
 }
 
 impl Builder {
     pub fn new(today: Date) -> Self {
         Self {
-            services: [Vec::new(), Vec::new()],
-            removed: [Vec::new(), Vec::new()],
+            services: Vec::new(),
             trips: Vec::new(),
             trip_ids: Vec::new(),
             resolved: [Resolved {
                 route: Id::EMPTY,
                 stop: Id::EMPTY,
+                route_exact: false,
+                route_ambiguous: false,
             }; crate::config::MAX_GROUPS * crate::config::MAX_PICKS],
             events: Vec::new(),
             headsigns: Headings::default(),
-            dates: [clock::previous(today).unwrap_or(today), today],
+            dates: [
+                clock::previous(today).unwrap_or(today),
+                today,
+                clock::next(today).unwrap_or(today),
+            ],
             now: 0,
             manifest: None,
         }
     }
     pub fn begin(&mut self, now: i64) -> Result<(), Error> {
         let date = clock::service_date(now).ok_or(Error::InvalidDate)?;
-        self.dates = [clock::previous(date).ok_or(Error::InvalidDate)?, date];
+        self.dates = [
+            clock::previous(date).ok_or(Error::InvalidDate)?,
+            date,
+            clock::next(date).ok_or(Error::InvalidDate)?,
+        ];
         self.now = now;
         self.events.clear();
         self.headsigns.clear();
         self.manifest = None;
         Ok(())
+    }
+    /// Include tomorrow only when the six-hour horizon crosses civil midnight.
+    pub fn day_mask(&self) -> u8 {
+        if clock::service_date(self.now + 6 * 3600) != Some(self.dates[1]) {
+            7
+        } else {
+            3
+        }
     }
     pub async fn calendars<R: Read>(
         &mut self,
@@ -106,18 +167,16 @@ impl Builder {
         config: &Config,
         workspace: &mut zip::Workspace,
     ) -> Result<(), Error> {
-        for s in &mut self.services {
-            s.clear();
-        }
-        for s in &mut self.removed {
-            s.clear();
-        }
+        let mask = mask & self.day_mask();
+        self.services.clear();
         self.trips.clear();
         self.trip_ids.clear();
         self.manifest = None;
         self.resolved.fill(Resolved {
             route: Id::EMPTY,
             stop: Id::EMPTY,
+            route_exact: false,
+            route_ambiguous: false,
         });
         let manifest = stream::scan(
             source,
@@ -139,10 +198,15 @@ impl Builder {
                                 if r.short_name == pick.line
                                     || r.short_name.is_empty() && r.id == pick.route
                                 {
-                                    if !resolved.route.as_str().is_empty() {
-                                        return Err(Error::InvalidField("ambiguous line"));
+                                    if r.id == pick.route {
+                                        resolved.route = Id::new(r.id)?;
+                                        resolved.route_exact = true;
+                                        resolved.route_ambiguous = false;
+                                    } else if !resolved.route_exact {
+                                        resolved.route_ambiguous |=
+                                            !resolved.route.as_str().is_empty();
+                                        resolved.route = Id::new(r.id)?;
                                     }
-                                    resolved.route = Id::new(r.id)?;
                                 }
                             } else {
                                 let s = row.stop()?;
@@ -150,7 +214,8 @@ impl Builder {
                                     && s.code == Some(pick.stop_code.as_str()))
                                     || (pick.stop_code.is_empty()
                                         && s.id == pick.stop
-                                        && s.name == Some(pick.stop_name.as_str()))
+                                        && s.name
+                                            .is_some_and(|name| stop_label(name) == pick.stop_name))
                                 {
                                     if !resolved.stop.as_str().is_empty() {
                                         return Err(Error::InvalidField("ambiguous stop code"));
@@ -162,25 +227,27 @@ impl Builder {
                     }
                     return Ok(());
                 }
-                for day in 0..2 {
+                for day in 0..3 {
                     if mask & (1 << day) == 0 {
                         continue;
                     }
                     if row.table() == Table::Calendar {
                         let c = row.calendar()?;
-                        if c.runs_on(self.dates[day])
-                            && !self.removed[day].iter().any(|s| s.as_str() == c.service_id)
-                        {
-                            insert(&mut self.services[day], c.service_id)?;
+                        if c.runs_on(self.dates[day]) {
+                            let s = service(&mut self.services, c.service_id)?;
+                            if s.removed & (1 << day) == 0 {
+                                s.active |= 1 << day;
+                            }
                         }
                     } else {
                         let c = row.calendar_date()?;
                         if c.date == self.dates[day] {
+                            let s = service(&mut self.services, c.service_id)?;
                             if c.added {
-                                insert(&mut self.services[day], c.service_id)?;
+                                s.active |= 1 << day;
                             } else {
-                                insert(&mut self.removed[day], c.service_id)?;
-                                self.services[day].retain(|s| s.as_str() != c.service_id);
+                                s.removed |= 1 << day;
+                                s.active &= !(1 << day);
                             }
                         }
                     }
@@ -200,6 +267,9 @@ impl Builder {
         for (g, group) in config.groups.iter().enumerate() {
             for p in 0..group.picks.len() {
                 let r = self.resolved[g * crate::config::MAX_PICKS + p];
+                if r.route_ambiguous {
+                    return Err(Error::InvalidField("ambiguous line"));
+                }
                 if r.route.as_str().is_empty() || r.stop.as_str().is_empty() {
                     return Err(Error::InvalidField("selection no longer exists"));
                 }
@@ -222,12 +292,11 @@ impl Builder {
         self.trip_ids.clear();
         stream::scan(source, &[Table::Trips], Some(expected), workspace, |row| {
             let t = row.trip()?;
-            let mut days = 0;
-            for i in 0..2 {
-                if self.services[i].iter().any(|s| s.as_str() == t.service_id) {
-                    days |= 1 << i;
-                }
-            }
+            let days = self
+                .services
+                .iter()
+                .find(|s| s.id.as_str() == t.service_id)
+                .map_or(0, |s| s.active);
             if days == 0 {
                 return Ok(());
             }
@@ -262,7 +331,7 @@ impl Builder {
                         offset,
                         length: t.id.len() as u8,
                         route,
-                        flags: days | (t.direction.unwrap_or(2) << 2),
+                        flags: days | (t.direction.unwrap_or(2) << 3),
                         headsign,
                     })
                     .map_err(|_| Error::IndexFull)?;
@@ -294,11 +363,15 @@ impl Builder {
         let epochs = [
             clock::service_epoch(self.dates[0]).ok_or(Error::InvalidDate)?,
             clock::service_epoch(self.dates[1]).ok_or(Error::InvalidDate)?,
+            clock::service_epoch(self.dates[2]).ok_or(Error::InvalidDate)?,
         ];
         let before = self.events.len();
+        let headings_before = self.headsigns.checkpoint();
         let mut staged = Staged {
             events: &mut self.events,
             before,
+            headsigns: &mut self.headsigns,
+            headings_before,
             committed: false,
         };
         let result = stream::scan(
@@ -339,7 +412,7 @@ impl Builder {
                                 && at <= self.now + 6 * 3600
                             {
                                 let headsign = if let Some(name) = event.headsign {
-                                    self.headsigns.insert(name)?
+                                    staged.headsigns.insert(name)?
                                 } else {
                                     t.headsign
                                 };

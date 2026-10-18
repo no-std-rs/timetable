@@ -31,6 +31,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --all-targets --locked
 cargo test --workspace --doc --locked
+python3 display/tests/make_fixtures.py
+git diff --exit-code -- display/tests/fixtures
 rustup target add riscv32imac-unknown-none-elf
 cargo check -p gtfs --lib --locked --target riscv32imac-unknown-none-elf
 cargo check -p timetable-display --lib --locked --target riscv32imac-unknown-none-elf
@@ -41,7 +43,9 @@ cargo run -p gtfs --release --example bench_stream -- gtfs/tests/fixtures/gtfs.z
 
 The RAM probe is an isolated `no_std` consumer of the `gtfs` crate. It checks the
 complete embedded query future and explicit firmware reserves against 400,000
-bytes. The benchmark checks that parsing allocates no heap memory. Normal tests
+bytes. It also measures the complete display query future with explicit radio,
+TLS, stack, tile and retained-app reserves. The benchmark checks that parsing
+allocates no heap memory. Normal tests
 use synthetic fixtures and need no live transit feeds.
 
 Preview the actual Rust renderer without hardware:

@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     futures::executor::block_on(async {
         builder.begin(now)?;
         builder
-            .calendars(source.as_slice(), 3, &config, &mut workspace)
+            .calendars(source.as_slice(), 7, &config, &mut workspace)
             .await?;
         builder
             .trips(source.as_slice(), &config, &mut workspace)
