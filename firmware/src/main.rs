@@ -32,7 +32,7 @@ use static_cell::StaticCell;
 use timetable_display::{
     App, Config, catalog::Catalog, config, feed::Builder, model::Status, render, ui,
 };
-use timetable_firmware::panel;
+use timetable_firmware::{panel, sources::Archives};
 use transport::{Error, Http, Operation};
 
 struct State {
@@ -283,27 +283,11 @@ async fn network(mut runner: Runner<'static, Interface<'static>>) -> ! {
     runner.run().await
 }
 
-struct Archives {
-    dates: [gtfs::Date; 2],
-    common: Option<gtfs::poznan::ArchiveName>,
-    each: [Option<gtfs::poznan::ArchiveName>; 2],
-}
 impl Operation for Archives {
     async fn read<R: Read>(&mut self, body: R) -> Result<(), Error> {
         let mut listing = gtfs::poznan::Archives::new(body);
         while let Some(name) = listing.next().await? {
-            for i in 0..2 {
-                if name.covers(self.dates[i])
-                    && self.each[i].is_none_or(|old| name.as_str() > old.as_str())
-                {
-                    self.each[i] = Some(name);
-                }
-            }
-            if self.dates.iter().all(|d| name.covers(*d))
-                && self.common.is_none_or(|old| name.as_str() > old.as_str())
-            {
-                self.common = Some(name);
-            }
+            self.consider(name);
         }
         Ok(())
     }
@@ -351,17 +335,9 @@ async fn refresh(
     if c.groups.iter().all(|g| g.picks.is_empty()) {
         return Ok(());
     }
-    let mut listing = Archives {
-        dates: builder.dates,
-        common: None,
-        each: [None, None],
-    };
+    let mut listing = Archives::new(builder.dates, builder.day_mask());
     http.get(gtfs::poznan::LIST_URL, &mut listing).await?;
-    let sources = if let Some(common) = listing.common {
-        [(Some(common), 3), (None, 0)]
-    } else {
-        [(listing.each[0], 1), (listing.each[1], 2)]
-    };
+    let sources = listing.sources().ok_or(Error::MissingArchive)?;
     for (name, mask) in sources {
         if mask == 0 {
             continue;
@@ -421,13 +397,11 @@ async fn timetable(
             }
             match result {
                 Ok(()) => {
-                    core::mem::swap(&mut s.app.departures, &mut builder.events);
-                    core::mem::swap(&mut s.app.headsigns, &mut builder.headsigns);
-                    s.app
-                        .departures
-                        .sort_unstable_by_key(|e| (e.at, e.group, e.pick));
-                    s.app.loaded_at = transport::now();
-                    s.app.status = Status::Ready;
+                    s.app.publish(
+                        core::mem::take(&mut builder.events),
+                        core::mem::take(&mut builder.headsigns),
+                        builder.now,
+                    );
                 }
                 Err(Error::Feed(gtfs::Error::IndexFull | gtfs::Error::IdTooLong)) => {
                     s.app.status = Status::Capacity

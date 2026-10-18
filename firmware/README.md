@@ -55,9 +55,9 @@ line, stop, direction and walking settings can then be changed on the device.
 
 ## Data and memory
 
-The bundled browse catalogue contains **212 routes, 3,268 stops and 10,923
+The bundled browse catalogue contains **212 routes, 3,232 boarding stops and 10,614
 route/stop links**, generated from the official 2026-10-15 feed. It occupies
-467,202 flash bytes and is read directly from flash. It contains no departures.
+461,316 flash bytes and is read directly from flash. It contains no departures.
 See [catalogue provenance](../catalog/README.md). Route short names and physical
 stop codes are resolved against each new feed, so saved numeric GTFS IDs may
 change without selecting a different line or platform. Ambiguous or missing
@@ -67,9 +67,10 @@ After DHCP, SNTP supplies UTC before TLS certificate validity is checked. The
 pure Rust `embedded-tls` transport verifies ZTM's hostname and pinned Certum
 root; `reqwless` parses streaming HTTP responses. Compressed HTTP representations
 and redirects are rejected. The official listing selects a dated immutable ZIP
-covering today and yesterday. Three passes read calendars, active selected trips
-and departures; if separate archives are required across a validity boundary,
-each gets its own three-pass validation. This reduces retained metadata versus
+for each required service day: yesterday, today, and tomorrow when the horizon
+crosses midnight. Dates sharing the same latest archive reuse one set of three
+passes for calendars, selected trips and departures. Each distinct archive
+gets its own three-pass validation. This reduces retained metadata versus
 indexing inactive services. The generic `gtfs` crate's existing two-pass and
 mirror-assisted APIs remain available.
 
@@ -77,8 +78,8 @@ A first refresh downloads several ZIP streams and may take minutes on a slow
 network. Touch and drawing run separately. A successful refresh caches six hours
 of departures and refreshes after three hours; failures retry after a minute.
 Config changes cancel an obsolete in-flight query. Network or validation
-failure never publishes provisional results. The today/yesterday service-day
-window covers Poznań's normal after-midnight trips; feeds with service times
+failure never publishes provisional results. The previous/current/next
+service-day window covers Poznań's normal after-midnight trips; feeds with service times
 extending past two civil days need a wider application policy.
 
 Both application crates are `no_std` and use no allocator. Radio and RSA TLS use
@@ -92,8 +93,9 @@ still require the physical board. No physical flash or hardware test has been
 performed as part of this implementation.
 
 The fixed app limits are four groups, four choices each, 1,024 active trips in a
-16 KiB exact ID pool, 32 service IDs per day, 32 headsigns in a 1 KiB pool and 512
-future events. Large selections fail visibly rather than dropping departures.
+16 KiB exact ID pool, 64 distinct service IDs across the date window (including
+removals), 32 headsigns in a 1 KiB pool and 512 future events. Large selections
+fail visibly rather than dropping departures.
 
 ## Build and inspect
 
@@ -115,6 +117,7 @@ From `firmware/`:
 
 ```sh
 cargo fmt --all --check
+cargo test --lib --locked --target x86_64-unknown-linux-gnu
 cargo clippy --locked --release --features firmware -- -D warnings
 cargo build --locked --release --features firmware
 # Only with a connected matching board and intentional replacement:
