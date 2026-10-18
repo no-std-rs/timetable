@@ -59,6 +59,14 @@ headroom is insufficient; the refresh retries rather than knowingly entering
 the exhausted path. It is an admission check, not a reservation against radio
 activity. The startup log and new TLS heap logs should be checked on hardware.
 See [the offline reproduction and memory limits](../PERFORMANCE.md#tls-heap-exhaustion-correction).
+A subsequent physical report reached verified TLS at **59,728 B peak heap** out
+of 65,536 B, with startup usage down to 33,368 B. This is an observed allocator
+peak through the reported HTTP failure, not whole-device RAM/stack high-water.
+The HTTP request now explicitly flushes buffered TLS writes before awaiting the
+response. Logs distinguish request write/flush, response-header parsing, status
+and unsupported response encoding. The previous unflushed request was reproduced
+against the real server; the shared fixed sender streamed a dated official ZIP
+successfully on the host. Device HTTP success still needs a physical retest.
 The 64 KiB heap is unchanged. Two RX/TX queues and disabled aggregation trade
 potential Wi-Fi throughput for certificate headroom; new hardware throughput
 and combined peak RAM remain unmeasured.
@@ -147,10 +155,10 @@ epoch; access reconstructs full `i64` timestamps, including after 2038.
 TLS borrows its verifier and connection instead of moving large async state.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **297,892 B**,
+excluded. The static-plus-minimum-stack regression account is **297,980 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 51,288 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 51,200 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
@@ -191,6 +199,12 @@ cargo fmt --all --check
 cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
 cargo clippy --locked --release --features firmware -- -D warnings
 cargo build --locked --release --features firmware
+# Optional LIVE host transport diagnostic; no USB device required:
+# Uses the same GET sender, stream adapter, TLS verifier and cooperative reader.
+# This downloads the official listing and a dated ZIP; it is not run in CI.
+cargo run --locked --example probe_transport --target x86_64-unknown-linux-gnu -- 20261019
+# Reproduce the previous buffered-request timeout (2-second host read timeout):
+cargo run --locked --example probe_transport --target x86_64-unknown-linux-gnu -- 20261019 --without-flush
 # Host CPU benchmark of the actual tile renderer, excluding SPI:
 cargo run --locked --release --example bench_render --target x86_64-unknown-linux-gnu -- 512
 # Only with a connected matching board and intentional replacement:

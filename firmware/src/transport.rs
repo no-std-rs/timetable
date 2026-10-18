@@ -7,18 +7,14 @@ use embassy_net::{
     udp::{PacketMetadata, UdpSocket},
 };
 use embassy_time::{Duration, Instant, with_timeout};
-use embedded_io_async::{ErrorType, Read, Write};
+use embedded_io_async::Read;
 use embedded_tls::{
     Aes128GcmSha256, Certificate, CryptoProvider, TlsClock, TlsConfig, TlsConnection, TlsContext,
     TlsVerifier, pki::CertVerifier,
 };
 use esp_hal::rng::{Rng, Trng};
 use portable_atomic::{AtomicI64, Ordering};
-use reqwless::{
-    TryBufRead,
-    request::{Method, Request, RequestBuilder},
-    response::Response,
-};
+use reqwless::{request::Method, response::Response};
 use timetable_firmware::cooperative::Cooperative;
 
 const HOST: &str = "www.ztm.poznan.pl";
@@ -76,25 +72,6 @@ impl CryptoProvider for Provider {
         Ok(&mut self.verifier)
     }
 }
-struct Io<S>(S);
-impl<S: ErrorType> ErrorType for Io<S> {
-    type Error = S::Error;
-}
-impl<S: Read> Read for Io<S> {
-    async fn read(&mut self, out: &mut [u8]) -> Result<usize, Self::Error> {
-        self.0.read(out).await
-    }
-}
-impl<S: Write> Write for Io<S> {
-    async fn write(&mut self, data: &[u8]) -> Result<usize, Self::Error> {
-        self.0.write(data).await
-    }
-    async fn flush(&mut self) -> Result<(), Self::Error> {
-        self.0.flush().await
-    }
-}
-impl<S: Read> TryBufRead for Io<S> {}
-
 pub trait Operation {
     async fn read<R: Read>(&mut self, body: R) -> Result<(), Error>;
 }
@@ -171,23 +148,29 @@ impl Http {
         log::info!("TLS: handshake verified");
         crate::log_heap();
         // Keep the live TLS connection in place while reqwless borrows it.
-        let mut stream = Io(Cooperative::new(&mut tls));
+        let mut stream = crate::http_request::Stream(Cooperative::new(&mut tls));
         let mut headers = [0; 2048];
-        Request::get(path)
-            .host(HOST)
-            .headers(&[("Accept-Encoding", "identity"), ("Connection", "close")])
-            .build()
-            .write_header(&mut stream)
+        log::info!("HTTP: requesting {}", path);
+        crate::http_request::send_get(&mut stream, path, HOST)
             .await
-            .map_err(|_| Error::Http)?;
+            .map_err(|error| {
+                log::warn!("HTTP request write/flush failed: {:?}", error);
+                Error::Http
+            })?;
+        log::info!("HTTP: request sent; reading response headers");
         let response = Response::read(&mut stream, Method::GET, &mut headers)
             .await
-            .map_err(|_| Error::Http)?;
+            .map_err(|error| {
+                log::warn!("HTTP response headers failed: {:?}", error);
+                Error::Http
+            })?;
+        log::info!("HTTP: response status {}", response.status.0);
         if response.status.0 != 200 {
             return Err(Error::Http);
         }
         for (name, value) in response.headers() {
             if name.eq_ignore_ascii_case("content-encoding") && value != b"identity" {
+                log::warn!("HTTP: compressed response rejected");
                 return Err(Error::Http);
             }
         }

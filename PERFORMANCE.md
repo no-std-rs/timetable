@@ -415,3 +415,36 @@ the unchanged 300,000-byte regression ceiling. The full linked account remains
 [stack audit](benchmarks/device-tls-heap-stack.json) retains the 44,032-byte TLS
 path plus 4,096-byte headroom. Physical combined peak, post-fix connectivity and
 throughput remain unmeasured.
+
+## HTTP request flush and physical heap follow-up
+
+The post-fix physical report verifies successful association, DHCP, NTP and TLS.
+Startup allocator usage falls from 46,376 B to **33,368 B**. The observed peak
+through TLS and the subsequent HTTP failure is **59,728 / 65,536 B**, leaving
+**5,808 B** at that peak. This is a real heap sample, not a stack measurement or
+whole-device high-water bound; sustained ZIP downloads remain to be measured.
+
+The next failure exposed a separate transport defect: `reqwless::Request` writes
+headers without flushing, while `embedded-tls` buffers short application writes
+and does not flush them when reading. The device therefore waited for a reply
+before actually sending its GET. The shared sender now flushes before response
+parsing. It adds no heap allocation or buffer. New offline tests reproduce the
+old failure with a buffered peer and check partial writes, body reading and
+write/flush failure propagation. The host diagnostic and device compile the same
+sender and stream adapter. CI typechecks the diagnostic but never downloads feeds.
+
+The live comparison against ZTM reproduces the old path's timeout. The fixed
+sender reads the complete official listing (470 archive links), selects
+`20261019_20261031.zip`, and streams its complete body while extracting **213
+routes and 3,261 stops**. Selected table CRCs, the directory and body EOF validate;
+other table payloads are skipped. Observed host durations are 0.618 s for listing
+and 1.016 s for the ZIP pass, including TCP/TLS. Host TCP buffers and scheduling
+differ from the device, so these are not C3 throughput measurements. No fixed
+fixture or CI test depends on those live values.
+
+The [RAM report](benchmarks/device-http-flush-ram.json) records **273,404 B static**
+(+88 B), **297,980 B** with the unchanged minimum 24 KiB stack reserve, below the
+unchanged 300,000-byte ceiling. Including all 51,200 linker-available stack bytes,
+the full linked account remains **324,604 B**. The
+[stack audit](benchmarks/device-http-flush-stack.json) keeps the 44,032-byte TLS
+path plus 4,096 B headroom. Heap capacity and parser/TLS buffers are unchanged.
