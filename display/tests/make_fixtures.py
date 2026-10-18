@@ -17,15 +17,25 @@ files = {
     'calendar_dates.txt': 'service_id,date,exception_type\nTOMORROW,20261018,1\n',
     'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,stop_headsign\nT1,23:45:00,23:45:00,S1,1,0,Platform branch\nT1,23:55:00,23:55:00,S2,2,1,\nT2,00:30:00,00:30:00,S1,1,0,Platform branch\nT3,23:50:00,23:50:00,S3,1,0,\n',
 }
-with zipfile.ZipFile(destination / 'edge.zip', 'w') as archive:
-    for path, content in files.items():
-        info = zipfile.ZipInfo(path, date_time=(2026, 10, 17, 0, 0, 0))
-        # Stored members make the committed wire fixture independent of zlib.
-        # The shared gtfs fixture suite separately exercises deflate streams.
-        info.compress_type = zipfile.ZIP_STORED
-        info.create_system = 3
-        info.create_version = 20
-        info.extract_version = 20
-        info.external_attr = 0o600 << 16
-        archive.writestr(info, content.encode())
+def write_archive(name, tables):
+    with zipfile.ZipFile(destination / name, 'w') as archive:
+        for path, content in tables.items():
+            info = zipfile.ZipInfo(path, date_time=(2026, 10, 17, 0, 0, 0))
+            # Stored members make committed wire fixtures independent of zlib.
+            # The shared gtfs fixture suite separately exercises deflate streams.
+            info.compress_type = zipfile.ZIP_STORED
+            info.create_system = 3
+            info.create_version = 20
+            info.extract_version = 20
+            info.external_attr = 0o600 << 16
+            archive.writestr(info, content.encode())
+
+
+write_archive('edge.zip', files)
+write_archive('spring-dst.zip', {
+    path: content.replace('20261015', '20260328')
+                 .replace('20261031', '20260329')
+                 .replace('20261018', '20260329')
+    for path, content in files.items()
+})
 module.build(destination / 'edge.zip', destination, '20261017')

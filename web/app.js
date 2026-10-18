@@ -300,7 +300,6 @@ window.addEventListener("pagehide", () => {
   if (state.firmwareUrl) URL.revokeObjectURL(state.firmwareUrl);
   state.firmwareUrl = null;
   state.release = null;
-  $("settings").reset();
   $("wifi-ssid").value = "";
   $("wifi-password").value = "";
   $("prepare").disabled = true;
