@@ -41,7 +41,9 @@ def measure(path):
     regression_limit = 300000
     if static + reserve > regression_limit:
         raise ValueError(f'C3 RAM regression: {static + reserve} budgeted bytes exceeds {regression_limit}')
-    return {'target': 'riscv32imc-unknown-none-elf', 'sections': selected, 'static_bytes_including_65536_byte_heap': static, 'stack_available_bytes': stack, 'stack_reserve_bytes': reserve, 'budgeted_bytes': static + reserve, 'limit_bytes': 400000, 'regression_limit_bytes': regression_limit, 'fits': True, 'hardware_high_water_measured': False}
+    if static + stack > 400000:
+        raise ValueError(f'C3 full linked RAM exceeds 400000: {static + stack}')
+    return {'target': 'riscv32imc-unknown-none-elf', 'sections': selected, 'static_bytes_including_65536_byte_heap': static, 'stack_available_bytes': stack, 'stack_reserve_bytes': reserve, 'budgeted_bytes': static + reserve, 'budgeted_bytes_scope': 'static plus minimum stack reserve; not a runtime peak', 'full_linked_ram_bytes': static + stack, 'limit_bytes': 400000, 'regression_limit_bytes': regression_limit, 'fits': True, 'hardware_high_water_measured': False}
 
 
 if __name__ == '__main__':

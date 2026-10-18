@@ -141,6 +141,12 @@ fn big<D: DrawTarget<Color = Rgb565>>(
     Ok(())
 }
 
+pub fn starting<D: DrawTarget<Color = Rgb565>>(d: &mut D) -> Result<(), D::Error> {
+    background(d)?;
+    label(d, "timetable", 120, 80, INK, true)?;
+    label(d, "Getting ready...", 120, 120, MUTED, true)
+}
+
 pub fn setup<D: DrawTarget<Color = Rgb565>>(d: &mut D) -> Result<(), D::Error> {
     background(d)?;
     label(d, "timetable", 120, 60, INK, true)?;
