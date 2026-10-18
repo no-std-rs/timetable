@@ -2,7 +2,9 @@ use core::convert::Infallible;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*, primitives::Rectangle};
 use embedded_hal::{digital::OutputPin, spi::SpiBus};
 use std::{cell::RefCell, rc::Rc};
-use timetable_display::{App, Config, Screen, catalog::Catalog, config, render};
+use timetable_display::{
+    App, Config, Departure, Screen, catalog::Catalog, config, model::Status, render,
+};
 use timetable_firmware::panel::{Panel, TILE_BYTES, TILE_ROWS, Tile, WIDTH};
 
 struct Frame([Rgb565; 240 * 240]);
@@ -30,18 +32,42 @@ impl DrawTarget for Frame {
 #[test]
 fn shared_settings_scratch_renders_every_screen_like_a_full_framebuffer() {
     let mut scratch = *include_bytes!("../../display/tests/settings.bin");
-    let settings = config::decode(&mut scratch).unwrap().0;
+    let mut settings = config::decode(&mut scratch).unwrap().0;
     let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
     let mut app = App::default();
-    for screen in [
-        Screen::Board,
-        Screen::Groups,
-        Screen::Picks,
-        Screen::Routes,
-        Screen::Stops,
-        Screen::Walk,
+    for (screen, status, minutes) in [
+        (Screen::Board, Status::Ready, None),
+        (Screen::Board, Status::Ready, Some(1)),
+        (Screen::Board, Status::Offline, Some(12)),
+        (Screen::Board, Status::Loading, Some(360)),
+        (Screen::Groups, Status::Ready, None),
+        (Screen::Picks, Status::Ready, None),
+        (Screen::Routes, Status::Ready, None),
+        (Screen::Stops, Status::Ready, None),
+        (Screen::Walk, Status::Ready, None),
     ] {
         app.screen = screen;
+        app.status = status;
+        settings.groups[0].picks[0].line = if minutes == Some(360) { "N12345" } else { "4" }
+            .try_into()
+            .unwrap();
+        app.clock = Some(1_792_301_400);
+        app.departures.reset(app.clock.unwrap());
+        if let Some(minutes) = minutes {
+            // Include the largest supported countdown, small/large line fonts,
+            // conditional boarding and the two alternative departure rows.
+            for _ in 0..3 {
+                app.departures
+                    .push(Departure {
+                        at: app.clock.unwrap() + minutes * 60,
+                        group: 0,
+                        pick: 0,
+                        conditional: true,
+                        headsign: 0,
+                    })
+                    .unwrap();
+            }
+        }
         app.draft = Some(settings.groups[0].picks[0].clone());
         let mut frame = Frame([Rgb565::BLACK; WIDTH * 240]);
         render::draw(&mut frame, &app, &settings, &catalog).unwrap();
@@ -71,6 +97,10 @@ fn wire_pixels_clip_to_the_final_tile_and_keep_rgb565_byte_order() {
         y: 224,
         pixels: &mut pixels,
     };
+    assert_eq!(
+        tile.bounding_box(),
+        Rectangle::new(Point::new(0, 224), Size::new(240, 16))
+    );
     tile.draw_iter([
         Pixel(Point::new(-1, 224), Rgb565::WHITE),
         Pixel(Point::new(0, 223), Rgb565::WHITE),

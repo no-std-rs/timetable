@@ -34,7 +34,7 @@ function changed() {
   if (state.release) message("Your settings stay here. Prepare when you\u2019re ready.");
 }
 function removalSnapshot() {
-  return { groups: structuredClone(state.groups), active: state.active };
+  return { groups: structuredClone(state.groups), active: state.active, automatic: state.automatic };
 }
 function offerUndo(snapshot, text) {
   state.undo = snapshot;
@@ -45,6 +45,7 @@ $("undo-removal").addEventListener("click", () => {
   if (!state.undo) return;
   state.groups = state.undo.groups;
   state.active = state.undo.active;
+  state.automatic = state.undo.automatic;
   renderGroup();
   changed();
   $("group-name").focus();
@@ -117,6 +118,8 @@ function validateGroupName() {
 }
 function renderGroup() {
   renderTabs();
+  $("automatic").checked = state.automatic;
+  $("automatic-hint").textContent = state.automatic ? "Switch by time of day. Turn off to choose groups by touch." : "Schedules are paused. Choose groups by touch; saved time windows stay here.";
   const g = group();
   $("group-name").value = g.name;
   validateGroupName();
@@ -177,6 +180,11 @@ $("remove-group").addEventListener("click", () => {
 });
 $("scheduled").addEventListener("change", () => {
   group().days = $("scheduled").checked ? 31 : 0;
+  renderGroup();
+  changed();
+});
+$("automatic").addEventListener("change", () => {
+  state.automatic = $("automatic").checked;
   renderGroup();
   changed();
 });
@@ -317,6 +325,7 @@ $("export-groups").addEventListener("click", () => {
     message(e.message, true);
   }
 });
+$("import-button").addEventListener("click", () => $("import-groups").click());
 $("import-groups").addEventListener("change", async (event) => {
   try {
     const f = event.target.files[0];
@@ -325,11 +334,14 @@ $("import-groups").addEventListener("change", async (event) => {
     const data = JSON.parse(await f.text());
     if (data.version !== 1) throw new Error("Unsupported group file version.");
     validateConfig({ wifi_ssid: "validation", wifi_password: "", automatic: data.automatic, groups: data.groups });
+    const snapshot = removalSnapshot();
     state.groups = data.groups;
     state.automatic = data.automatic;
     state.active = 0;
     renderGroup();
     changed();
+    offerUndo(snapshot, "Groups imported.");
+    $("group-name").focus();
   } catch (e) {
     message(e.message, true);
   } finally {

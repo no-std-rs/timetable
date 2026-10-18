@@ -280,10 +280,17 @@ async fn wifi_connection(mut controller: WifiController<'static>, shared: &'stat
     controller
         .set_config(&WifiConfig::Station(station))
         .unwrap();
+    let mut connected_before = false;
     loop {
         match controller.connect_async().await {
             Ok(_) => {
                 info!("Wi-Fi associated");
+                // A brief outage must not leave the timetable in its three-hour
+                // success wait. Initial association already wakes config_up.
+                if connected_before {
+                    REFRESH.signal(());
+                }
+                connected_before = true;
                 let _ = controller.wait_for_disconnect_async().await;
             }
             Err(_) => warn!("Wi-Fi association failed"),

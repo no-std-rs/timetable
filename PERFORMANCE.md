@@ -251,3 +251,40 @@ PR #6 and below the enforced 300,000-byte ceiling. [Raw linked report](benchmark
 records 267,940 B static RAM and 52,568 B linker-available stack. The isolated
 32-bit display ABI query/reserve probe totals 250,312 B; core GTFS probe values
 are unchanged. Physical peak memory and touch latency remain unmeasured.
+
+## Tile rendering
+
+Measured on 2026-10-18 against main `6782dd78`, on the same Ryzen 9 7900 host
+using pinned Rust 1.95.0, firmware's release profile (`opt-level=s`, fat LTO)
+and `firmware/examples/bench_render.rs`. Each sample draws 512 complete
+240×240 frames through the actual fifteen 16-row tiles. Seven alternating
+before/after rounds follow a 64-frame warmup for each binary. The board contains
+512 cached events. Timings exclude SPI, network, startup and pixel checksumming.
+
+| Screen | Before, µs/frame | After, µs/frame | Less CPU time |
+| --- | ---: | ---: | ---: |
+| Board | 346.965 | 111.642 | 67.8% |
+| Groups | 158.994 | 71.721 | 54.9% |
+| Picks | 222.342 | 78.135 | 64.9% |
+| Routes | 269.596 | 91.261 | 66.1% |
+| Stops | 446.402 | 293.076 | 34.3% |
+| Walk | 294.001 | 90.152 | 69.3% |
+
+[Raw rounds and full-image checksums](benchmarks/device-tile-render.csv) retain
+all samples. Every screen has identical pixel checksums before and after.
+The tile now reports its real absolute bounding rectangle. The renderer skips
+invisible text and styled primitives before rasterizing them, including the
+scaled countdown. It still renders every tile and sends the same complete
+image; this does not claim reduced SPI traffic or measured physical frame time.
+Tests compare tiled/full-frame pixels for empty and active boards, offline and
+loading status, conditional boarding, a three-digit countdown and both line
+fonts, as well as every editor screen. A separate allocation-instrumented test
+checks that off-screen glyphs are culled without heap allocation/reallocation.
+
+The [linked C3 report](benchmarks/device-tile-ram.json) budgets **292,532 B**,
+16 B above the previous release, with 267,956 B static RAM, an unchanged
+65,536-byte heap and 24,576-byte stack reserve. The linker leaves 52,552 B
+available for the call stack. The 300,000-byte regression ceiling and parser/UI
+capacities are unchanged. The isolated display query/reserve probe remains
+250,312 B. These are compiler/linker bounds; hardware peak RAM and touch timing
+remain unmeasured.

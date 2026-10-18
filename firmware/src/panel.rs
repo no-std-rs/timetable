@@ -126,9 +126,12 @@ pub struct Tile<'a> {
     pub pixels: &'a mut [u8; TILE_BYTES],
 }
 
-impl OriginDimensions for Tile<'_> {
-    fn size(&self) -> Size {
-        Size::new(240, 240)
+impl Dimensions for Tile<'_> {
+    fn bounding_box(&self) -> Rectangle {
+        Rectangle::new(
+            Point::new(0, self.y.into()),
+            Size::new(240, TILE_ROWS as u32),
+        )
     }
 }
 
@@ -153,10 +156,7 @@ impl DrawTarget for Tile<'_> {
     }
 
     fn fill_solid(&mut self, area: &Rectangle, color: Rgb565) -> Result<(), Infallible> {
-        let clip = area.intersection(&Rectangle::new(
-            Point::new(0, self.y.into()),
-            Size::new(240, TILE_ROWS as u32),
-        ));
+        let clip = area.intersection(&self.bounding_box());
         for p in clip.points() {
             let offset = ((p.y - i32::from(self.y)) as usize * WIDTH + p.x as usize) * 2;
             self.pixels[offset..offset + 2].copy_from_slice(&color.into_storage().to_be_bytes());

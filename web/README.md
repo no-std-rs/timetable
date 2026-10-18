@@ -6,6 +6,9 @@ picker uses the same checked-in official catalogue as firmware. It supports
 four named groups, four choices per group, direction filters, per-choice
 walking time and optional weekday/time windows. Export/import contains group
 settings only, never Wi-Fi credentials.
+“Follow group schedules” controls automatic switching for all groups. Turn it
+off for touch-only selection without deleting time windows; imported manual
+settings can be inspected and switched back to automatic mode here.
 
 Search by line number or destination, then by stop name or platform code; Polish
 accents are optional. Results stay within the chosen line and direction. A line
@@ -15,7 +18,10 @@ The catalogue search index is built once, so typing scans only the chosen
 route's stop links. Empty groups have an empty preview rather than sample trips.
 
 Group tabs support Left/Right, Home and End. Removing a group or choice offers
-Undo until the next settings edit. Failed catalogue or firmware downloads have
+Undo until the next settings edit.
+Import uses a keyboard-accessible button and offers Undo, including the previous
+group switching mode. Invalid imports leave groups and any existing Undo intact.
+Failed catalogue or firmware downloads have
 retry controls that retain group edits. Browser history restores those edits,
 clears Wi-Fi credentials and resets password visibility. Search Enter moves to
 the choices; it does not submit an unfinished edit.

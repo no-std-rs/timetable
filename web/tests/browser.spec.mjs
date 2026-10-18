@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 const catalog = JSON.parse(await readFile(new URL("../../catalog/catalog.json", import.meta.url), "utf8"));
+const saved = JSON.parse(await readFile(new URL("../../display/tests/settings.json", import.meta.url), "utf8"));
 const firmware = Buffer.alloc(1e5, 233);
 const release = { chip: "ESP32-C3", board: "GUITION ESP32-2424S012-V1.0", flash_size: 4194304, config_offset: 4128768, config_version: 1, revision: "a".repeat(40), sha256: createHash("sha256").update(firmware).digest("hex"), size: firmware.length };
 async function prepare(page, { corrupt = false, catalogFailures = 0, releaseFailures = 0 } = {}) {
@@ -267,4 +268,69 @@ test("weekday toggles keep keyboard focus and serialize the chosen days", async 
   await page.keyboard.press("Space");
   await expect(page.locator("#scheduled")).toBeChecked();
   await expect(page.locator("#schedule")).toBeVisible();
+});
+
+test("imported manual mode can resume scheduling, roundtrip and undo", async ({ page, isMobile }) => {
+  await prepare(page);
+  await expect(page.locator("#prepare")).toBeEnabled();
+  await page.locator("#group-name").fill("Before import");
+  await page.locator("#wifi-ssid").fill("kept-private-network");
+  await page.locator("#prepare").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+  // Exercise the desktop keyboard and mobile pointer file-picker entry points.
+  await page.locator("#import-button").focus();
+  const chooser = page.waitForEvent("filechooser");
+  if (isMobile) await page.locator("#import-button").click();
+  else await page.keyboard.press("Enter");
+  await (await chooser).setFiles({ name: "manual.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ version: 1, automatic: false, groups: saved.groups })) });
+  await expect(page.locator("#automatic")).not.toBeChecked();
+  await expect(page.locator("#automatic-hint")).toContainText("Schedules are paused");
+  await expect(page.locator("#preview-mode")).toContainText("MANUAL");
+  await expect(page.locator("#scheduled")).toBeChecked();
+  await expect(page.locator("#group-name")).toBeFocused();
+  await expect(page.locator("#install-area")).toBeHidden();
+  await expect(page.locator("#wifi-ssid")).toHaveValue("kept-private-network");
+  const download = page.waitForEvent("download");
+  await page.locator("#export-groups").click();
+  const exported = JSON.parse(await readFile(await (await download).path(), "utf8"));
+  expect(exported).toEqual({ version: 1, automatic: false, groups: saved.groups });
+  await page.locator("#undo-removal").click();
+  await expect(page.locator("#group-name")).toHaveValue("Before import");
+  await expect(page.locator("#automatic")).toBeChecked();
+  await expect(page.locator("#preview-empty")).toBeVisible();
+  // Import the same file again, then explicitly resume all saved schedules.
+  await page.locator("#import-groups").setInputFiles({ name: "manual.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(exported)) });
+  await expect(page.locator("#automatic")).not.toBeChecked();
+  await page.locator("#automatic").check();
+  await expect(page.locator("#preview-mode")).toContainText("SCHEDULED");
+  await expect(page.locator("#undo-area")).toBeHidden();
+  await page.locator("#prepare").click();
+  const settings = await page.evaluate(async () => {
+    const manifest = await (await fetch(document.querySelector("#installer").manifest)).json();
+    const bytes = await (await fetch(manifest.builds[0].parts[1].path)).arrayBuffer();
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 24, new DataView(bytes).getUint32(12, true))));
+  });
+  expect(settings.automatic).toBe(true);
+  expect(settings.groups).toEqual(saved.groups);
+  expect(settings.wifi_ssid).toBe("kept-private-network");
+  await page.locator("#automatic").uncheck();
+  await expect(page.locator("#install-area")).toBeHidden();
+  await expect(page.locator("#scheduled")).toBeChecked();
+  await expect(page.locator("#preview-mode")).toContainText("MANUAL");
+});
+
+test("invalid group imports preserve settings and an existing undo", async ({ page }) => {
+  await prepare(page);
+  await page.locator("#group-name").fill("Keep my plans");
+  await page.locator("#remove-group").click();
+  await expect(page.locator("#undo-area")).toBeVisible();
+  for (const body of ["{", JSON.stringify({ version: 1, automatic: false, groups: [] })]) {
+    await page.locator("#import-groups").setInputFiles({ name: "bad.json", mimeType: "application/json", buffer: Buffer.from(body) });
+    await expect(page.locator("#status")).toHaveAttribute("role", "alert");
+    await expect(page.locator("#group-name")).toHaveValue("Evening");
+    await expect(page.locator("#automatic")).toBeChecked();
+    await expect(page.locator("#undo-area")).toBeVisible();
+  }
+  await page.locator("#undo-removal").click();
+  await expect(page.locator("#group-name")).toHaveValue("Keep my plans");
 });

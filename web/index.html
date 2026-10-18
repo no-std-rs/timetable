@@ -65,7 +65,9 @@
             <p class="fine-print">Overnight windows work too. If groups overlap, the first one wins. Touch can override a schedule for two hours.</p>
           </div>
           </div>
-          <div class="card-footer"><span>Up to 4 groups · 4 line/stop choices in each</span><button type="button" id="export-groups" class="text-button">Export groups ↗</button><label class="text-button import-label">Import<input type="file" id="import-groups" accept="application/json,.json" hidden></label></div>
+          <div class="schedule-toggle"><label><input type="checkbox" id="automatic" checked aria-describedby="automatic-hint"> Follow group schedules</label><span>All groups</span></div>
+          <p id="automatic-hint" class="fine-print">Switch by time of day. Turn off to choose groups by touch.</p>
+          <div class="card-footer"><span>Up to 4 groups · 4 line/stop choices in each</span><button type="button" id="export-groups" class="text-button">Export groups ↗</button><button type="button" id="import-button" class="text-button">Import</button><input type="file" id="import-groups" accept="application/json,.json" hidden></div>
         </div>
       </section>
 
