@@ -24,6 +24,23 @@ pub const GOLD: Rgb565 = Rgb565::new(22, 37, 12);
 pub const CHILLI: Rgb565 = Rgb565::new(23, 14, 6);
 const MUTED: Rgb565 = Rgb565::new(15, 30, 14);
 
+// The board redraws in tiles. Avoid rasterizing text and primitives that cannot
+// touch this target; a full framebuffer still draws the same complete image.
+fn draw_visible<D, T>(d: &mut D, item: &T) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+    T: Drawable<Color = Rgb565> + Dimensions,
+{
+    if !item
+        .bounding_box()
+        .intersection(&d.bounding_box())
+        .is_zero_sized()
+    {
+        item.draw(d)?;
+    }
+    Ok(())
+}
+
 fn label<D: DrawTarget<Color = Rgb565>>(
     d: &mut D,
     text: &str,
@@ -32,21 +49,22 @@ fn label<D: DrawTarget<Color = Rgb565>>(
     color: Rgb565,
     center: bool,
 ) -> Result<(), D::Error> {
-    Text::with_text_style(
-        text,
-        Point::new(x, y),
-        MonoTextStyle::new(&FONT_6X10, color),
-        TextStyleBuilder::new()
-            .baseline(Baseline::Top)
-            .alignment(if center {
-                Alignment::Center
-            } else {
-                Alignment::Left
-            })
-            .build(),
+    draw_visible(
+        d,
+        &Text::with_text_style(
+            text,
+            Point::new(x, y),
+            MonoTextStyle::new(&FONT_6X10, color),
+            TextStyleBuilder::new()
+                .baseline(Baseline::Top)
+                .alignment(if center {
+                    Alignment::Center
+                } else {
+                    Alignment::Left
+                })
+                .build(),
+        ),
     )
-    .draw(d)?;
-    Ok(())
 }
 fn short(value: &str, count: usize) -> String<96> {
     let mut out = String::new();
@@ -67,13 +85,14 @@ fn pill<D: DrawTarget<Color = Rgb565>>(
     h: u32,
     color: Rgb565,
 ) -> Result<(), D::Error> {
-    RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(x, y), Size::new(w, h)),
-        Size::new(5, 5),
+    draw_visible(
+        d,
+        &RoundedRectangle::with_equal_corners(
+            Rectangle::new(Point::new(x, y), Size::new(w, h)),
+            Size::new(5, 5),
+        )
+        .into_styled(PrimitiveStyle::with_fill(color)),
     )
-    .into_styled(PrimitiveStyle::with_fill(color))
-    .draw(d)?;
-    Ok(())
 }
 fn big<D: DrawTarget<Color = Rgb565>>(
     d: &mut D,
@@ -104,13 +123,18 @@ fn big<D: DrawTarget<Color = Rgb565>>(
             Ok(())
         }
     }
-    Text::with_baseline(
+    let text = Text::with_baseline(
         value,
         Point::zero(),
         MonoTextStyle::new(&FONT_10X20, INK),
         Baseline::Top,
-    )
-    .draw(&mut Scale {
+    );
+    let bounds = text.bounding_box();
+    let scaled = Rectangle::new(Point::new(x, y) + bounds.top_left * 2, bounds.size * 2);
+    if scaled.intersection(&d.bounding_box()).is_zero_sized() {
+        return Ok(());
+    }
+    text.draw(&mut Scale {
         d,
         origin: Point::new(x, y),
     })?;
@@ -136,9 +160,10 @@ fn background<D: DrawTarget<Color = Rgb565>>(d: &mut D) -> Result<(), D::Error> 
         (Point::new(193, 37), Point::new(202, 49)),
         (Point::new(202, 49), Point::new(228, 56)),
     ] {
-        Line::new(a, b)
-            .into_styled(PrimitiveStyle::with_stroke(GOLD, 2))
-            .draw(d)?;
+        draw_visible(
+            d,
+            &Line::new(a, b).into_styled(PrimitiveStyle::with_stroke(GOLD, 2)),
+        )?;
     }
     Ok(())
 }
@@ -181,23 +206,25 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
             if let Some((chosen_index, event)) = chosen {
                 let p = &group.picks[event.pick as usize];
                 pill(d, 32, 62, 47, 29, INK)?;
-                Text::with_text_style(
-                    p.line.as_str(),
-                    Point::new(55, 66),
-                    MonoTextStyle::new(
-                        if p.line.chars().count() > 4 {
-                            &FONT_6X10
-                        } else {
-                            &FONT_10X20
-                        },
-                        PORCELAIN,
+                draw_visible(
+                    d,
+                    &Text::with_text_style(
+                        p.line.as_str(),
+                        Point::new(55, 66),
+                        MonoTextStyle::new(
+                            if p.line.chars().count() > 4 {
+                                &FONT_6X10
+                            } else {
+                                &FONT_10X20
+                            },
+                            PORCELAIN,
+                        ),
+                        TextStyleBuilder::new()
+                            .baseline(Baseline::Top)
+                            .alignment(Alignment::Center)
+                            .build(),
                     ),
-                    TextStyleBuilder::new()
-                        .baseline(Baseline::Top)
-                        .alignment(Alignment::Center)
-                        .build(),
-                )
-                .draw(d)?;
+                )?;
                 let mut value = String::<8>::new();
                 let _ = write!(value, "{}", (event.at - now + 59) / 60);
                 big(d, &value, 129, 55)?;
@@ -339,13 +366,16 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 true,
             )?;
             if !fault {
-                Circle::new(Point::new(57, 214), 4)
-                    .into_styled(PrimitiveStyle::with_fill(if app.status == Status::Ready {
-                        GOLD
-                    } else {
-                        CHILLI
-                    }))
-                    .draw(d)?;
+                draw_visible(
+                    d,
+                    &Circle::new(Point::new(57, 214), 4).into_styled(PrimitiveStyle::with_fill(
+                        if app.status == Status::Ready {
+                            GOLD
+                        } else {
+                            CHILLI
+                        },
+                    )),
+                )?;
             }
         }
         Screen::Groups => {

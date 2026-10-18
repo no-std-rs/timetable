@@ -26,6 +26,9 @@ without deploying. The published installer is at
 
 In the installer, name your groups, choose lines, directions and stops, and set
 the walking time for each choice. Optionally schedule groups on selected days.
+“Follow group schedules” enables automatic switching; turn it off to switch by
+touch while retaining every saved time window. Imports expose that same mode
+and offer Undo before further edits.
 Then enter Wi-Fi settings and use desktop Chrome or Edge to install over USB.
 The website verifies SHA-256 before offering the binary. It sends settings as a
 separate USB image, never to a server, and clears credentials when leaving the
@@ -87,6 +90,7 @@ mirror-assisted APIs remain available.
 A first refresh downloads several ZIP streams and may take minutes on a slow
 network. Touch and drawing run separately. A successful refresh caches six hours
 of departures and refreshes after three hours; failures retry after a minute.
+Wi-Fi reassociation wakes the update task instead of waiting for that timer.
 Config changes cancel an obsolete in-flight query. Network or validation
 failure never publishes provisional results. The previous/current/next
 service-day window covers Poznań's normal after-midnight trips; feeds with service times
@@ -101,6 +105,8 @@ also contribute work. A manual retry interrupts the failed clock-sync wait too.
 Both application crates are `no_std` and use no allocator. Radio and RSA TLS use
 a fixed **64 KiB heap**. The panel's **7.5 KiB tile** borrows the idle 8 KiB
 settings scratch buffer, with no framebuffer or pixel conversion buffer.
+The tile reports its actual drawing bounds, so off-tile text and primitives are
+skipped before rasterization. Full-frame and tiled rendering are pixel-equivalent.
 Each 512-entry departure cache stores four-byte entries with one shared UTC
 epoch; access reconstructs full `i64` timestamps, including after 2038.
 TLS borrows its verifier and connection instead of moving large async state.
@@ -108,7 +114,7 @@ TLS borrows its verifier and connection instead of moving large async state.
 radio, heap, all async tasks and application state; alias dummy sections are
 excluded. It requires a separate 24 KiB available call stack and enforces the
 400,000-byte limit plus a **300,000-byte regression ceiling**. The measured
-release budget is **292,516 B**, down from **317,756 B**, with the same heap, stack
+release budget is **292,532 B**, down from **317,756 B**, with the same heap, stack
 reserve and application capacities. `RAM.json` reports each exact build.
 This is a linked-memory bound; physical stack/heap high-water and screen/radio/touch behaviour
 still require the physical board. No physical flash or hardware test has been
@@ -145,6 +151,8 @@ cargo fmt --all --check
 cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
 cargo clippy --locked --release --features firmware -- -D warnings
 cargo build --locked --release --features firmware
+# Host CPU benchmark of the actual tile renderer, excluding SPI:
+cargo run --locked --release --example bench_render --target x86_64-unknown-linux-gnu -- 512
 # Only with a connected matching board and intentional replacement:
 cargo run --locked --release --features firmware
 ```
