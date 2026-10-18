@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/config.test.mjs tests/catalog.test.mjs",
+    "test": "node --test tests/config.test.mjs tests/catalog.test.mjs tests/settings-store.test.mjs tests/serial-logs.test.mjs tests/i18n.test.mjs",
     "test:browser": "playwright test",
     "build": "esbuild src/installer.js --bundle --format=esm --outfile=dist/installer.js"
   },

@@ -185,30 +185,34 @@ impl Http {
 
 /// A nonce-bound SNTP reply supplies UTC before certificate validity is checked.
 pub async fn synchronize(stack: Stack<'static>) -> Result<(), Error> {
+    log::info!("Clock sync: resolving NTP server");
     with_timeout(Duration::from_secs(15), async {
         let addresses = stack
             .dns_query("pool.ntp.org", DnsQueryType::A)
             .await
-            .map_err(|_| Error::Clock)?;
+            .map_err(|_| clock_failure("NTP DNS lookup failed"))?;
         let ip = *addresses.first().ok_or(Error::Clock)?;
         let mut rx_meta = [PacketMetadata::EMPTY; 1];
         let mut tx_meta = [PacketMetadata::EMPTY; 1];
         let mut rx = [0; 128];
         let mut tx = [0; 128];
         let mut socket = UdpSocket::new(stack, &mut rx_meta, &mut rx, &mut tx_meta, &mut tx);
-        socket.bind(44444).map_err(|_| Error::Clock)?;
+        socket
+            .bind(44444)
+            .map_err(|_| clock_failure("NTP socket bind failed"))?;
         let mut request = [0; 48];
         request[0] = 0x23;
         Rng::new().read(&mut request[40..48]);
         socket
             .send_to(&request, (ip, 123))
             .await
-            .map_err(|_| Error::Clock)?;
+            .map_err(|_| clock_failure("NTP request send failed"))?;
+        log::info!("Clock sync: NTP request sent; waiting for reply");
         let mut response = [0; 128];
         let (n, remote) = socket
             .recv_from(&mut response)
             .await
-            .map_err(|_| Error::Clock)?;
+            .map_err(|_| clock_failure("NTP reply read failed"))?;
         if n < 48
             || remote.endpoint.addr != ip
             || remote.endpoint.port != 123
@@ -217,7 +221,7 @@ pub async fn synchronize(stack: Stack<'static>) -> Result<(), Error> {
             || !(1..=15).contains(&response[1])
             || response[24..32] != request[40..48]
         {
-            return Err(Error::Clock);
+            return Err(clock_failure("NTP reply failed validation"));
         }
         let seconds = u32::from_be_bytes(response[40..44].try_into().unwrap()) as u64;
         let era = if seconds < 2_208_988_800 {
@@ -227,7 +231,7 @@ pub async fn synchronize(stack: Stack<'static>) -> Result<(), Error> {
         };
         let unix = (seconds + era - 2_208_988_800) as i64;
         if !(1_704_067_200..4_102_444_800).contains(&unix) {
-            return Err(Error::Clock);
+            return Err(clock_failure("NTP time outside supported range"));
         }
         let fraction = u32::from_be_bytes(response[44..48].try_into().unwrap());
         let micros = unix * 1_000_000 + ((u64::from(fraction) * 1_000_000) >> 32) as i64;
@@ -235,5 +239,10 @@ pub async fn synchronize(stack: Stack<'static>) -> Result<(), Error> {
         Ok(())
     })
     .await
-    .map_err(|_| Error::Clock)?
+    .map_err(|_| clock_failure("15 second NTP timeout"))?
+}
+
+fn clock_failure(stage: &str) -> Error {
+    log::warn!("Clock sync: {}", stage);
+    Error::Clock
 }

@@ -30,7 +30,8 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_radio::wifi::{
-    AuthenticationMethod, Config as WifiConfig, Interface, WifiController, sta::StationConfig,
+    AuthenticationMethod, Config as WifiConfig, Interface, WifiController, WifiError,
+    sta::StationConfig,
 };
 use esp_storage::FlashStorage;
 use log::{info, warn};
@@ -536,7 +537,9 @@ fn start_network(
     wifi: esp_hal::peripherals::WIFI<'static>,
     shared: &'static Shared,
 ) {
+    info!("Wi-Fi: initializing radio");
     let (controller, interfaces) = esp_radio::wifi::new(wifi, Default::default()).unwrap();
+    info!("Wi-Fi: radio initialized");
     let mut seed = [0; 8];
     Rng::new().read(&mut seed);
     let (stack, runner) = embassy_net::new(
@@ -557,6 +560,17 @@ fn start_network(
         )
         .unwrap(),
     );
+    info!("Wi-Fi: network tasks started");
+}
+
+fn log_wifi_error(stage: &str, error: WifiError) {
+    match error {
+        WifiError::Disconnected(info) => warn!(
+            "Wi-Fi {}: reason {:?}, signal {} dBm",
+            stage, info.reason, info.rssi
+        ),
+        other => warn!("Wi-Fi {}: {:?}", stage, other),
+    }
 }
 
 #[embassy_executor::task]
@@ -573,11 +587,15 @@ async fn wifi_connection(mut controller: WifiController<'static>, shared: &'stat
             })
             .with_password(c.wifi_password.as_str().into())
     };
-    controller
-        .set_config(&WifiConfig::Station(station))
-        .unwrap();
+    info!("Wi-Fi: applying station configuration");
+    if let Err(error) = controller.set_config(&WifiConfig::Station(station)) {
+        log_wifi_error("configuration failed", error);
+        panic!("Wi-Fi configuration failed");
+    }
+    info!("Wi-Fi: station configured");
     let mut connected_before = false;
     loop {
+        info!("Wi-Fi: requesting association");
         match select(controller.connect_async(), POWER_DOWN.wait()).await {
             Either::Second(()) => break,
             Either::First(Ok(_)) => {
@@ -588,14 +606,16 @@ async fn wifi_connection(mut controller: WifiController<'static>, shared: &'stat
                     REFRESH.signal(());
                 }
                 connected_before = true;
-                if matches!(
-                    select(controller.wait_for_disconnect_async(), POWER_DOWN.wait()).await,
-                    Either::Second(())
-                ) {
-                    break;
+                match select(controller.wait_for_disconnect_async(), POWER_DOWN.wait()).await {
+                    Either::Second(()) => break,
+                    Either::First(Ok(info)) => warn!(
+                        "Wi-Fi disconnected: reason {:?}, signal {} dBm",
+                        info.reason, info.rssi
+                    ),
+                    Either::First(Err(error)) => log_wifi_error("disconnect", error),
                 }
             }
-            Either::First(Err(_)) => warn!("Wi-Fi association failed"),
+            Either::First(Err(error)) => log_wifi_error("association failed", error),
         }
         shared.lock().await.app.status = Status::Offline;
         if matches!(
@@ -722,10 +742,16 @@ async fn timetable(
             }
             s.network_busy = true;
         }
+        info!("Network: waiting up to 30 seconds for IPv4/DHCP");
         if with_timeout(Duration::from_secs(30), stack.wait_config_up())
             .await
             .is_err()
         {
+            warn!(
+                "Network: IPv4/DHCP timeout; Wi-Fi link up: {}",
+                stack.is_link_up()
+            );
+            log_heap();
             let mut s = shared.lock().await;
             s.app.status = Status::Offline;
             s.network_busy = false;
@@ -734,8 +760,10 @@ async fn timetable(
             let _ = select(Timer::after_secs(30), REFRESH.wait()).await;
             continue;
         }
+        info!("Network: IPv4 configuration ready; synchronizing clock");
         shared.lock().await.app.status = Status::Syncing;
         if transport::synchronize(stack).await.is_err() {
+            warn!("Clock synchronization failed; retrying in 30 seconds");
             let mut s = shared.lock().await;
             s.app.status = Status::Offline;
             s.network_busy = false;
@@ -744,6 +772,7 @@ async fn timetable(
             let _ = select(Timer::after_secs(30), REFRESH.wait()).await;
             continue;
         }
+        info!("Clock synchronized; starting timetable update");
         let revision = {
             let mut s = shared.lock().await;
             s.app.status = Status::Loading;

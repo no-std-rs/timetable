@@ -1,7 +1,9 @@
+import { catalogIndex } from "../catalog-search.js";
 import { test, expect } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 const catalog = JSON.parse(await readFile(new URL("../../catalog/catalog.json", import.meta.url), "utf8"));
+const index = catalogIndex(catalog);
 const saved = JSON.parse(await readFile(new URL("../../display/tests/settings.json", import.meta.url), "utf8"));
 const firmware = Buffer.alloc(1e5, 233);
 const release = { chip: "ESP32-C3", board: "GUITION ESP32-2424S012-V1.0", flash_size: 4194304, config_offset: 4128768, config_version: 2, revision: "a".repeat(40), sha256: createHash("sha256").update(firmware).digest("hex"), size: firmware.length };
@@ -17,7 +19,8 @@ async function prepare(page, { corrupt = false, catalogFailures = 0, releaseFail
 async function chooseStop(page, route, direction = 0) {
   const [, stop] = catalog.links.find(([r, , bits]) => r === route && bits & 1 << direction);
   await page.locator("#stop-search").fill(catalog.stops[stop].code || catalog.stops[stop].name);
-  await page.locator(`#stop-options [data-stop="${stop}"]`).click();
+  await page.locator(`#stop-options [data-group="${index.groupOf[stop]}"]`).click();
+  await page.locator("#direction-select").selectOption(`${stop}:${direction}`);
   return stop;
 }
 test("groups, directions and walking times update a clean responsive preview", async ({ page }, info) => {
@@ -27,7 +30,6 @@ test("groups, directions and walking times update a clean responsive preview", a
   await expect(page.locator("#pick-dialog")).toBeVisible();
   const route = catalog.routes.findIndex((r) => r.line === "4");
   await page.locator("#route-select").selectOption({ value: String(route) });
-  await page.locator("#direction-select").selectOption("0");
   await chooseStop(page, route);
   await expect(page.locator("#route-select")).toHaveValue(String(route));
   expect(await page.locator("#route-select option:checked").textContent()).toBe("4");
@@ -76,6 +78,7 @@ test("corrupt firmware is never offered for installation", async ({ page }) => {
 });
 test("history restoration preserves group controls and USB settings while clearing credentials", async ({ page }) => {
   await prepare(page);
+  await page.locator("#remember-settings").uncheck();
   await expect(page.locator("#prepare")).toBeEnabled();
   await page.locator("#group-name").fill("Commute");
   await page.locator("#scheduled").check();
@@ -130,14 +133,14 @@ test("searches keep choices explicit, scoped to the line and direction", async (
   await page.locator("#route-search").press("Enter");
   await expect(page.locator("#route-select")).toBeFocused();
   await page.locator("#route-select").selectOption({ value: String(route) });
-  await page.locator("#direction-select").selectOption("0");
   await expect(page.locator("#save-pick")).toBeDisabled();
   await page.locator("#stop-search").fill("no-such-stop");
   await expect(page.locator("#stop-results")).toContainText("No boarding stops match");
   const [, stop] = catalog.links.find(([r, , bits]) => r === route && bits & 1);
   await page.locator("#stop-search").fill(catalog.stops[stop].code.toLowerCase());
   await page.locator("#stop-search").fill(catalog.stops[stop].code || catalog.stops[stop].name);
-  await page.locator(`#stop-options [data-stop="${stop}"]`).click();
+  await page.locator(`#stop-options [data-group="${index.groupOf[stop]}"]`).click();
+  await page.locator("#direction-select").selectOption(`${stop}:0`);
   await page.screenshot({ path: `/tmp/timetable-picker-${info.project.name}.png` });
   await page.locator("#save-pick").click();
   await expect(page.locator("#preview-empty")).toBeHidden();
@@ -146,7 +149,7 @@ test("searches keep choices explicit, scoped to the line and direction", async (
   await expect(page.locator("#preview-mode")).toContainText("MANUAL");
   await expect(page.locator(".pick-edit")).toBeFocused();
   await page.locator(".pick-edit").click();
-  await expect(page.locator("#stop-search")).toHaveValue(`${catalog.stops[stop].name} · ${catalog.stops[stop].code}`);
+  await expect(page.locator("#stop-search")).toHaveValue(catalog.stops[stop].name);
   await page.locator("#route-search").fill("no-such-line");
   await expect(page.locator("#route-results")).toContainText("No lines match");
   await expect(page.locator("#save-pick")).toBeDisabled();
@@ -163,24 +166,24 @@ test("one stop box browses serving lines before a line is chosen", async ({ page
   await expect(page.locator("#route-select")).toHaveValue("");
   await expect(page.locator("#save-pick")).toBeDisabled();
   await page.locator("#stop-search").press("ArrowDown");
-  await expect(page.locator("#stop-search")).toHaveAttribute("aria-activedescendant", `stop-option-${stop}`);
+  await expect(page.locator("#stop-search")).toHaveAttribute("aria-activedescendant", `stop-group-${index.groupOf[stop]}`);
   await page.locator("#stop-search").press("Enter");
   await expect(page.locator("#stop-options")).toBeHidden();
-  const routes = [...new Set(catalog.links.filter(([, s]) => s === stop).map(([r]) => r))];
+  const routes = index.groupRoutes("", index.groupOf[stop]);
   expect(await page.locator("#route-select option").evaluateAll((options) => options.slice(1).map((o) => Number(o.value)))).toEqual(routes);
   await expect(page.locator("#route-results")).toContainText("serving");
   await expect(page.locator("#save-pick")).toBeDisabled();
   await page.locator("#route-select").selectOption({ value: String(route) });
-  const directions = [0, 1].filter((d) => catalog.links.some(([r, s, bits]) => r === route && s === stop && bits & 1 << d));
-  expect(await page.locator("#direction-select option").evaluateAll((options) => options.slice(1).map((o) => Number(o.value)))).toEqual(directions);
-  await page.locator("#direction-select").selectOption("0");
+  const choices = index.boardingChoices(route, index.groupOf[stop]).map(c => c.key);
+  expect(await page.locator("#direction-select option").evaluateAll((options) => options.slice(1).map(o => o.value))).toEqual(choices);
+  await page.locator("#direction-select").selectOption(`${stop}:0`);
   await expect(page.locator("#save-pick")).toBeEnabled();
   await page.screenshot({ path: `/tmp/timetable-stop-first-${info.project.name}.png` });
   await page.locator("#save-pick").click();
   await expect(page.locator("#preview-stop")).toHaveText(catalog.stops[stop].name);
   await page.locator(".pick-edit").click();
-  await expect(page.locator("#stop-search")).toHaveValue(`${catalog.stops[stop].name} · ${catalog.stops[stop].code}`);
-  await expect(page.locator("#direction-select")).toHaveValue("0");
+  await expect(page.locator("#stop-search")).toHaveValue(catalog.stops[stop].name);
+  await expect(page.locator("#direction-select")).toHaveValue(`${stop}:0`);
   await page.locator("#stop-search").fill("no-such-stop");
   await expect(page.locator("#save-pick")).toBeDisabled();
   await expect(page.locator("#stop-results")).toContainText("No boarding stops match");
@@ -189,59 +192,55 @@ test("one stop box browses serving lines before a line is chosen", async ({ page
   // Typing a unique result still requires explicit selection.
   await expect(page.locator("#save-pick")).toBeDisabled();
   await page.locator("#stop-search").press("ArrowUp");
-  await expect(page.locator("#stop-search")).toHaveAttribute("aria-activedescendant", `stop-option-${stop}`);
+  await expect(page.locator("#stop-search")).toHaveAttribute("aria-activedescendant", `stop-group-${index.groupOf[stop]}`);
   await page.locator("#stop-search").press("Escape");
   await expect(page.locator("#stop-options")).toBeHidden();
   await expect(page.locator("#pick-dialog")).toBeVisible();
   await page.locator("#stop-search").press("ArrowDown");
-  await page.locator(`#stop-options [data-stop="${stop}"]`).click();
+  await page.locator(`#stop-options [data-group="${index.groupOf[stop]}"]`).click();
+  await page.locator("#direction-select").selectOption(`${stop}:0`);
   await expect(page.locator("#save-pick")).toBeEnabled();
   await page.locator("#stop-search").press("Escape");
   await expect(page.locator("#pick-dialog")).toBeHidden();
   await expect(page.locator("#preview-stop")).toHaveText(catalog.stops[stop].name);
 });
-test("same-name platforms show destinations and the route diagram chooses exact boarding calls", async ({ page }, info) => {
+test("one named stop chooses either platform by destination and keeps route previews provisional", async ({ page }, info) => {
   await prepare(page);
   const icon = await page.request.get(await page.locator('link[rel="icon"]').getAttribute("href"));
-  expect(icon.ok()).toBeTruthy();
-  expect(icon.headers()["content-type"]).toContain("image/svg+xml");
+  expect(icon.ok()).toBeTruthy(); expect(icon.headers()["content-type"]).toContain("image/svg+xml");
   await page.locator("#add-pick").click();
   const route = catalog.routes.findIndex(r => r.line === "4");
   const out = catalog.stops.findIndex(s => s.code === "MT44"), back = catalog.stops.findIndex(s => s.code === "MT71");
-  await page.locator("#route-select").selectOption({ value: String(route) });
+  const group = index.groupOf[out];
   await page.locator("#stop-search").fill("most teatralny");
-  await expect(page.locator(`#stop-options [data-stop="${out}"]`)).toContainText("POŁABSKA");
-  await expect(page.locator(`#stop-options [data-stop="${back}"]`)).toContainText("MAŁE GARBARY");
-  await expect(page.locator(`#stop-options [data-stop="${back}"]`)).toContainText("next");
-  await page.locator(`#stop-options [data-stop="${back}"]`).click();
-  await expect(page.locator("#route-map")).toBeVisible();
-  await expect(page.locator(`#route-stops [data-stop="${back}"]`)).toHaveAttribute("aria-pressed", "true");
-  const outward = catalog.patterns.map((p, id) => ({ p, id })).filter(({ p }) => p.route === route && p.direction === 0 && p.calls.some(c => c[0] === out && c[1] !== 1)).sort((a, b) => b.p.trips - a.p.trips)[0];
-  await page.locator("#path-select").selectOption(String(outward.id));
-  // Previewing a different path keeps the saved choice provisional and intact.
-  await expect(page.locator("#stop-search")).toHaveValue(`${catalog.stops[back].name} · MT71`);
-  await expect(page.locator("#direction-select")).toHaveValue("-1");
-  const noPickup = outward.p.calls.findIndex(c => c[1] === 1);
-  expect(noPickup).toBeGreaterThanOrEqual(0);
-  await expect(page.locator(`#route-stops [data-call="${noPickup}"]`)).toBeDisabled();
-  await page.screenshot({ path: `/tmp/timetable-route-diagram-${info.project.name}.png` });
-  await page.locator(`#route-stops [data-stop="${out}"]`).focus();
-  await page.keyboard.press("Enter");
-  await expect(page.locator("#stop-search")).toHaveValue(`${catalog.stops[out].name} · MT44`);
-  await expect(page.locator("#direction-select")).toHaveValue("0");
-  await expect(page.locator("#save-pick")).toBeEnabled();
-  await expect(page.locator("#path-hint")).toContainText("every path");
+  await expect(page.locator("#stop-options [role=option]")).toHaveCount(1);
+  await page.locator(`#stop-options [data-group="${group}"]`).click();
+  await page.locator("#route-select").selectOption({ value: String(route) });
+  await expect(page.locator("#save-pick")).toBeDisabled();
+  await expect(page.locator("#direction-select")).toHaveValue("");
+  await expect(page.locator(`#direction-select option[value="${out}:0"]`)).toContainText("POŁABSKA");
+  await expect(page.locator(`#direction-select option[value="${back}:1"]`)).toContainText("MAŁE GARBARY");
+  await page.locator("#direction-select").selectOption(`${back}:1`);
+  await expect(page.locator("#platform-hint")).toContainText("MT71");
+  await expect(page.locator("#platform-hint")).toContainText("next");
+  await expect(page.locator("#stop-search")).toHaveValue("Most Teatralny");
+  await page.locator("#direction-select").selectOption(`${out}:0`);
+  await expect(page.locator("#platform-hint")).toContainText("MT44");
+  await expect(page.locator("#stop-search")).toHaveValue("Most Teatralny");
   await page.locator("#save-pick").click();
   await expect(page.locator("#preview-direction")).toHaveText("POŁABSKA");
   await page.locator(".pick-edit").click();
-  await expect(page.locator("#direction-select")).toHaveValue("0");
-  await expect(page.locator("#stop-search")).toHaveValue(`${catalog.stops[out].name} · MT44`);
-  await page.locator("#direction-select").selectOption("-1");
+  await expect(page.locator("#direction-select")).toHaveValue(`${out}:0`);
+  await page.locator("#direction-select").selectOption("");
   const returning = catalog.patterns.map((p, id) => ({ p, id })).filter(({ p }) => p.route === route && p.direction === 1 && p.calls.some(c => c[0] === back && c[1] !== 1)).sort((a, b) => b.p.trips - a.p.trips)[0];
   await page.locator("#path-select").selectOption(String(returning.id));
+  await expect(page.locator("#direction-select")).toHaveValue("");
+  const noPickup = returning.p.calls.findIndex(c => c[1] === 1);
+  if (noPickup >= 0) await expect(page.locator(`#route-stops [data-call="${noPickup}"]`)).toBeDisabled();
   await page.locator(`#route-graph circle.active[data-stop="${back}"]`).first().click();
-  await expect(page.locator("#direction-select")).toHaveValue("1");
-  await expect(page.locator("#stop-search")).toHaveValue(`${catalog.stops[back].name} · MT71`);
+  await expect(page.locator("#direction-select")).toHaveValue(`${back}:1`);
+  await expect(page.locator("#platform-hint")).toContainText("MT71");
+  await page.screenshot({ path: `/tmp/timetable-grouped-directions-${info.project.name}.png` });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
 });
 test("keyboard groups and undo retain selections without overwriting later edits", async ({ page }) => {
@@ -371,10 +370,12 @@ test("imported manual mode can resume scheduling, roundtrip and undo", async ({ 
   await page.locator("#prepare").click();
   await expect(page.locator("#install-area")).toBeVisible();
   // Exercise the desktop keyboard and mobile pointer file-picker entry points.
-  await page.locator("#import-button").focus();
+  // Arm native picker interception before the awaited focus/keyboard actions.
   const chooser = page.waitForEvent("filechooser");
+  await page.locator("#import-button").focus();
+  await expect(page.locator("#import-button")).toBeFocused();
   if (isMobile) await page.locator("#import-button").click();
-  else await page.keyboard.press("Enter");
+  else await page.locator("#import-button").press("Enter");
   await (await chooser).setFiles({ name: "manual.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ version: 1, automatic: false, groups: saved.groups })) });
   await expect(page.locator("#automatic")).not.toBeChecked();
   await expect(page.locator("#automatic-hint")).toContainText("Schedules are paused");
@@ -454,4 +455,168 @@ test("battery mode is explicit, keeps groups and reaches USB settings", async ({
   expect(settings.groups).toEqual(saved.groups);
   await page.locator("#battery-mode").uncheck();
   await expect(page.locator("#install-area")).toBeHidden();
+});
+
+test("PL and EN translate the page and picker while preserving drafts and prepared settings", async ({ page }, info) => {
+  await prepare(page);
+  await page.locator("#wifi-ssid").fill("Home-private");
+  await page.locator("#wifi-password").fill("private-password");
+  await page.locator(".masthead [data-language=pl]").click();
+  await expect(page.locator("html")).toHaveAttribute("lang", "pl");
+  await expect(page.locator("#prepare")).toContainText("Przygotuj");
+  await expect(page.locator("#wifi-ssid")).toHaveAttribute("placeholder", "Twoja sieć 2,4 GHz");
+  await expect(page.locator("#group-name")).toHaveValue("Morning"); // An editable name is user data.
+  await page.locator("#add-pick").click();
+  await expect(page.locator("#pick-title")).toHaveText("Linia. Przystanek. Twoje tempo.");
+  await page.locator("#stop-search").fill("most teatralny");
+  await expect(page.locator("#stop-options [role=option]")).toHaveCount(1);
+  const out = catalog.stops.findIndex(s => s.code === "MT44"), route = catalog.routes.findIndex(r => r.line === "4");
+  await page.locator(`#stop-options [data-group="${index.groupOf[out]}"]`).click();
+  await page.locator("#route-select").selectOption({ value: String(route) });
+  await page.locator("#direction-select").selectOption(`${out}:0`);
+  await page.locator("#walk-minutes").fill("11");
+  await expect(page.locator("#platform-hint")).toContainText("Wsiądź na słupku MT44");
+  await page.locator("#pick-dialog [data-language=en]").click();
+  await expect(page.locator("#pick-title")).toHaveText("A line. A stop. Your pace.");
+  await expect(page.locator("#walk-minutes")).toHaveValue("11");
+  await expect(page.locator("#direction-select")).toHaveValue(`${out}:0`);
+  await page.locator("#save-pick").click();
+  await page.locator("#prepare").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+  await page.locator(".masthead [data-language=pl]").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+  await expect(page.locator("#wifi-password")).toHaveValue("private-password");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("lang", "pl");
+  await expect(page.locator("#wifi-ssid")).toHaveValue("Home-private");
+  await expect(page.locator("#preview-line")).toHaveText("4");
+  await expect(page.locator("#preview-walk")).toContainText("11 min pieszo");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+  await page.screenshot({ path: `/tmp/timetable-polish-${info.project.name}.png`, fullPage: true });
+});
+
+test("remembered settings reload locally and forgetting prevents later credential reuse", async ({ page }) => {
+  const requests = []; page.on("request", r => requests.push(r.url() + (r.postData() ?? "")));
+  await prepare(page);
+  await page.locator("#wifi-ssid").fill("private-remember-ssid");
+  await page.locator("#wifi-password").fill("private-remember-password");
+  await page.locator("#group-name").fill("Saved group");
+  await page.locator("#battery-mode").check();
+  await page.reload();
+  await expect(page.locator("#wifi-ssid")).toHaveValue("private-remember-ssid");
+  await expect(page.locator("#wifi-password")).toHaveValue("private-remember-password");
+  await expect(page.locator("#wifi-password")).toHaveAttribute("type", "password");
+  await expect(page.locator("#group-name")).toHaveValue("Saved group");
+  await expect(page.locator("#battery-mode")).toBeChecked();
+  await page.locator("#forget-settings").click();
+  await expect(page.locator("#remember-settings")).not.toBeChecked();
+  await expect(page.locator("#wifi-ssid")).toHaveValue("private-remember-ssid");
+  await page.reload();
+  await expect(page.locator("#wifi-ssid")).toHaveValue("");
+  await expect(page.locator("#wifi-password")).toHaveValue("");
+  expect(requests.filter(r => !r.startsWith("blob:")).join("\n")).not.toContain("private-remember");
+});
+
+test("USB logs are passive, bounded, downloadable and release the port", async ({ page }) => {
+  await prepare(page);
+  await page.evaluate(() => {
+    let stream; window.logCalls = [];
+    navigator.serial.requestPort = async () => ({
+      readable: new ReadableStream({ start(c) { stream = c; window.pushLog = value => stream.enqueue(new TextEncoder().encode(value)); } }),
+      open: async options => window.logCalls.push(["open", options]),
+      close: async () => window.logCalls.push(["close"]),
+      setSignals: () => { throw Error("must not reset"); },
+      get writable() { throw Error("must not write"); },
+    });
+  });
+  await page.locator("#wifi-ssid").fill("log-test");
+  await page.locator("#prepare").click();
+  await page.locator("#logs-panel summary").click();
+  await page.locator("#connect-logs").click();
+  await expect(page.locator("#logs-status")).toContainText("Reading logs");
+  await expect(page.locator("#install-action")).toBeDisabled();
+  await page.evaluate(() => window.pushLog("Wi-Fi association failed: AuthFail\nŁączę ponownie\n"));
+  await expect(page.locator("#log-output")).toContainText("Łączę ponownie");
+  const download = page.waitForEvent("download");
+  await page.locator("#save-logs").click();
+  expect(await readFile(await (await download).path(), "utf8")).toContain("AuthFail");
+  await page.evaluate(() => window.pushLog("z".repeat(70000)));
+  await expect.poll(() => page.locator("#log-output").textContent().then(s => s.length)).toBe(65536);
+  await page.locator("#disconnect-logs").click();
+  await expect(page.locator("#logs-status")).toContainText("USB disconnected");
+  await expect(page.locator("#install-action")).toBeEnabled();
+  expect(await page.evaluate(() => window.logCalls)).toEqual([["open", { baudRate: 115200, bufferSize: 8192 }], ["close"]]);
+  await page.locator("#clear-logs").click();
+  await expect(page.locator("#log-output")).toHaveText("");
+});
+
+test.describe("Polish browser preference", () => {
+  test.use({ locale: "pl-PL" });
+  test("starts in Polish and translates validation and connection failures", async ({ page }) => {
+    await prepare(page, { releaseFailures: 1 });
+    await expect(page.locator("html")).toHaveAttribute("lang", "pl");
+    await expect(page.locator("#group-name")).toHaveValue("Poranek");
+    await expect(page.locator("#release-state")).toHaveText("Aplikacja niedostępna");
+    await expect(page.locator("#status")).toContainText("Nie udało się wczytać");
+    await page.locator("#retry-release").click();
+    await expect(page.locator("#prepare")).toBeEnabled();
+    await page.locator("#wifi-ssid").fill("test-network");
+    await page.locator("#wifi-password").fill("short");
+    await page.locator("#prepare").click();
+    await expect(page.locator("#status")).toContainText("Hasło Wi-Fi musi mieć");
+    await page.locator(".masthead [data-language=en]").click();
+    await expect(page.locator("#status")).toContainText("8–63 byte Wi-Fi password");
+    await expect(page.locator("#group-name")).toHaveValue("Poranek");
+  });
+});
+
+test("unavailable browser storage keeps editing and language switching usable", async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, "localStorage", { get() { throw new DOMException("blocked", "SecurityError"); } }));
+  await prepare(page);
+  await page.locator("#group-name").fill("Still editable");
+  await page.locator("#wifi-ssid").fill("still-private");
+  await expect(page.locator("#storage-status")).toContainText("could not save settings");
+  await page.locator(".masthead [data-language=pl]").click();
+  await expect(page.locator("html")).toHaveAttribute("lang", "pl");
+  await expect(page.locator("#wifi-ssid")).toHaveValue("still-private");
+  await expect(page.locator("#group-name")).toHaveValue("Still editable");
+  await expect(page.locator("#storage-status")).toContainText("nie mogła zapisać");
+});
+
+test("forget removes credentials even when storage rejects preference writes", async ({ page }) => {
+  await prepare(page);
+  await page.locator("#wifi-ssid").fill("erase-private-network");
+  await page.locator("#wifi-password").fill("erase-private-password");
+  await page.evaluate(() => {
+    Storage.prototype.setItem = () => { throw new DOMException("full", "QuotaExceededError"); };
+  });
+  await page.locator("#forget-settings").click();
+  expect(await page.evaluate(() => localStorage.getItem("timetable.settings.v1"))).toBeNull();
+  await page.reload();
+  await expect(page.locator("#wifi-password")).toHaveValue("");
+  await expect(page.locator("#wifi-ssid")).toHaveValue("");
+});
+
+test("disconnect waits for a pending USB open before enabling installation", async ({ page }) => {
+  await prepare(page);
+  await page.evaluate(() => {
+    window.logCalls = [];
+    navigator.serial.requestPort = async () => ({
+      open: () => new Promise(resolve => { window.finishUsbOpen = resolve; }),
+      close: async () => window.logCalls.push("close"),
+    });
+  });
+  await page.locator("#wifi-ssid").fill("log-test");
+  await page.locator("#prepare").click();
+  await page.locator("#logs-panel summary").click();
+  await page.locator("#connect-logs").click();
+  await expect.poll(() => page.evaluate(() => typeof window.finishUsbOpen)).toBe("function");
+  await page.locator("#disconnect-logs").click();
+  await expect(page.locator("#logs-status")).toHaveText("Closing USB port…");
+  await expect(page.locator("#install-action")).toBeDisabled();
+  await expect(page.locator("#connect-logs")).toBeDisabled();
+  await page.evaluate(() => window.finishUsbOpen());
+  await expect(page.locator("#install-action")).toBeEnabled();
+  await expect(page.locator("#logs-status")).toContainText("USB disconnected");
+  expect(await page.evaluate(() => window.logCalls)).toEqual(["close"]);
 });

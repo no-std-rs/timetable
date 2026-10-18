@@ -363,3 +363,17 @@ guard recognizes the pinned compiler's outlined HTTP request frame as well as
 the previous timeout frame, summing both if present. Its limits are unchanged;
 both current and boot-fixed base ELFs pass, and the original overflowing ELF
 still fails. These are compiler/linker checks, not physical RAM high-water data.
+
+## Connection diagnostics
+
+Stage and failure-reason logging adds **544 B** of static RAM to the freshness
+release, built with the same pinned Rust 1.95.0 release toolchain. The
+[linked report](benchmarks/device-diagnostics-ram.json) records **273,148 B**
+static including the unchanged 64 KiB heap; the unchanged minimum 24 KiB stack
+reserve gives **297,724 B**, below the unchanged 300,000-byte ceiling. The full
+linked account remains **324,604 B** including all 51,456 bytes available for
+stack. The [stack audit](benchmarks/device-diagnostics-stack.json) still bounds
+the named TLS path at 44,032 B plus 4,096 B headroom. Parser capacities, runtime
+buffers and connection policy are unchanged. Physical peak RAM, cold boot and
+Wi-Fi connectivity remain unmeasured; log-stage coverage does not prove a
+physical connection issue has been fixed.
