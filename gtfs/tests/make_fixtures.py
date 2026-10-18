@@ -1,5 +1,6 @@
 """Reproduce tiny synthetic feeds; no network or real timetable data required."""
 import io
+import struct
 from pathlib import Path
 import zipfile
 import zlib
@@ -40,6 +41,32 @@ archive("no-stop-times.zip", {k:v for k,v in FILES.items() if k != "stop_times.t
 archive("no-calendar.zip", {k:v for k,v in FILES.items() if k not in ["calendar.txt", "calendar_dates.txt"]})
 archive("shuffled.zip", {k:FILES[k] for k in ["trips.txt", "calendar_dates.txt", "stop_times.txt", "routes.txt", "calendar.txt", "stops.txt", "shapes.txt"]})
 archive("changed-trips.zip", {k:(v.replace("4,ALL,T_A", "5,ALL,T_A") if k == "trips.txt" else v) for k,v in FILES.items()})
+
+# Match Poznan's Info-ZIP local flags=7 (mtime/atime/ctime) and central
+# flags=7 containing only mtime. The central format refers to the LOCAL flags.
+out = io.BytesIO()
+with zipfile.ZipFile(out, "w") as z:
+    for i, name in enumerate(["routes.txt", "stops.txt", "unused.bin"]):
+        info = zipfile.ZipInfo(name, date_time=(2026, 10, 17, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        stamp = 1791964800 + i * 60
+        info.extra = struct.pack("<HHBiii", 0x5455, 13, 7, stamp, stamp, stamp)
+        z.writestr(info, FILES.get(name, "ignored"))
+data = out.getvalue()
+start = int.from_bytes(data[-6:-2], "little")
+central = bytearray()
+cursor = start
+for _ in range(3):
+    header = bytearray(data[cursor:cursor + 46])
+    name_len, extra_len, comment_len = struct.unpack_from("<HHH", header, 28)
+    name = data[cursor + 46:cursor + 46 + name_len]
+    extra = data[cursor + 46 + name_len:cursor + 46 + name_len + extra_len]
+    struct.pack_into("<H", header, 30, 9)
+    central += header + name + struct.pack("<HH", 0x5455, 5) + extra[4:9]
+    cursor += 46 + name_len + extra_len + comment_len
+end = bytearray(data[cursor:])
+struct.pack_into("<I", end, 12, len(central))
+(ROOT / "timestamps.zip").write_bytes(data[:start] + central + end)
 
 # This four-byte CRC preimage exercises a legal ambiguity in data descriptors.
 marker_crc_payload = bytes.fromhex("ac0a7ad5")

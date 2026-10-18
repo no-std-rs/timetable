@@ -56,6 +56,89 @@ impl<R: Read> Read for Forward<R> {
 }
 
 #[test]
+fn source_timestamps_are_optional_and_published_only_after_archive_validation() {
+    block_on(async {
+        let data = include_bytes!("fixtures/timestamps.zip");
+        let mut workspace = zip::Workspace::new();
+        let expected = 1791964860; // newest recognized table; ignore unused.bin
+        let mut entries = [zip::VerificationSlot::EMPTY; 3];
+        let verified = zip::verify(
+            Forward(Memory::new(data, 1)),
+            &mut workspace,
+            &mut [0; 17],
+            &mut entries,
+        )
+        .await
+        .unwrap();
+        assert_eq!(verified.updated_at(), Some(expected));
+        async fn scan(data: &[u8]) -> Result<zip::Manifest, Error> {
+            let mut workspace = zip::Workspace::new();
+            stream::scan(
+                Forward(Memory::new(data, 1)),
+                &[],
+                None,
+                &mut workspace,
+                |_| Ok(()),
+            )
+            .await
+        }
+        let manifest = scan(data.as_slice()).await.unwrap();
+        assert_eq!(manifest.updated_at(), Some(expected));
+        let directory = zip::Directory::read(&mut Memory::new(data, 3), &mut [0; 64])
+            .await
+            .unwrap();
+        // Recompression and timestamp changes do not change table identity.
+        let indexed = zip::Manifest::from_directory(&directory);
+        assert_eq!(indexed.updated_at(), None);
+        manifest.check(&indexed).unwrap();
+        assert!(scan(&data[..data.len() - 1]).await.is_err());
+
+        let extras: Vec<_> = data
+            .windows(9)
+            .enumerate()
+            .filter_map(|(i, b)| (b[..5] == [0x55, 0x54, 5, 0, 7]).then_some(i))
+            .collect();
+        assert_eq!(extras.len(), 3);
+        for (offset, value) in [(0, 0x56), (2, 4), (2, 20), (4, 6), (4, 0x81)] {
+            let mut malformed = data.to_vec();
+            malformed[extras[0] + offset] = value;
+            assert_eq!(scan(&malformed).await.unwrap().updated_at(), None);
+        }
+        let mut unrelated = data.to_vec();
+        unrelated[extras[2] + 4] = 0; // unknown file cannot spoil GTFS metadata
+        assert_eq!(scan(&unrelated).await.unwrap().updated_at(), Some(expected));
+        let mut duplicate = data.to_vec();
+        let central = duplicate
+            .windows(4)
+            .position(|b| b == b"PK\x01\x02")
+            .unwrap();
+        duplicate[central + 30..central + 32].copy_from_slice(&18_u16.to_le_bytes());
+        duplicate.splice(
+            extras[0] + 9..extras[0] + 9,
+            data[extras[0]..extras[0] + 9].iter().copied(),
+        );
+        let size_offset = duplicate.len() - 10;
+        let size = u32::from_le_bytes(duplicate[size_offset..size_offset + 4].try_into().unwrap());
+        duplicate[size_offset..size_offset + 4].copy_from_slice(&(size + 9).to_le_bytes());
+        assert_eq!(scan(&duplicate).await.unwrap().updated_at(), None);
+        let mut signed = data.to_vec();
+        for extra in &extras {
+            signed[extra + 5..extra + 9].copy_from_slice(&(-1_i32).to_le_bytes());
+        }
+        assert_eq!(scan(&signed).await.unwrap().updated_at(), Some(-1));
+        assert_eq!(scan(FIXTURE).await.unwrap().updated_at(), None);
+
+        let mut corrupt = data.to_vec();
+        *corrupt.last_mut().unwrap() = 1; // truncated EOCD comment
+        let mut archive = zip::Reader::new(Forward(Memory::new(&corrupt, 1)), &mut workspace);
+        while archive.next_entry().await.unwrap().is_some() {}
+        assert_eq!(archive.updated_at(), None);
+        assert!(archive.finish_archive(&manifest).await.is_err());
+        assert_eq!(archive.updated_at(), None);
+    });
+}
+
+#[test]
 fn cache_verification_checks_all_payloads_before_accepting_the_archive() {
     block_on(async {
         let mut workspace = zip::Workspace::new();

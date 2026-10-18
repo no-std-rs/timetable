@@ -100,12 +100,20 @@ pub trait Operation {
 
 pub struct Http(pub Stack<'static>);
 impl Http {
-    pub async fn get(&self, url: &str, operation: &mut impl Operation) -> Result<(), Error> {
+    pub async fn get(
+        &self,
+        url: &str,
+        operation: &mut impl Operation,
+    ) -> Result<Option<i64>, Error> {
         with_timeout(Duration::from_secs(300), self.request(url, operation))
             .await
             .map_err(|_| Error::Network)?
     }
-    async fn request(&self, url: &str, operation: &mut impl Operation) -> Result<(), Error> {
+    async fn request(
+        &self,
+        url: &str,
+        operation: &mut impl Operation,
+    ) -> Result<Option<i64>, Error> {
         if now().is_none() {
             return Err(Error::Clock);
         }
@@ -166,7 +174,12 @@ impl Http {
                 return Err(Error::Http);
             }
         }
-        operation.read(response.body().reader()).await
+        let modified = timetable_display::freshness::source_modified(
+            response.headers(),
+            now().ok_or(Error::Clock)?,
+        );
+        operation.read(response.body().reader()).await?;
+        Ok(modified)
     }
 }
 

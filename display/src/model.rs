@@ -64,6 +64,7 @@ pub enum Screen {
     Routes,
     Stops,
     Walk,
+    Freshness,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +93,7 @@ pub struct App {
     pub sleep_failed: bool,
     pub clock: Option<i64>,
     pub loaded_at: Option<i64>,
+    pub freshness: crate::freshness::Freshness,
     pub departures: Departures,
     pub headsigns: Headings,
 }
@@ -112,6 +114,7 @@ impl Default for App {
             sleep_failed: false,
             clock: None,
             loaded_at: None,
+            freshness: crate::freshness::Freshness::default(),
             departures: Departures::new(0),
             headsigns: Headings::default(),
         }
@@ -164,6 +167,10 @@ impl App {
         self.departures = events;
         self.headsigns = headsigns;
         self.loaded_at = Some(now);
+        self.freshness = crate::freshness::Freshness {
+            checked_at: Some(now),
+            source_updated_at: None,
+        };
         self.status = Status::Ready;
     }
 

@@ -1,0 +1,26 @@
+{
+  "target": "riscv32imc-unknown-none-elf",
+  "sections": {
+    ".trap": 1588,
+    ".rwtext": 3756,
+    ".rwtext.wifi": 33768,
+    ".data": 53292,
+    ".data.wifi": 496,
+    ".bss": 175608,
+    ".noinit": 0,
+    ".rtc_fast.text": 0,
+    ".rtc_fast.data": 0,
+    ".rtc_fast.bss": 0,
+    ".rtc_fast.persistent": 4096
+  },
+  "static_bytes_including_65536_byte_heap": 272604,
+  "stack_available_bytes": 52000,
+  "stack_reserve_bytes": 24576,
+  "budgeted_bytes": 297180,
+  "budgeted_bytes_scope": "static plus minimum stack reserve; not a runtime peak",
+  "full_linked_ram_bytes": 324604,
+  "limit_bytes": 400000,
+  "regression_limit_bytes": 300000,
+  "fits": true,
+  "hardware_high_water_measured": false
+}

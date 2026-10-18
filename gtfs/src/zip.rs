@@ -98,11 +98,13 @@ pub struct Fingerprint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Manifest {
     tables: [Option<Fingerprint>; Table::COUNT],
+    updated_at: Option<i64>,
 }
 
 impl Manifest {
     pub const EMPTY: Self = Self {
         tables: [None; Table::COUNT],
+        updated_at: None,
     };
     pub fn from_directory(directory: &Directory) -> Self {
         let mut result = Self::EMPTY;
@@ -114,12 +116,23 @@ impl Manifest {
     pub fn get(&self, table: Table) -> Option<Fingerprint> {
         self.tables[table as usize]
     }
+    /// Latest UTC modification time among recognized GTFS tables, from central
+    /// Info-ZIP UT fields. Unknown if any table lacks valid metadata. Available
+    /// after a complete forward scan/verification; directory-only indexes omit it.
+    /// This advisory metadata is separate from uncompressed snapshot identity.
+    pub fn updated_at(&self) -> Option<i64> {
+        self.updated_at
+    }
+    pub(crate) fn set_updated_at(&mut self, updated_at: Option<i64>) {
+        self.updated_at = updated_at;
+    }
     pub(crate) fn record(&mut self, table: Table, fingerprint: Fingerprint) -> Result<(), Error> {
         if self.tables[table as usize].replace(fingerprint).is_some() {
             return Err(Error::DuplicateTable(table));
         }
         Ok(())
     }
+    /// Compare uncompressed table identities, independently of advisory times.
     pub fn check(&self, other: &Self) -> Result<(), Error> {
         for table in Table::ALL {
             if self.get(table) != other.get(table) {
@@ -187,6 +200,7 @@ pub async fn verify<R: Read>(
     archive
         .finish_archive_checked(&observed, Some(&mut entries[..count]))
         .await?;
+    observed.set_updated_at(archive.updated_at);
     Ok(observed)
 }
 
@@ -214,6 +228,7 @@ pub struct Reader<'a, R> {
     tail: u32,
     footer_finished: bool,
     next_signature: Option<u32>,
+    updated_at: Option<i64>,
 }
 
 impl<'a, R: Read> Reader<'a, R> {
@@ -239,6 +254,7 @@ impl<'a, R: Read> Reader<'a, R> {
             tail: 0,
             footer_finished: false,
             next_signature: None,
+            updated_at: None,
         }
     }
 
@@ -249,6 +265,11 @@ impl<'a, R: Read> Reader<'a, R> {
     /// Includes sizes/CRC discovered from a data descriptor after reading EOF.
     pub fn current_entry(&self) -> Option<Entry> {
         self.current
+    }
+
+    /// Source-provided table timestamp, only available after `finish_archive`.
+    pub fn updated_at(&self) -> Option<i64> {
+        self.updated_at
     }
 
     /// Decode only a member's compressed payload, e.g. a single HTTP range body.
@@ -468,6 +489,47 @@ impl<'a, R: Read> Reader<'a, R> {
         self.finish_archive_checked(observed, None).await
     }
 
+    // Central UT fields contain only mtime even when access/creation flag bits
+    // refer to the local header. Unsupported or malformed optional metadata is
+    // unknown, without rejecting otherwise supported ZIP payloads. No allocation
+    // proportional to extra-field length (which may be up to 65535 bytes).
+    async fn extended_timestamp(&mut self, mut remaining: u16) -> Result<Option<i64>, Error> {
+        let mut modified = None;
+        let mut seen = false;
+        let mut valid = true;
+        while remaining >= 4 {
+            let mut h = [0; 4];
+            self.exact(&mut h).await?;
+            remaining -= 4;
+            let length = u16_at(&h, 2);
+            if length > remaining {
+                self.discard(u64::from(remaining)).await?;
+                return Ok(None);
+            }
+            if u16_at(&h, 0) == 0x5455 {
+                valid &= !seen;
+                seen = true;
+                if length == 5 {
+                    let mut time = [0; 5];
+                    self.exact(&mut time).await?;
+                    if time[0] & 1 != 0 && time[0] & !7 == 0 {
+                        modified = Some(i64::from(u32_at(&time, 1) as i32));
+                    } else {
+                        valid = false;
+                    }
+                } else {
+                    valid = false;
+                    self.discard(u64::from(length)).await?;
+                }
+            } else {
+                self.discard(u64::from(length)).await?;
+            }
+            remaining -= length;
+        }
+        self.discard(u64::from(remaining)).await?;
+        Ok(modified.filter(|_| valid && remaining == 0))
+    }
+
     async fn finish_archive_checked(
         &mut self,
         observed: &Manifest,
@@ -481,6 +543,8 @@ impl<'a, R: Read> Reader<'a, R> {
         }
         let directory_start = self.position - 4;
         let mut directory = Manifest::EMPTY;
+        let mut newest = None::<i64>;
+        let mut complete = true;
         let mut count = 0u32;
         let mut signature = self.tail;
         while signature == CENTRAL {
@@ -519,7 +583,8 @@ impl<'a, R: Read> Reader<'a, R> {
                 }
                 slot.seen = true;
             }
-            if let Some(table) = Table::from_filename(&name[..name_len]) {
+            let table = Table::from_filename(&name[..name_len]);
+            if let Some(table) = table {
                 directory.record(
                     table,
                     Fingerprint {
@@ -531,8 +596,14 @@ impl<'a, R: Read> Reader<'a, R> {
             if u32_at(&h, 42) as u64 >= directory_start {
                 return Err(Error::InvalidZip);
             }
-            self.discard(u16_at(&h, 30) as u64 + u16_at(&h, 32) as u64)
-                .await?;
+            let modified = self.extended_timestamp(u16_at(&h, 30)).await?;
+            if table.is_some() {
+                complete &= modified.is_some();
+                if let Some(stamp) = modified {
+                    newest = Some(newest.map_or(stamp, |old| old.max(stamp)));
+                }
+            }
+            self.discard(u64::from(u16_at(&h, 32))).await?;
             count += 1;
             let mut sig = [0; 4];
             self.exact(&mut sig).await?;
@@ -573,6 +644,7 @@ impl<'a, R: Read> Reader<'a, R> {
             return Err(Error::InvalidZip);
         }
         self.footer_finished = true;
+        self.updated_at = newest.filter(|_| complete);
         Ok(())
     }
 }

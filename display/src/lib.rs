@@ -5,6 +5,7 @@ pub mod clock;
 pub mod config;
 pub mod departures;
 pub mod feed;
+pub mod freshness;
 pub mod model;
 pub mod render;
 pub mod ui;

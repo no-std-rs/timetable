@@ -12,7 +12,8 @@ chilli red for the main action and departure urgency.
 [Mobile installer preview](../docs/previews/installer-mobile.png) ·
 [Searchable stop picker](../docs/previews/installer-picker-mobile.png) ·
 [Device editor](../docs/previews/device-walk.png) ·
-[Offline board with retry](../docs/previews/device-offline.png).
+[Offline board with retry](../docs/previews/device-offline.png) ·
+[Check and source timestamps](../docs/previews/device-freshness.png).
 These previews use illustrative departures; the device image comes from the
 actual Rust renderer, not a photo of hardware.
 
@@ -50,8 +51,16 @@ On the display:
 - **Swipe left/right:** change group, overriding automatic selection for two hours.
 - **Tap the heading:** choose a group or return to the automatic schedule.
 - **Hold the screen:** edit the current group. Tap a saved choice or “Add”.
-- **Tap an offline/failed footer:** retry the update while keeping cached times.
+- **Tap an offline/failed status above the departures:** retry while keeping cached times.
   Holding still opens the editor. A capacity error asks you to edit the selection.
+- **Tap the footer:** see the last successful check and source file update times.
+  `Chk14:32 Src15/10` keeps the board compact; older checks show their date.
+  Details include year/time in Poznań and a retry action after a failed update.
+  `Src` uses HTTP Last-Modified, falling back to the newest recognized GTFS
+  table's UTC Info-ZIP timestamp after archive validation. ZTM's PHP endpoint
+  currently needs this fallback. With multiple archives, the oldest source wins.
+  If either metadata path is unavailable or invalid, the source is unknown.
+  Service dates and response Date headers never substitute for source metadata.
 - **Choose a line and stop:** swipe vertically or tap the bottom arrows for more.
   The stop page's bottom-centre control cycles either direction / 0 / 1.
 - **Adjust your walk:** left/right decrements/increments walking time, its
@@ -121,10 +130,10 @@ epoch; access reconstructs full `i64` timestamps, including after 2038.
 TLS borrows its verifier and connection instead of moving large async state.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **296,996 B**,
+excluded. The static-plus-minimum-stack regression account is **297,180 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 52,184 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 52,000 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual

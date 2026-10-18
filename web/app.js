@@ -56,6 +56,7 @@ function preview() {
   $("preview-group").textContent = g.name || "Your group";
   $("preview-journey").hidden = !p;
   $("preview-empty").hidden = !!p;
+  $("preview-freshness").hidden = !p;
   $("preview-mode").textContent = p ? `09:41 / ${state.automatic && g.days ? "SCHEDULED" : "MANUAL"}` : "YOUR GROUP / NO STOPS";
   if (!p) return;
   $("preview-line").textContent = p.line;

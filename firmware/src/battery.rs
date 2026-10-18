@@ -9,9 +9,21 @@ pub const IDLE_SECONDS: u64 = 30;
 pub const REFRESH_SECONDS: u64 = 3 * 3600;
 pub const RETRY_SECONDS: u64 = 5 * 60;
 pub const RETAINED_BYTES: usize = 4096;
-const HEADER: usize = 80;
-const MAGIC: &[u8; 8] = b"TTSLEEP1";
+const HEADER: usize = 96;
+const MAGIC: &[u8; 8] = b"TTSLEEP2";
 const UNKNOWN_TIME: i64 = i64::MIN;
+
+fn valid_freshness(
+    loaded: Option<i64>,
+    freshness: timetable_display::freshness::Freshness,
+) -> bool {
+    !freshness.checked_at.is_some_and(|t| {
+        timetable_display::clock::warsaw(t).is_none() || loaded.is_none_or(|epoch| t < epoch)
+    }) && !freshness.source_updated_at.is_some_and(|t| {
+        timetable_display::clock::warsaw(t).is_none()
+            || freshness.checked_at.is_none_or(|check| t > check)
+    })
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -86,7 +98,10 @@ pub fn save(
     refresh_in_us: u64,
 ) -> Result<(), Error> {
     image.fill(0);
-    if tick_period == 0 || refresh_in_us > REFRESH_SECONDS * 1_000_000 {
+    if tick_period == 0
+        || refresh_in_us > REFRESH_SECONDS * 1_000_000
+        || !valid_freshness(app.loaded_at, app.freshness)
+    {
         return Err(Error::Invalid);
     }
     let epoch = app.loaded_at.or(app.clock).unwrap_or(0);
@@ -96,6 +111,18 @@ pub fn save(
     image[24..32].copy_from_slice(&utc_micros.unwrap_or(UNKNOWN_TIME).to_le_bytes());
     image[32..40].copy_from_slice(&refresh_in_us.to_le_bytes());
     image[40..48].copy_from_slice(&app.loaded_at.unwrap_or(UNKNOWN_TIME).to_le_bytes());
+    image[80..88].copy_from_slice(
+        &app.freshness
+            .checked_at
+            .unwrap_or(UNKNOWN_TIME)
+            .to_le_bytes(),
+    );
+    image[88..96].copy_from_slice(
+        &app.freshness
+            .source_updated_at
+            .unwrap_or(UNKNOWN_TIME)
+            .to_le_bytes(),
+    );
     image[48..56].copy_from_slice(&app.manual_until.to_le_bytes());
     image[56..64].copy_from_slice(&epoch.to_le_bytes());
     image[64] = app.group.try_into().map_err(|_| Error::Invalid)?;
@@ -189,6 +216,17 @@ pub fn restore(
         return Err(Error::Invalid);
     }
     let loaded_at = (i64_at(40) != UNKNOWN_TIME).then(|| i64_at(40));
+    let checked_at = (i64_at(80) != UNKNOWN_TIME).then(|| i64_at(80));
+    let source_updated_at = (i64_at(88) != UNKNOWN_TIME).then(|| i64_at(88));
+    if !valid_freshness(
+        loaded_at,
+        timetable_display::freshness::Freshness {
+            checked_at,
+            source_updated_at,
+        },
+    ) {
+        return Err(Error::Invalid);
+    }
     let manual_until = i64_at(48);
     let epoch = i64_at(56);
     let group = usize::from(image[64]);
@@ -268,6 +306,10 @@ pub fn restore(
     app.publish(events, names, epoch);
     app.clock = now;
     app.loaded_at = loaded_at;
+    app.freshness = timetable_display::freshness::Freshness {
+        checked_at,
+        source_updated_at,
+    };
     app.group = group;
     app.manual_until = manual_until;
     app.status = status;
