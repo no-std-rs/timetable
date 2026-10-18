@@ -136,7 +136,7 @@ function renderGroup() {
       g.days ^= 1 << i;
       renderGroup();
       changed();
-      $("days").children[i].focus();
+      (g.days ? $("days").children[i] : $("scheduled")).focus();
     });
     $("days").append(b);
   });

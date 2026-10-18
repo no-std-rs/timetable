@@ -254,4 +254,17 @@ test("weekday toggles keep keyboard focus and serialize the chosen days", async 
     return JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 24, new DataView(bytes).getUint32(12, true)))).groups[0].days;
   });
   expect(days).toBe(28);
+  await page.getByRole("button", { name: "Wednesday", exact: true }).focus();
+  for (const day of ["Wednesday", "Thursday", "Friday"]) {
+    await expect(page.getByRole("button", { name: day, exact: true })).toBeFocused();
+    await page.keyboard.press("Space");
+    if (day !== "Friday") await page.keyboard.press("Tab");
+  }
+  await expect(page.locator("#scheduled")).not.toBeChecked();
+  await expect(page.locator("#schedule")).toBeHidden();
+  await expect(page.locator("#scheduled")).toBeFocused();
+  await expect(page.locator("#install-area")).toBeHidden();
+  await page.keyboard.press("Space");
+  await expect(page.locator("#scheduled")).toBeChecked();
+  await expect(page.locator("#schedule")).toBeVisible();
 });
