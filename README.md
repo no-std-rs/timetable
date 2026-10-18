@@ -3,10 +3,12 @@
 A Cargo workspace for allocation-free, `no_std` public transport timetable
 libraries.
 
-The [`timetable-display`](display/) crate adds bounded departure groups, walking
-estimates, a flash catalogue and a touch UI for a 240×240 round screen. It runs
-without a standard library or allocator. Hardware and installer integration
-follow in a separate PR.
+The [USB installer](https://no-std-rs.github.io/timetable/) and [round-screen app](firmware/README.md) run on the GUITION
+ESP32-C3 display. Set up named groups of lines and stops, choose walking times,
+and switch groups by touch or an optional time-of-day schedule. The
+[`timetable-display`](display/) crate contains its allocation-free model,
+streaming query builder and tile renderer; [`web/`](web/) contains the matching
+porcelain, gold and chilli-red installer.
 
 The [`gtfs`](gtfs/) crate streams GTFS ZIP archives, lists routes and stops, and
 filters departures with caller-owned buffers. Poznań is the first verified
@@ -48,7 +50,8 @@ TLS, stack, tile and retained-app reserves. The benchmark checks that parsing
 allocates no heap memory. Normal tests
 use synthetic fixtures and need no live transit feeds.
 
-Preview the actual Rust renderer without hardware:
+For the device and installer checks, see [firmware](firmware/README.md) and
+[web](web/README.md). Preview the actual Rust renderer without hardware:
 
 ```sh
 cargo run -p timetable-display --example preview -- /tmp/timetable-preview.ppm

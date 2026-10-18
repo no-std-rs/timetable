@@ -1,8 +1,9 @@
 # timetable-display
 
 Allocation-free, `no_std` application model, GTFS selection builder, flash
-catalogue reader and 240×240 tile renderer. Hardware and networking adapters are separate from this crate. A companion
-firmware and browser installer are introduced by a following PR.
+catalogue reader and 240×240 tile renderer. Hardware and networking live in
+[`../firmware`](../firmware/README.md); the browser installer lives in
+[`../web`](../web/README.md).
 
 The four group slots each contain up to four line/stop choices. Each choice has
 an optional direction filter, walking time, walking variation and boarding
@@ -42,7 +43,8 @@ validated snapshot survives a failed background refresh.
 
 The settings protocol is versioned, bounded to 8 KiB, and CRC-protected over
 generation, length and JSON. Firmware alternates two flash banks and verifies
-the new bank before considering it committed. The committed wire fixture is shared with the companion browser encoder.
+the new bank before considering it committed. `config.rs` and `web/config.js`
+implement the same format.
 
 ```sh
 cargo test -p timetable-display --all-targets --locked
