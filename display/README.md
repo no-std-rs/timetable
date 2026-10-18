@@ -35,6 +35,11 @@ removals), a 1 KiB shared headsign buffer and
 512 departure slots. Capacity failures are errors. IDs are never shortened;
 display labels may be clipped to the screen's supported Latin-2 font.
 
+The editor keeps the selected route and stop page, highlights the saved choice,
+and uses stepwise Back navigation without committing drafts. The catalogue is
+still read from flash. Validated, ordered route links use binary range lookup;
+catalogues with unordered links retain the linear fallback.
+
 Callbacks and new query results remain provisional until footer and snapshot
 validation finish. Error or cancellation rolls back the current departure pass.
 Firmware swaps results into the visible app only after the entire refresh

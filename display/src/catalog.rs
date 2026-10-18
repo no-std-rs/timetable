@@ -12,6 +12,7 @@ pub struct Catalog<'a> {
     routes: usize,
     stops: usize,
     links: usize,
+    sorted_links: bool,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Route<'a> {
@@ -55,11 +56,12 @@ impl<'a> Catalog<'a> {
         {
             return None;
         }
-        let result = Self {
+        let mut result = Self {
             bytes,
             routes,
             stops,
             links,
+            sorted_links: true,
         };
         for i in 0..routes {
             let r = result.route(i)?;
@@ -72,6 +74,7 @@ impl<'a> Catalog<'a> {
                 return None;
             }
         }
+        let mut previous_route = 0;
         for link in bytes[HEADER + routes * ROUTE + stops * STOP..]
             .as_chunks::<LINK>()
             .0
@@ -83,6 +86,9 @@ impl<'a> Catalog<'a> {
             {
                 return None;
             }
+            let route = word(link, 0);
+            result.sorted_links &= route >= previous_route;
+            previous_route = route;
         }
         Some(result)
     }
@@ -124,19 +130,22 @@ impl<'a> Catalog<'a> {
         route: usize,
         direction: i8,
     ) -> impl Iterator<Item = (usize, Stop<'a>)> + '_ {
-        self.bytes[HEADER + self.routes * ROUTE + self.stops * STOP..]
+        let mut links = self.bytes[HEADER + self.routes * ROUTE + self.stops * STOP..]
             .as_chunks::<LINK>()
-            .0
-            .iter()
-            .take(self.links)
-            .filter_map(move |b| {
-                if word(b, 0) != route
-                    || (direction >= 0 && (direction > 1 || b[4] & (1 << direction) == 0))
-                {
-                    return None;
-                }
-                let index = word(b, 2);
-                Some((index, self.stop(index)?))
-            })
+            .0;
+        if self.sorted_links {
+            let start = links.partition_point(|link| word(link, 0) < route);
+            let count = links[start..].partition_point(|link| word(link, 0) == route);
+            links = &links[start..start + count];
+        }
+        links.iter().take(self.links).filter_map(move |b| {
+            if word(b, 0) != route
+                || (direction >= 0 && (direction > 1 || b[4] & (1 << direction) == 0))
+            {
+                return None;
+            }
+            let index = word(b, 2);
+            Some((index, self.stop(index)?))
+        })
     }
 }

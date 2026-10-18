@@ -28,6 +28,8 @@
           <div class="device-face" id="preview" aria-label="Illustration of your timetable display">
             <svg class="gold-seam" viewBox="0 0 240 240" aria-hidden="true"><path d="m204 21-11 16 9 12 26 7"/></svg>
             <button class="preview-group" id="preview-group" title="Preview the next group">Morning</button>
+            <div id="preview-empty" class="preview-empty"><strong>Make it yours.</strong><span>Add a line and stop below.</span></div>
+            <div id="preview-journey" class="preview-journey" hidden>
             <div class="device-first"><span class="line-badge" id="preview-line">4</span><span class="device-arrival"><strong id="preview-minutes">12</strong><small>min</small></span></div>
             <div class="device-direction" id="preview-direction">Górczyn PKM</div>
             <div class="device-stop" id="preview-stop">Most Teatralny</div>
@@ -35,7 +37,8 @@
             <div class="device-walk" id="preview-walk">6m walk · 100% walk est.</div>
             <div class="device-next"><span id="preview-next-line">12 · Starołęka PKM</span><b>21m</b></div>
             <div class="device-next"><span id="preview-last-line">4 · Górczyn PKM</span><b>28m</b></div>
-            <div class="device-footer"><i></i>09:41 / SCHEDULED</div>
+            </div>
+            <div class="device-footer"><i></i><span id="preview-mode">YOUR GROUP / NO STOPS</span></div>
           </div>
         </div>
         <figcaption>Illustrative times. The device reads the official timetable.</figcaption>
@@ -48,15 +51,19 @@
         <div class="section-heading"><span class="step">01</span><div><h2 id="groups-title">The places you go.</h2><p>Keep different stops and directions together. Switch by touch, or by time of day.</p></div></div>
         <div class="card groups-card">
           <svg class="card-seam" viewBox="0 0 100 70" aria-hidden="true"><path d="m86 0-8 19 7 13-20 13 2 25"/></svg>
-          <div class="group-tabs" id="group-tabs" role="tablist" aria-label="Departure groups"></div>
+          <div class="group-switcher"><div class="group-tabs" id="group-tabs" role="tablist" aria-label="Departure groups"></div><button type="button" id="add-group" class="add-group" aria-label="Add group">+</button></div>
+          <div id="group-panel" role="tabpanel" aria-labelledby="group-tab-0">
           <div class="group-toolbar"><label class="name-label" for="group-name">Group name<input id="group-name" maxlength="24" value="Morning" required></label><button type="button" id="remove-group" class="text-button danger">Remove group</button></div>
+          <div id="undo-area" class="undo-notice" role="status" hidden><span id="undo-message"></span><button type="button" id="undo-removal" class="text-button">Undo</button></div>
           <div class="picks" id="picks"></div>
-          <button type="button" id="add-pick" class="add-pick"><span>+</span> Add a line &amp; stop</button>
+          <p id="catalog-feedback" class="fine-print" role="status">Loading line and stop choices…</p><button type="button" id="retry-catalog" class="text-button" hidden>Retry route choices</button>
+          <button type="button" id="add-pick" class="add-pick" disabled><span>+</span> Add a line &amp; stop</button>
           <div class="schedule-toggle"><label><input type="checkbox" id="scheduled"> Use this group on a schedule</label><span>Poznań local time</span></div>
           <div id="schedule" class="schedule" hidden>
             <div id="days" class="days" role="group" aria-label="Days of week"></div>
             <label>From<input type="time" id="start-time" value="06:00" required></label><span class="time-to">to</span><label>Until<input type="time" id="end-time" value="11:00" required></label>
             <p class="fine-print">Overnight windows work too. If groups overlap, the first one wins. Touch can override a schedule for two hours.</p>
+          </div>
           </div>
           <div class="card-footer"><span>Up to 4 groups · 4 line/stop choices in each</span><button type="button" id="export-groups" class="text-button">Export groups ↗</button><label class="text-button import-label">Import<input type="file" id="import-groups" accept="application/json,.json" hidden></label></div>
         </div>
@@ -66,7 +73,7 @@
         <div class="section-heading"><span class="step">02</span><div><h2 id="wifi-title">A connection, then a little quiet.</h2><p>The display keeps its timetable nearby. Your Wi-Fi settings go straight to the device over USB.</p></div></div>
         <div class="card wifi-card">
           <label for="wifi-ssid">Wi-Fi name<input id="wifi-ssid" name="wifi_ssid" placeholder="Your 2.4 GHz network" required autocomplete="off"></label>
-          <label for="wifi-password">Password<span class="password-input"><input id="wifi-password" name="wifi_password" type="password" placeholder="Leave empty for an open network" autocomplete="new-password"><button type="button" id="show-password" aria-label="Show password">Show</button></span></label>
+          <label for="wifi-password">Password<span class="password-input"><input id="wifi-password" name="wifi_password" type="password" placeholder="Leave empty for an open network" autocomplete="new-password"><button type="button" id="show-password" aria-label="Show password" aria-pressed="false">Show</button></span></label>
           <p class="fine-print">Settings stay in this tab until you install. Nothing is uploaded or saved by this website.</p>
         </div>
       </section>
@@ -76,6 +83,7 @@
         <div class="card install-card">
           <div class="release-row"><span class="release-state" id="release-state"><i></i> Checking the latest build</span><a id="revision" class="quiet-link" hidden></a></div>
           <p id="status" role="status">Loading the installer…</p>
+          <button type="button" id="retry-release" class="text-button" hidden>Retry firmware download</button>
           <button id="prepare" type="submit" class="button primary" disabled>Prepare USB install <span aria-hidden="true">↗</span></button>
           <div id="install-area" hidden><esp-web-install-button id="installer"><button slot="activate" type="button" class="button primary">Install on display ↗</button><span slot="unsupported">Use desktop Chrome or Edge to install over USB.</span><span slot="not-allowed">Open this page over HTTPS or localhost to install.</span></esp-web-install-button></div>
           <div class="install-notes"><p>Desktop Chrome or Edge · GUITION ESP32-2424S012-V1.0 · 4 MB flash</p><p>Installation replaces the device’s firmware and saved settings. Wi-Fi settings are stored in its local flash.</p></div>
@@ -91,12 +99,16 @@
   <dialog id="pick-dialog" aria-labelledby="pick-title"><form id="pick-form" method="dialog">
     <div class="dialog-heading"><div><p class="eyebrow">ONE EVERYDAY JOURNEY</p><h2 id="pick-title">A line. A stop. Your pace.</h2></div><button type="button" id="cancel-pick" class="close-button" aria-label="Close">×</button></div>
     <p id="catalog-status" class="fine-print">Loading Poznań routes and stops…</p>
-    <div class="field-pair"><label>Line<select id="route-select" required></select></label><label>Direction<select id="direction-select"><option value="-1">Either direction</option></select></label></div>
-    <label>Stop<select id="stop-select" required></select></label>
+    <label class="search-label">Find a line<input type="search" id="route-search" placeholder="Line number or destination" aria-controls="route-select" autocomplete="off" spellcheck="false"></label>
+    <div class="field-pair"><label>Line<select id="route-select" required aria-describedby="route-results"></select></label><label>Towards<select id="direction-select"><option value="-1">Either direction</option></select></label></div>
+    <p id="route-results" class="picker-hint" role="status"></p>
+    <label class="search-label">Find a stop<input type="search" id="stop-search" placeholder="Stop name or platform code" aria-controls="stop-select" autocomplete="off" spellcheck="false"></label>
+    <label>Boarding stop<select id="stop-select" required aria-describedby="stop-results"></select></label>
+    <p id="stop-results" class="picker-hint" role="status"></p>
     <div class="walk-control"><label for="walk-minutes">Time to walk there<span>In minutes, at your usual pace.</span></label><input id="walk-minutes" type="number" min="0" max="60" value="6" required></div>
     <details class="estimate-details"><summary>Leave a little room</summary><div class="field-pair"><label>Walking variation ±<input type="number" id="walk-spread" min="0" max="15" value="1" required></label><label>Boarding buffer<input type="number" id="walk-margin" min="0" max="10" value="1" required></label></div><p class="fine-print">Minutes. The walking estimate uses this range; “leave in” includes your boarding buffer.</p></details>
     <p id="pick-error" role="alert" class="error" hidden></p>
-    <div class="dialog-footer"><button type="button" id="delete-pick" class="text-button danger" hidden>Remove choice</button><button type="submit" class="button primary">Save choice <span aria-hidden="true">↗</span></button></div>
+    <div class="dialog-footer"><button type="button" id="delete-pick" class="text-button danger" hidden>Remove choice</button><button type="submit" id="save-pick" class="button primary" disabled>Save choice <span aria-hidden="true">↗</span></button></div>
   </form></dialog>
 </body>
 </html>

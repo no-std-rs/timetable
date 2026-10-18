@@ -9,7 +9,9 @@ chilli red for the main action and departure urgency.
 ![Rust renderer preview](../docs/previews/device.png)
 
 [Desktop installer preview](../docs/previews/installer-desktop.png) ·
-[Mobile installer preview](../docs/previews/installer-mobile.png).
+[Mobile installer preview](../docs/previews/installer-mobile.png) ·
+[Searchable stop picker](../docs/previews/installer-picker-mobile.png) ·
+[Device editor](../docs/previews/device-walk.png).
 These previews use illustrative departures; the device image comes from the
 actual Rust renderer, not a photo of hardware.
 
@@ -18,9 +20,8 @@ actual Rust renderer, not a photo of hardware.
 The build workflow produces a `timetable-display` Actions artifact containing a
 verified merged factory binary and the complete static USB installer. Main
 builds deploy that installer through GitHub Pages. PRs build and test everything
-without deploying. The installer is intended for
-<https://no-std-rs.github.io/timetable/> once this change is merged and Pages is
-enabled for GitHub Actions.
+without deploying. The published installer is at
+<https://no-std-rs.github.io/timetable/>.
 
 In the installer, name your groups, choose lines, directions and stops, and set
 the walking time for each choice. Optionally schedule groups on selected days.
@@ -40,13 +41,18 @@ On the display:
   The stop page's bottom-centre control cycles either direction / 0 / 1.
 - **Adjust your walk:** left/right decrements/increments walking time, its
   variation and the boarding buffer. Save commits; the top back control cancels.
-  Tap the line/stop heading to change that choice. Remove deletes it.
+  Tap the line badge to change the line, or the stop label to change the stop.
+  The picker opens at the saved selection, highlights it and shows page counts.
+  The bottom-centre stop control shows a destination and skips directions with
+  no boarding stops. Back moves up one step; leaving the walk editor cancels its
+  draft. Remove deletes a saved choice; Cancel discards a new unsaved one.
 
 The next suitable scheduled departure is prominent; two later alternatives
 remain visible. “Leave in” includes the walking time and boarding buffer. The
 walking percentage uses your configured range and is explicitly an estimate,
-not real-time vehicle reliability. `*` means conditional boarding. Failed
-refreshes retain the last validated cache and show an offline indicator.
+not real-time vehicle reliability. `*` means conditional boarding.
+Walking estimates of zero show “Not enough walk time” instead of “Leave now”.
+Failed refreshes retain the last validated cache and show an offline indicator.
 “NOT SAVED” means a settings write failed; retry Save before restarting.
 
 The public image without a settings bank shows the USB setup screen and does

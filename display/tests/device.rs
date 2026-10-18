@@ -120,6 +120,113 @@ fn catalogue_is_read_from_flash_and_keeps_directional_stop_membership() {
 }
 
 #[test]
+fn catalogue_lookup_preserves_unsorted_link_support() {
+    let original = include_bytes!("fixtures/catalog.bin");
+    let sorted = Catalog::new(original).unwrap();
+    let mut bytes = original.to_vec();
+    let links = 32 + sorted.route_count() * 168 + sorted.stop_count() * 112;
+    for i in 0..6 {
+        bytes.swap(links + i, links + 6 + i);
+    }
+    let crc = config::crc32(&bytes[32..]);
+    bytes[24..28].copy_from_slice(&crc.to_le_bytes());
+    let unsorted = Catalog::new(&bytes).unwrap();
+    for route in 0..=sorted.route_count() {
+        for direction in [-1, 0, 1] {
+            let ids = |catalog: &Catalog<'_>| {
+                catalog
+                    .route_stops(route, direction)
+                    .map(|(i, _)| i)
+                    .collect::<std::vec::Vec<_>>()
+            };
+            assert_eq!(ids(&sorted), ids(&unsorted));
+        }
+    }
+}
+
+#[test]
+fn device_editing_keeps_the_current_choice_and_back_steps_without_saving() {
+    let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
+    let route = (0..catalog.route_count())
+        .find(|&i| catalog.route(i).unwrap().line == "4")
+        .unwrap();
+    let (_, stop) = catalog.route_stops(route, 0).nth(9).unwrap();
+    let mut c = settings();
+    let pick = &mut c.groups[0].picks[0];
+    pick.stop = stop.id.try_into().unwrap();
+    pick.stop_name = stop.name.try_into().unwrap();
+    pick.stop_code = stop.code.try_into().unwrap();
+    let original = c.clone();
+    let mut app = App::default();
+    ui::tap(&mut app, &mut c, &catalog, 120, 120, false);
+    assert_eq!(app.screen, Screen::Board);
+    ui::tap(&mut app, &mut c, &catalog, 120, 120, true);
+    ui::tap(&mut app, &mut c, &catalog, 120, 65, false);
+    assert_eq!(app.screen, Screen::Walk);
+    app.draft.as_mut().unwrap().walk = 8;
+    ui::tap(&mut app, &mut c, &catalog, 150, 48, false);
+    assert_eq!(app.screen, Screen::Stops);
+    assert_eq!(
+        (app.selected_route, app.direction, app.cursor),
+        (route, 0, 8)
+    );
+    ui::tap(&mut app, &mut c, &catalog, 45, 25, false);
+    assert_eq!(app.screen, Screen::Routes);
+    assert_eq!(app.cursor, route / 4 * 4);
+    ui::tap(&mut app, &mut c, &catalog, 45, 25, false);
+    assert_eq!(app.screen, Screen::Walk);
+    assert_eq!(app.draft.as_ref().unwrap().walk, 8);
+    ui::tap(&mut app, &mut c, &catalog, 45, 25, false);
+    assert_eq!(app.screen, Screen::Picks);
+    assert!(app.draft.is_none());
+    assert!(c == original);
+    // Cancelling a new choice requires no flash write.
+    ui::tap(&mut app, &mut c, &catalog, 120, 90, false);
+    assert_eq!(app.screen, Screen::Routes);
+    ui::tap(&mut app, &mut c, &catalog, 120, 65, false);
+    assert_eq!(app.screen, Screen::Stops);
+    ui::tap(&mut app, &mut c, &catalog, 120, 65, false);
+    assert_eq!(app.screen, Screen::Walk);
+    assert_eq!(
+        ui::tap(&mut app, &mut c, &catalog, 70, 201, false),
+        ui::Action::None
+    );
+    assert_eq!(app.screen, Screen::Picks);
+    assert!(c == original);
+}
+
+#[test]
+fn device_preselection_uses_the_saved_platform_when_an_id_is_reused() {
+    let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
+    let route = (0..catalog.route_count())
+        .find(|&i| catalog.route(i).unwrap().line == "4")
+        .unwrap();
+    let (_, desired) = catalog.route_stops(route, 0).next().unwrap();
+    let (_, reused) = catalog.route_stops(route, 0).nth(9).unwrap();
+    assert_ne!(desired.code, reused.code);
+    let mut c = settings();
+    let pick = &mut c.groups[0].picks[0];
+    pick.stop = reused.id.try_into().unwrap();
+    pick.stop_code = desired.code.try_into().unwrap();
+    pick.stop_name = desired.name.try_into().unwrap();
+    c.validate().unwrap();
+    let mut app = App::default();
+    ui::tap(&mut app, &mut c, &catalog, 120, 120, true);
+    ui::tap(&mut app, &mut c, &catalog, 120, 65, false);
+    ui::tap(&mut app, &mut c, &catalog, 150, 48, false);
+    assert_eq!(app.screen, Screen::Stops);
+    assert_eq!(app.cursor, 0);
+    ui::tap(&mut app, &mut c, &catalog, 120, 65, false);
+    assert_eq!(app.draft.as_ref().unwrap().stop, desired.id);
+    assert_eq!(app.draft.as_ref().unwrap().stop_code, desired.code);
+    assert_eq!(
+        ui::tap(&mut app, &mut c, &catalog, 150, 201, false),
+        ui::Action::Save { refresh: true }
+    );
+    assert_eq!(c.groups[0].picks[0].stop, desired.id);
+}
+
+#[test]
 fn editing_is_provisional_and_manual_groups_expire_after_two_hours() {
     let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
     let mut c = settings();

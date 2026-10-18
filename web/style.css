@@ -45,7 +45,7 @@
     --ceramic:#fbf9f3;
     --face:#f7eed5;
     --ink:#252b28;
-    --muted:#76786c;
+    --muted:#646b60;
     --gold:#b59563;
     --gold-pale:#ede1ca;
     --chilli:#b74432;
@@ -112,7 +112,7 @@
   }
   button:disabled {
     opacity: .45;
-    cursor: wait;
+    cursor: not-allowed;
   }
   h1,
   h2 {
@@ -431,6 +431,25 @@
     width: 100%;
     height: 53px;
   }
+  .preview-journey {
+    display: contents;
+  }
+  .preview-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .preview-empty strong {
+    color: var(--ink);
+    font-family: Georgia, serif;
+    font-weight: 400;
+    font-size: 23px;
+  }
   .line-badge {
     display: grid;
     place-items: center;
@@ -534,7 +553,14 @@
     gap: 8px;
     flex-wrap: wrap;
     position: relative;
-    padding-right: 40px;
+    flex: 1;
+    margin-bottom: 0;
+  }
+  .group-switcher {
+    display: flex;
+    align-items: start;
+    gap: 8px;
+    padding-right: 26px;
     margin-bottom: 29px;
   }
   .group-tab {
@@ -556,6 +582,8 @@
     font-size: 1rem;
     padding: 4px 10px;
     color: var(--muted);
+    min-width: 40px;
+    min-height: 40px;
   }
   .card-seam {
     position: absolute;
@@ -593,6 +621,35 @@
     padding: 24px;
     font-size: .8rem;
     margin-bottom: 12px;
+  }
+  .undo-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+    background: var(--gold-pale);
+    font-size: .8rem;
+  }
+  .picker-hint {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: .74rem;
+    min-height: 1.5em;
+  }
+  #pick-form .search-label {
+    gap: 6px;
+    margin-top: 18px;
+  }
+  #pick-form .search-label + .field-pair,
+  #pick-form .search-label + label {
+    margin-top: 10px;
+  }
+  #retry-release {
+    display: block;
+    margin-block: 10px;
   }
   .pick-row {
     display: flex;
@@ -793,6 +850,8 @@
     padding: 32px;
     background: var(--ceramic);
     color: var(--ink);
+    max-height: calc(100dvh - 32px);
+    scroll-padding-block: 16px 90px;
     box-shadow: 0 30px 100px #252b2833;
   }
   dialog::backdrop {
@@ -814,7 +873,10 @@
     font-size: 1.6rem;
     line-height: 1;
     color: var(--muted);
-    padding: 0 2px;
+    min-width: 40px;
+    min-height: 40px;
+    margin: -8px -8px 0 0;
+    padding: 0;
   }
   .field-pair {
     display: grid;
@@ -862,6 +924,12 @@
     align-items: center;
     justify-content: space-between;
     gap: 20px;
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    padding-block: 12px;
+    background: var(--ceramic);
+    border-top: 1px solid var(--line);
   }
   .dialog-footer > .button {
     margin-left: auto;
@@ -1097,6 +1165,9 @@
     }
     .field-pair {
       grid-template-columns: 1fr;
+    }
+    #pick-form > .field-pair {
+      grid-template-columns: minmax(80px, 1fr) minmax(0, 1.8fr);
     }
     .estimate-details .field-pair {
       grid-template-columns: 1fr 1fr;
