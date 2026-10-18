@@ -163,7 +163,7 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
     };
     label(d, title, 120, 24, INK, true)?;
     if app.screen != Screen::Board {
-        label(d, "<", 45, 25, GOLD, false)?;
+        label(d, "<", 45, 25, INK, false)?;
     }
     match app.screen {
         Screen::Board => {
@@ -183,7 +183,14 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 Text::with_text_style(
                     p.line.as_str(),
                     Point::new(55, 66),
-                    MonoTextStyle::new(&FONT_10X20, PORCELAIN),
+                    MonoTextStyle::new(
+                        if p.line.chars().count() > 4 {
+                            &FONT_6X10
+                        } else {
+                            &FONT_10X20
+                        },
+                        PORCELAIN,
+                    ),
                     TextStyleBuilder::new()
                         .baseline(Baseline::Top)
                         .alignment(Alignment::Center)
@@ -211,7 +218,9 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 label(d, &short(&p.stop_name, 27), 120, 108, MUTED, true)?;
                 let left = leave_in(event.at, now, p);
                 let mut text = String::<64>::new();
-                if left >= 60 {
+                if walking_chance(event.at, now, p) == 0 {
+                    let _ = text.push_str("Not enough walk time");
+                } else if left >= 60 {
                     let _ = write!(text, "Leave in {} min", left / 60);
                 } else {
                     let _ = text.push_str("Leave now");
@@ -327,13 +336,24 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 }
                 label(d, &g.name, 120, 61 + i as i32 * 36, INK, true)?;
             }
-            label(d, "Return to auto", 120, 207, MUTED, true)?;
+            label(
+                d,
+                if config.automatic && config.groups.iter().any(|group| group.days != 0) {
+                    "Return to auto"
+                } else {
+                    "Back to board"
+                },
+                120,
+                207,
+                MUTED,
+                true,
+            )?;
         }
         Screen::Picks => {
             for (i, p) in group.picks.iter().enumerate() {
                 let mut row = String::<96>::new();
                 let _ = write!(row, "{} {}", p.line, short(&p.stop_name, 22));
-                label(d, &row, 32, 63 + i as i32 * 32, INK, false)?;
+                label(d, &short(&row, 27), 32, 63 + i as i32 * 32, INK, false)?;
             }
             if group.picks.len() < crate::config::MAX_PICKS {
                 label(
@@ -361,37 +381,64 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
         Screen::Routes => {
             for i in 0..4 {
                 if let Some(r) = catalog.route(app.cursor + i) {
+                    if app
+                        .draft
+                        .as_ref()
+                        .is_some_and(|pick| pick.route == r.id && pick.line == r.line)
+                    {
+                        pill(d, 25, 58 + i as i32 * 32, 190, 28, GOLD)?;
+                    }
                     let mut row = String::<96>::new();
                     let _ = write!(row, "{} {}", r.line, short(r.headsigns[0], 24));
-                    label(d, &row, 31, 66 + i as i32 * 32, INK, false)?;
+                    label(d, &short(&row, 27), 31, 66 + i as i32 * 32, INK, false)?;
                 }
             }
+            page_count(d, app.cursor, catalog.route_count())?;
             label(d, "< previous      next >", 120, 204, MUTED, true)?;
         }
         Screen::Stops => {
-            for (i, (_, s)) in catalog
+            let selected = crate::ui::selected_stop(app, catalog);
+            for (i, (index, s)) in catalog
                 .route_stops(app.selected_route, app.direction)
                 .skip(app.cursor)
                 .take(4)
                 .enumerate()
             {
+                if selected == Some(index) {
+                    pill(d, 25, 57 + i as i32 * 32, 190, 29, GOLD)?;
+                }
                 label(d, &short(s.name, 27), 31, 61 + i as i32 * 32, INK, false)?;
                 label(d, s.code, 31, 73 + i as i32 * 32, MUTED, false)?;
             }
-            let direction = match app.direction {
-                0 => "0",
-                1 => "1",
-                _ => "any",
-            };
+            page_count(
+                d,
+                app.cursor,
+                catalog
+                    .route_stops(app.selected_route, app.direction)
+                    .count(),
+            )?;
+            let route = catalog.route(app.selected_route);
             let mut foot = String::<32>::new();
-            let _ = write!(foot, "<     dir {}     >", direction);
-            label(d, &foot, 120, 204, MUTED, true)?;
+            if app.direction < 0 {
+                let _ = foot.push_str("Both");
+            } else if let Some(name) = route
+                .map(|route| route.headsigns[app.direction as usize])
+                .filter(|name| !name.is_empty())
+            {
+                let _ = write!(foot, "{}", short(name, 8));
+            } else {
+                let _ = write!(foot, "Direction {}", app.direction + 1);
+            }
+            label(d, "<", 52, 204, MUTED, true)?;
+            label(d, &foot, 120, 204, INK, true)?;
+            label(d, ">", 188, 204, MUTED, true)?;
         }
         Screen::Walk => {
             if let Some(p) = &app.draft {
                 let mut row = String::<96>::new();
-                let _ = write!(row, "{} {}", p.line, short(&p.stop_name, 22));
-                label(d, &row, 120, 47, GOLD, true)?;
+                pill(d, 35, 43, 39, 20, INK)?;
+                label(d, &short(&p.line, 4), 55, 48, PORCELAIN, true)?;
+                label(d, &short(&p.stop_name, 17), 83, 48, INK, false)?;
                 for (i, (title, value)) in [
                     ("Walk", p.walk),
                     ("Variation +/-", p.spread),
@@ -404,11 +451,42 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                     let _ = write!(row, "-   {}: {}m   +", title, value);
                     label(d, &row, 120, 78 + i as i32 * 38, INK, true)?;
                 }
-                label(d, "Remove", 70, 201, CHILLI, true)?;
+                label(
+                    d,
+                    if app.edit_pick < group.picks.len() {
+                        "Remove"
+                    } else {
+                        "Cancel"
+                    },
+                    70,
+                    201,
+                    CHILLI,
+                    true,
+                )?;
                 pill(d, 117, 190, 73, 29, GOLD)?;
                 label(d, "Save", 153, 200, INK, true)?;
             }
         }
     }
     Ok(())
+}
+
+fn page_count<D: DrawTarget<Color = Rgb565>>(
+    d: &mut D,
+    cursor: usize,
+    count: usize,
+) -> Result<(), D::Error> {
+    let mut text = String::<32>::new();
+    if count == 0 {
+        let _ = text.push_str("No stops in this direction");
+    } else {
+        let _ = write!(
+            text,
+            "{}-{} / {}",
+            cursor + 1,
+            (cursor + 4).min(count),
+            count
+        );
+    }
+    label(d, &text, 120, 185, MUTED, true)
 }

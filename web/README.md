@@ -7,6 +7,19 @@ four named groups, four choices per group, direction filters, per-choice
 walking time and optional weekday/time windows. Export/import contains group
 settings only, never Wi-Fi credentials.
 
+Search by line number or destination, then by stop name or platform code; Polish
+accents are optional. Results stay within the chosen line and direction. A line
+and boarding stop must be selected explicitly. Saved choices reopen with their
+selection intact, and outdated catalogue identities ask for an updated choice.
+The catalogue search index is built once, so typing scans only the chosen
+route's stop links. Empty groups have an empty preview rather than sample trips.
+
+Group tabs support Left/Right, Home and End. Removing a group or choice offers
+Undo until the next settings edit. Failed catalogue or firmware downloads have
+retry controls that retain group edits. Browser history restores those edits,
+clears Wi-Fi credentials and resets password visibility. Search Enter moves to
+the choices; it does not submit an unfinished edit.
+
 The browser downloads `latest.json` and `timetable-display.bin`, validates board,
 settings format, size and SHA-256, then creates local Blob URLs for the factory
 image, CRC-protected settings and ESP Web Tools manifest. The settings image

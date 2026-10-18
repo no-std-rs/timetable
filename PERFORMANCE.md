@@ -140,3 +140,25 @@ Historical links may disappear; list dated archives/snapshots before choosing a
 different dataset. Increase capacity only after running the RAM check for that
 configuration. The 4,096-trip benchmark profile is deliberately rejected by the
 400,000-byte budget check.
+
+## Catalogue picker lookup
+
+Measured on 2026-10-18 with rustc 1.97.1, release builds and the same x86_64 host.
+Seven rounds follow one warmup. Each round performs 25,440 lookups across all
+212 routes and three direction filters, counting stops and locating the final
+stop as the picker does. Initialization, rendering and I/O are excluded.
+
+| Implementation | Median per round |
+| --- | ---: |
+| [Linear scan](benchmarks/catalog-linear.csv) | 120.592 ms |
+| [Validated ordered-link lookup](benchmarks/catalog-indexed.csv) | 64.477 ms |
+
+The ordered path finds a route's link range with binary searches and then reads
+only those stops from flash. It retains no heap index or catalogue RAM copy.
+Unordered catalogues still work through the original linear fallback. Every
+round had checksum `36980740`, zero allocations and zero reallocations. These
+host observations do not measure ESP32 screen latency or physical RAM high-water.
+
+```sh
+cargo run -p timetable-display --release --example bench_catalog
+```

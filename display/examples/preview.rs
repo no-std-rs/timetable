@@ -2,7 +2,7 @@
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 use std::{convert::Infallible, io::Write};
 use timetable_display::{
-    App, Config,
+    App, Config, Screen,
     catalog::Catalog,
     model::{Departure, Status},
     render,
@@ -50,6 +50,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 headsign: 0,
             })
             .unwrap();
+    }
+    let mode = std::env::args().nth(2).unwrap_or_default();
+    if matches!(mode.as_str(), "walk" | "routes" | "stops") {
+        let pick = c.groups[0].picks[0].clone();
+        app.selected_route = (0..catalog.route_count())
+            .find(|&i| catalog.route(i).unwrap().id == pick.route)
+            .unwrap_or(0);
+        app.direction = pick.direction;
+        app.draft = Some(pick);
+        app.screen = match mode.as_str() {
+            "walk" => Screen::Walk,
+            "routes" => {
+                app.cursor = app.selected_route / 4 * 4;
+                Screen::Routes
+            }
+            _ => Screen::Stops,
+        };
+    } else if mode == "urgent" {
+        app.departures.truncate(1);
+        app.clock = Some(now + 11 * 60);
     }
     let mut frame = Frame([Rgb565::BLACK; 240 * 240]);
     render::draw(&mut frame, &app, &c, &catalog)?;
