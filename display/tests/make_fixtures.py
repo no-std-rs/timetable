@@ -20,7 +20,13 @@ files = {
 with zipfile.ZipFile(destination / 'edge.zip', 'w') as archive:
     for path, content in files.items():
         info = zipfile.ZipInfo(path, date_time=(2026, 10, 17, 0, 0, 0))
-        info.compress_type = zipfile.ZIP_DEFLATED
+        # Stored members make the committed wire fixture independent of zlib.
+        # The shared gtfs fixture suite separately exercises deflate streams.
+        info.compress_type = zipfile.ZIP_STORED
+        info.create_system = 3
+        info.create_version = 20
+        info.extract_version = 20
+        info.external_attr = 0o600 << 16
         archive.writestr(info, content.encode())
 module.build(destination / 'edge.zip', destination, '20261017')
 assert b'T02' not in (destination / 'catalog.bin').read_bytes()
