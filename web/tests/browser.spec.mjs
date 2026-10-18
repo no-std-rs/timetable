@@ -62,3 +62,43 @@ test("corrupt firmware is never offered for installation", async ({ page }) => {
   await expect(page.locator("#prepare")).toBeDisabled();
   await expect(page.locator("#download")).toBeHidden();
 });
+test("history restoration preserves group controls and USB settings while clearing credentials", async ({ page }) => {
+  await prepare(page);
+  await expect(page.locator("#prepare")).toBeEnabled();
+  await page.locator("#group-name").fill("Commute");
+  await page.locator("#scheduled").check();
+  await page.locator("#start-time").fill("09:15");
+  await page.locator("#end-time").fill("12:30");
+  await page.locator("#wifi-ssid").fill("before-history-ssid");
+  await page.locator("#wifi-password").fill("before-history-password");
+  await page.locator("#prepare").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+  // Dispatch the persisted lifecycle directly: browser automation can disable BFCache.
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+  });
+  await expect(page.locator("#prepare")).toBeEnabled();
+  await expect(page.locator("#install-area")).toBeHidden();
+  await expect(page.locator("#wifi-ssid")).toHaveValue("");
+  await expect(page.locator("#wifi-password")).toHaveValue("");
+  await expect(page.locator("#group-name")).toHaveValue("Commute");
+  await expect(page.locator("#preview-group")).toHaveText("Commute");
+  await expect(page.locator("#scheduled")).toBeChecked();
+  await expect(page.locator("#schedule")).toBeVisible();
+  await expect(page.locator("#start-time")).toHaveValue("09:15");
+  await expect(page.locator("#end-time")).toHaveValue("12:30");
+  await page.locator("#wifi-ssid").fill("after-history-ssid");
+  await page.locator("#wifi-password").fill("after-history-password");
+  await page.locator("#prepare").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+  const settings = await page.evaluate(async () => {
+    const manifest = await (await fetch(document.querySelector("#installer").manifest)).json();
+    const bytes = new Uint8Array(await (await fetch(manifest.builds[0].parts[1].path)).arrayBuffer());
+    const length = new DataView(bytes.buffer).getUint32(12, true);
+    return JSON.parse(new TextDecoder().decode(bytes.subarray(24, 24 + length)));
+  });
+  expect(settings.wifi_ssid).toBe("after-history-ssid");
+  expect(settings.wifi_password).toBe("after-history-password");
+  expect(settings.groups[0]).toMatchObject({ name: "Commute", days: 31, start: 555, end: 750 });
+});

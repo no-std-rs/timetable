@@ -25,7 +25,8 @@ conditional pickup. No-boarding and untimed events are omitted.
 `feed::Builder` uses three verified forward passes through a pinned original ZIP:
 resolve line names/stop codes and calendars, select active trips, then collect
 future departures. Yesterday supplies 25:xx departures, and tomorrow is included
-when the six-hour horizon crosses midnight. Mask bits 0/1/2 refer to yesterday,
+when its GTFS service epoch enters the six-hour horizon, including before civil
+midnight at the spring clock change. Mask bits 0/1/2 refer to yesterday,
 today and tomorrow; `day_mask()` reports which dates need archives.
 The device retains a six-hour horizon, not a whole day's timetable.
 Selected trip IDs remain exact in a 16 KiB shared byte buffer; there is a

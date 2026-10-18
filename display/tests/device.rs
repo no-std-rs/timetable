@@ -232,6 +232,52 @@ fn previous_service_day_supplies_a_25_hour_departure_after_midnight() {
 }
 
 #[test]
+fn spring_dst_service_day_is_included_before_civil_midnight() {
+    futures::executor::block_on(async {
+        use time::macros::datetime;
+        let catalog = Catalog::new(include_bytes!("fixtures/catalog.bin")).unwrap();
+        let stop = catalog.stop(0).unwrap();
+        let mut c = settings();
+        let pick = &mut c.groups[0].picks[0];
+        pick.route = "R4".try_into().unwrap();
+        pick.stop = stop.id.try_into().unwrap();
+        pick.stop_code.clear();
+        pick.stop_name = stop.name.try_into().unwrap();
+        let mut builder = timetable_display::feed::Builder::new("20260328".parse().unwrap());
+        let mut workspace = gtfs::zip::Workspace::new();
+        let source = include_bytes!("fixtures/spring-dst.zip").as_slice();
+        let now = datetime!(2026-03-28 16:45 UTC).unix_timestamp();
+        builder.begin(now).unwrap();
+        assert_eq!(clock::warsaw(now + 6 * 3600).unwrap().day(), 28);
+        builder
+            .calendars(source, builder.day_mask(), &c, &mut workspace)
+            .await
+            .unwrap();
+        builder.trips(source, &c, &mut workspace).await.unwrap();
+        builder
+            .departures(source, &c, &mut workspace)
+            .await
+            .unwrap();
+        builder.events.sort_unstable_by_key(|event| event.at);
+        // Sunday's 00:30 GTFS time is Saturday 23:30 civil time on this transition.
+        assert_eq!(builder.events.len(), 2);
+        assert_eq!(
+            builder.events[0].at,
+            datetime!(2026-03-28 22:30 UTC).unix_timestamp()
+        );
+        assert_eq!(
+            builder.events[1].at,
+            datetime!(2026-03-28 22:45 UTC).unix_timestamp()
+        );
+        let tomorrow = clock::service_epoch("20260329".parse().unwrap()).unwrap();
+        builder.begin(tomorrow - 6 * 3600 - 1).unwrap();
+        assert_eq!(builder.day_mask(), 3);
+        builder.begin(tomorrow - 6 * 3600).unwrap();
+        assert_eq!(builder.day_mask(), 7);
+    });
+}
+
+#[test]
 fn evening_queries_include_next_day_service_and_rollback_headsigns() {
     futures::executor::block_on(async {
         let catalog = Catalog::new(include_bytes!("fixtures/catalog.bin")).unwrap();

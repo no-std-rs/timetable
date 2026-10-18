@@ -67,8 +67,9 @@ After DHCP, SNTP supplies UTC before TLS certificate validity is checked. The
 pure Rust `embedded-tls` transport verifies ZTM's hostname and pinned Certum
 root; `reqwless` parses streaming HTTP responses. Compressed HTTP representations
 and redirects are rejected. The official listing selects a dated immutable ZIP
-for each required service day: yesterday, today, and tomorrow when the horizon
-crosses midnight. Dates sharing the same latest archive reuse one set of three
+for each required service day: yesterday, today, and tomorrow when its GTFS
+service epoch enters the horizon. At the spring clock change this can happen
+before civil midnight. Dates sharing the same latest archive reuse one set of three
 passes for calendars, selected trips and departures. Each distinct archive
 gets its own three-pass validation. This reduces retained metadata versus
 indexing inactive services. The generic `gtfs` crate's existing two-pass and

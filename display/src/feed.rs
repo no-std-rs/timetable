@@ -156,9 +156,9 @@ impl Builder {
         self.manifest = None;
         Ok(())
     }
-    /// Include tomorrow only when the six-hour horizon crosses civil midnight.
+    /// Include tomorrow when its GTFS service epoch enters the six-hour horizon.
     pub fn day_mask(&self) -> u8 {
-        if clock::service_date(self.now + 6 * 3600) != Some(self.dates[1]) {
+        if clock::service_epoch(self.dates[2]).is_some_and(|epoch| epoch <= self.now + 6 * 3600) {
             7
         } else {
             3
