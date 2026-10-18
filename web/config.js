@@ -6,7 +6,9 @@ const exact = (object, fields) => object && typeof object === "object" && !Array
 const integer = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
 const text = (value, min, max) => typeof value === "string" && utf8.encode(value).length >= min && utf8.encode(value).length <= max && !/\p{Cc}/u.test(value);
 function validateConfig(c) {
-  if (!exact(c, ["wifi_ssid", "wifi_password", "automatic", "groups"]) || typeof c.automatic !== "boolean" || !Array.isArray(c.groups) || c.groups.length < 1 || c.groups.length > 4) throw new Error("Use one to four departure groups.");
+  const fields = ["wifi_ssid", "wifi_password", "automatic", "groups"];
+  if (c && Object.hasOwn(c, "battery")) fields.push("battery");
+  if (!exact(c, fields) || typeof c.automatic !== "boolean" || c.battery !== undefined && typeof c.battery !== "boolean" || !Array.isArray(c.groups) || c.groups.length < 1 || c.groups.length > 4) throw new Error("Use one to four departure groups and a valid power mode.");
   if (typeof c.wifi_ssid !== "string" || c.wifi_ssid.includes("\0") || utf8.encode(c.wifi_ssid).length < 1 || utf8.encode(c.wifi_ssid).length > 32) throw new Error("The Wi-Fi name must fit in 32 UTF-8 bytes.");
   const p = c.wifi_password;
   if (typeof p !== "string" || p.includes("\0") || !(p === "" || utf8.encode(p).length >= 8 && utf8.encode(p).length <= 63 || /^[a-fA-F0-9]{64}$/.test(p))) throw new Error("Use an 8\u201363 byte Wi-Fi password, or leave it empty for an open network.");
@@ -50,7 +52,7 @@ function encodeSettingsPartition(config) {
   return partition;
 }
 function manifestWithSettings(release, firmware, settings) {
-  if (release?.chip !== "ESP32-C3" || release.board !== "GUITION ESP32-2424S012-V1.0" || release.flash_size !== 4194304 || release.config_offset !== CONFIG_OFFSET || release.config_version !== 1 || !/^[0-9a-f]{40}$/.test(release.revision) || !/^[0-9a-f]{64}$/.test(release.sha256) || !integer(release.size, 65536, CONFIG_OFFSET - 1)) throw new Error("This firmware does not match the round ESP32-C3 display or settings format.");
+  if (release?.chip !== "ESP32-C3" || release.board !== "GUITION ESP32-2424S012-V1.0" || release.flash_size !== 4194304 || release.config_offset !== CONFIG_OFFSET || release.config_version !== 2 || !/^[0-9a-f]{40}$/.test(release.revision) || !/^[0-9a-f]{64}$/.test(release.sha256) || !integer(release.size, 65536, CONFIG_OFFSET - 1)) throw new Error("This firmware does not match the round ESP32-C3 display or settings format.");
   return { name: "timetable", version: release.revision.slice(0, 12), new_install_prompt_erase: true, new_install_improv_wait_time: 0, builds: [{ chipFamily: "ESP32-C3", parts: [{ path: firmware, offset: 0 }, { path: settings, offset: CONFIG_OFFSET }] }] };
 }
 function walkingChance(minutes, walk, spread, margin) {

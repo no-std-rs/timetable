@@ -28,13 +28,19 @@ test("walking estimate matches the Rust uniform model", () => {
   assert.equal(walkingChance(6, 6, 0, 1), 0);
 });
 test("manifest refuses a wrong board, layout or settings protocol", () => {
-  const r = { chip: "ESP32-C3", board: "GUITION ESP32-2424S012-V1.0", flash_size: 4194304, config_offset: CONFIG_OFFSET, config_version: 1, revision: "a".repeat(40), sha256: "b".repeat(64), size: 1e5 };
+  const r = { chip: "ESP32-C3", board: "GUITION ESP32-2424S012-V1.0", flash_size: 4194304, config_offset: CONFIG_OFFSET, config_version: 2, revision: "a".repeat(40), sha256: "b".repeat(64), size: 1e5 };
   const m = manifestWithSettings(r, "blob:firmware", "blob:settings");
   assert.deepEqual(m.builds[0].parts.map((p) => p.offset), [0, CONFIG_OFFSET]);
-  for (const bad of [{ chip: "ESP32" }, { config_offset: 0 }, { config_version: 2 }, { size: CONFIG_OFFSET }, { sha256: "x" }]) assert.throws(() => manifestWithSettings({ ...r, ...bad }, "a", "b"));
+  for (const bad of [{ chip: "ESP32" }, { config_offset: 0 }, { config_version: 1 }, { size: CONFIG_OFFSET }, { sha256: "x" }]) assert.throws(() => manifestWithSettings({ ...r, ...bad }, "a", "b"));
 });
 
 const wireFixture = await readFile(new URL("../../display/tests/settings.bin", import.meta.url));
+test("battery and escaped browser settings match the Rust wire regression", async () => {
+  const c = JSON.parse(await readFile(new URL("../../display/tests/settings-escaped.json", import.meta.url), "utf8"));
+  const image = await readFile(new URL("../../display/tests/settings-escaped.bin", import.meta.url));
+  assert.deepEqual(Buffer.from(encodeConfig(c)), image);
+  for (const battery of [null, 1, "true"]) assert.throws(() => validateConfig({ ...c, battery }));
+});
 test("browser settings match the committed Rust decoder fixture", () => { assert.deepEqual(Buffer.from(encodeConfig(fixture)), wireFixture); });
 test("USB settings replace both banks so an old generation cannot take precedence", () => {
   const partition = encodeSettingsPartition(fixture);

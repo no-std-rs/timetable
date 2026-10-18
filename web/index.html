@@ -77,6 +77,8 @@
           <label for="wifi-ssid">Wi-Fi name<input id="wifi-ssid" name="wifi_ssid" placeholder="Your 2.4 GHz network" required autocomplete="off"></label>
           <label for="wifi-password">Password<span class="password-input"><input id="wifi-password" name="wifi_password" type="password" placeholder="Leave empty for an open network" autocomplete="new-password"><button type="button" id="show-password" aria-label="Show password" aria-pressed="false">Show</button></span></label>
           <p class="fine-print">Settings stay in this tab until you install. Nothing is uploaded or saved by this website.</p>
+          <div class="schedule-toggle"><label><input type="checkbox" id="battery-mode" aria-describedby="battery-hint"> Battery mode</label></div>
+          <p id="battery-hint" class="fine-print">Sleep after 30 seconds of inactivity. Tap to wake with saved departures; Wi-Fi refreshes every three hours. Leave off for an always-visible display.</p>
         </div>
       </section>
 
@@ -101,12 +103,15 @@
   <dialog id="pick-dialog" aria-labelledby="pick-title"><form id="pick-form" method="dialog">
     <div class="dialog-heading"><div><p class="eyebrow">ONE EVERYDAY JOURNEY</p><h2 id="pick-title">A line. A stop. Your pace.</h2></div><button type="button" id="cancel-pick" class="close-button" aria-label="Close">×</button></div>
     <p id="catalog-status" class="fine-print">Loading Poznań routes and stops…</p>
-    <label class="search-label">Find a line<input type="search" id="route-search" placeholder="Line number or destination" aria-controls="route-select" autocomplete="off" spellcheck="false"></label>
+    <label class="search-label" for="stop-search">Boarding stop</label>
+    <div class="stop-combobox">
+      <input type="search" id="stop-search" placeholder="Stop name or platform code" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="stop-options" aria-describedby="stop-results" autocomplete="off" spellcheck="false" required>
+      <div id="stop-options" class="stop-options" role="listbox" aria-label="Boarding stop matches" hidden></div>
+    </div>
+    <p id="stop-results" class="picker-hint" role="status">Search any stop, then browse the lines serving it. Polish accents are optional.</p>
+    <label class="search-label">Narrow lines (optional)<input type="search" id="route-search" placeholder="Line number or destination" aria-controls="route-select" autocomplete="off" spellcheck="false"></label>
     <div class="field-pair"><label>Line<select id="route-select" required aria-describedby="route-results"></select></label><label>Towards<select id="direction-select"><option value="-1">Either direction</option></select></label></div>
     <p id="route-results" class="picker-hint" role="status"></p>
-    <label class="search-label">Find a stop<input type="search" id="stop-search" placeholder="Stop name or platform code" aria-controls="stop-select" autocomplete="off" spellcheck="false"></label>
-    <label>Boarding stop<select id="stop-select" required aria-describedby="stop-results"></select></label>
-    <p id="stop-results" class="picker-hint" role="status"></p>
     <div class="walk-control"><label for="walk-minutes">Time to walk there<span>In minutes, at your usual pace.</span></label><input id="walk-minutes" type="number" min="0" max="60" value="6" required></div>
     <details class="estimate-details"><summary>Leave a little room</summary><div class="field-pair"><label>Walking variation ±<input type="number" id="walk-spread" min="0" max="15" value="1" required></label><label>Boarding buffer<input type="number" id="walk-margin" min="0" max="10" value="1" required></label></div><p class="fine-print">Minutes. The walking estimate uses this range; “leave in” includes your boarding buffer.</p></details>
     <p id="pick-error" role="alert" class="error" hidden></p>

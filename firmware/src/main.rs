@@ -1,24 +1,31 @@
 #![no_std]
 #![no_main]
 extern crate alloc;
+mod rtc;
 mod transport;
 
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embedded_io_async::Read;
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use esp_backtrace as _;
 use esp_hal::{
     clock::CpuClock,
     delay::Delay,
-    gpio::{Level, Output, OutputConfig},
+    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull, RtcPin, RtcPinWithResistors},
     i2c::master::{Config as I2cConfig, I2c},
     interrupt::software::SoftwareInterruptControl,
     rng::Rng,
+    rtc_cntl::{
+        Rtc,
+        sleep::{RtcioWakeupSource, TimerWakeupSource, WakeupLevel},
+        wakeup_cause,
+    },
     spi::master::{Config as SpiConfig, Spi},
+    system::SleepSource,
     time::Rate,
     timer::timg::TimerGroup,
 };
@@ -31,13 +38,16 @@ use static_cell::StaticCell;
 use timetable_display::{
     App, Config, catalog::Catalog, config, feed::Builder, model::Status, render, ui,
 };
-use timetable_firmware::{panel, sources::Archives};
+use timetable_firmware::{battery, panel, sources::Archives};
 use transport::{Error, Http, Operation};
 
 struct State {
     config: Config,
     app: App,
     revision: u32,
+    network_busy: bool,
+    completed_delay: Option<u32>,
+    powering_down: bool,
 }
 type Shared = Mutex<CriticalSectionRawMutex, State>;
 static STATE: StaticCell<Shared> = StaticCell::new();
@@ -47,6 +57,10 @@ const _: () = assert!(panel::TILE_BYTES <= config::IMAGE_SIZE);
 static FEED: StaticCell<Builder> = StaticCell::new();
 static WORKSPACE: StaticCell<gtfs::zip::Workspace> = StaticCell::new();
 static REFRESH: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static POWER_DOWN: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static RADIO_OFF: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+#[esp_hal::ram(unstable(rtc_fast, persistent))]
+static mut RETAINED: [u8; battery::RETAINED_BYTES] = [0; battery::RETAINED_BYTES];
 esp_bootloader_esp_idf::esp_app_desc!();
 
 fn log_heap() {
@@ -118,14 +132,20 @@ fn save(
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    let mut rtc = Rtc::new(p.LPWR);
+    let wake = wakeup_cause();
+    let mut wake_pin = p.GPIO0;
+    wake_pin.rtcio_pad_hold(false);
+    let mut reset_pin = p.GPIO1;
+    reset_pin.rtcio_pad_hold(false);
     esp_alloc::heap_allocator!(size: 64 * 1024);
     let timers = TimerGroup::new(p.TIMG0);
     esp_rtos::start(
         timers.timer0,
         SoftwareInterruptControl::new(p.SW_INTERRUPT).software_interrupt0,
     );
-    let _backlight = Output::new(p.GPIO3, Level::High, OutputConfig::default());
-    let _cs = Output::new(p.GPIO10, Level::Low, OutputConfig::default());
+    let mut backlight = Output::new(p.GPIO3, Level::Low, OutputConfig::default());
+    let mut cs = Output::new(p.GPIO10, Level::Low, OutputConfig::default());
     let dc = Output::new(p.GPIO2, Level::Low, OutputConfig::default());
     let spi = Spi::new(
         p.SPI2,
@@ -144,7 +164,7 @@ async fn main(spawner: Spawner) -> ! {
     .unwrap()
     .with_sda(p.GPIO4)
     .with_scl(p.GPIO5);
-    let mut reset = Output::new(p.GPIO1, Level::Low, OutputConfig::default());
+    let mut reset = Output::new(reset_pin.reborrow(), Level::Low, OutputConfig::default());
     delay.delay_millis(20);
     reset.set_high();
     delay.delay_millis(400);
@@ -158,46 +178,58 @@ async fn main(spawner: Spawner) -> ! {
             render::setup(&mut panel::Tile { y, pixels }).unwrap();
             panel.write_tile(y, pixels).unwrap();
         }
+        backlight.set_high();
         loop {
             Timer::after_secs(60).await;
         }
     };
-    let shared = STATE.init(Mutex::new(State {
-        config: settings,
-        app: App::default(),
-        revision: 0,
-    }));
-    let (controller, interfaces) = esp_radio::wifi::new(p.WIFI, Default::default()).unwrap();
-    let mut seed = [0; 8];
-    Rng::new().read(&mut seed);
-    let (stack, runner) = embassy_net::new(
-        interfaces.station,
-        embassy_net::Config::dhcpv4(Default::default()),
-        NET.init(StackResources::new()),
-        u64::from_le_bytes(seed),
+    // Only this main task accesses the persistent byte array, once per boot.
+    // Bytes are checked (including CRC/config identity) before becoming app data.
+    let retained = unsafe { &mut *core::ptr::addr_of_mut!(RETAINED) };
+    let (shared, restored, connect) = initialize_state(
+        settings,
+        generation,
+        scratch,
+        retained,
+        rtc::stamp().0,
+        matches!(wake, SleepSource::Gpio | SleepSource::Timer),
     );
-    spawner.spawn(wifi_connection(controller, shared).unwrap());
-    spawner.spawn(network(runner).unwrap());
-    spawner.spawn(
-        timetable(
-            stack,
-            shared,
-            FEED.init_with(|| Builder::new("20261017".parse().unwrap())),
-            WORKSPACE.init_with(gtfs::zip::Workspace::new),
-        )
-        .unwrap(),
+    if let Some(utc) = restored.as_ref().and_then(|r| r.utc_micros) {
+        transport::restore_clock(utc);
+    }
+    let mut next_refresh_rtc = rtc
+        .time_since_power_up()
+        .as_micros()
+        .saturating_add(restored.as_ref().map_or(0, |r| r.refresh_in_us));
+    let wake_ui = battery::wake_ui(
+        restored.as_ref(),
+        matches!(wake, SleepSource::Timer),
+        matches!(wake, SleepSource::Gpio),
     );
+    let mut visible = wake_ui.visible;
+    let mut suppress_touch = wake_ui.suppress_touch;
+    let mut radio = Some(p.WIFI);
+    if connect {
+        start_network(spawner, radio.take().unwrap(), shared);
+    }
     log_heap();
     let mut down_at = None;
     let mut start = (0u16, 0u16);
     let mut end = start;
     let mut redraw = Instant::now();
+    let mut last_activity = redraw;
     loop {
         let mut data = [0; 5];
         let now = Instant::now();
         if touch.write_read(0x15, &[0x02], &mut data).is_ok() {
             let down = data[0] & 0x0f != 0;
             if down {
+                last_activity = now;
+                if !visible {
+                    visible = true;
+                    suppress_touch = true;
+                    redraw = now;
+                }
                 end = (
                     ((data[1] as u16 & 15) << 8) | data[2] as u16,
                     ((data[3] as u16 & 15) << 8) | data[4] as u16,
@@ -206,12 +238,19 @@ async fn main(spawner: Spawner) -> ! {
                     start = end;
                     down_at = Some(now);
                 }
+            } else if suppress_touch {
+                down_at = None;
+                suppress_touch = false;
             } else if let Some(pressed) = down_at.take() {
+                last_activity = now;
                 let mut s = shared.lock().await;
+                s.app.sleep_failed = false;
+                let mut request = false;
                 let State {
                     config: c,
                     app,
                     revision,
+                    ..
                 } = &mut *s;
                 let dx = end.0 as i16 - start.0 as i16;
                 let dy = end.1 as i16 - start.1 as i16;
@@ -234,17 +273,25 @@ async fn main(spawner: Spawner) -> ! {
                             }
                             if refresh {
                                 *revision = revision.wrapping_add(1);
-                                REFRESH.signal(());
+                                request = true;
                             }
                         }
-                        ui::Action::Refresh => REFRESH.signal(()),
+                        ui::Action::Refresh => request = true,
                         ui::Action::None => {}
+                    }
+                }
+                if request {
+                    s.network_busy = true;
+                    if let Some(wifi) = radio.take() {
+                        start_network(spawner, wifi, shared);
+                    } else {
+                        REFRESH.signal(());
                     }
                 }
                 redraw = now;
             }
         }
-        if now >= redraw {
+        if visible && now >= redraw {
             // This task saves settings and draws sequentially in the same RAM.
             let pixels = scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
             let mut s = shared.lock().await;
@@ -257,14 +304,216 @@ async fn main(spawner: Spawner) -> ! {
                 panel.write_tile(y, pixels).unwrap();
                 embassy_futures::yield_now().await;
             }
+            backlight.set_high();
             redraw = Instant::now() + Duration::from_secs(1);
+        }
+        {
+            let mut s = shared.lock().await;
+            if s.config.battery
+                && battery::refresh_due(
+                    radio.is_some(),
+                    s.powering_down,
+                    rtc.time_since_power_up().as_micros(),
+                    next_refresh_rtc,
+                )
+            {
+                s.network_busy = true;
+                start_network(spawner, radio.take().unwrap(), shared);
+            }
+            if let Some(seconds) = s.completed_delay.take() {
+                next_refresh_rtc = rtc
+                    .time_since_power_up()
+                    .as_micros()
+                    .saturating_add(u64::from(seconds) * 1_000_000);
+            }
+            if s.config.battery
+                && battery::can_sleep(
+                    &s.app,
+                    false,
+                    now.duration_since(last_activity).as_secs(),
+                    down_at.is_some(),
+                )
+            {
+                visible = false;
+                backlight.set_low();
+            }
+            if s.config.battery
+                && battery::can_sleep(
+                    &s.app,
+                    s.network_busy,
+                    now.duration_since(last_activity).as_secs(),
+                    down_at.is_some(),
+                )
+            {
+                // Keep touch sensing alive: standby A5=3 would require reset to
+                // wake and cannot serve as a tap wake source.
+                let mut check = [0];
+                let touch_ready = touch.write(0x15, &[0xfa, 0x40]).is_ok()
+                    && touch.write(0x15, &[0xfe, 0]).is_ok()
+                    && touch.write_read(0x15, &[0xfa], &mut check).is_ok()
+                    && check[0] == 0x40
+                    && touch.write_read(0x15, &[0xfe], &mut check).is_ok()
+                    && check[0] == 0;
+                let released = {
+                    let input = Input::new(
+                        wake_pin.reborrow(),
+                        InputConfig::default().with_pull(Pull::Up),
+                    );
+                    input.is_high()
+                };
+                config::encode(&s.config, generation, scratch).unwrap();
+                let tag = u32::from_le_bytes(scratch[16..20].try_into().unwrap());
+                let (ticks, period) = rtc::stamp();
+                let remaining =
+                    next_refresh_rtc.saturating_sub(rtc.time_since_power_up().as_micros());
+                let saved = battery::save(
+                    retained,
+                    &s.app,
+                    tag,
+                    ticks,
+                    period,
+                    transport::now_micros(),
+                    remaining,
+                )
+                .is_ok();
+                if touch_ready && released && saved {
+                    s.powering_down = true;
+                    drop(s);
+                    if radio.is_none() {
+                        POWER_DOWN.signal(());
+                        if with_timeout(Duration::from_secs(5), RADIO_OFF.wait())
+                            .await
+                            .is_err()
+                        {
+                            warn!(
+                                "Radio shutdown pending; CPU remains awake until acknowledgement"
+                            );
+                            let mut s = shared.lock().await;
+                            s.app.sleep_failed = true;
+                            let pixels =
+                                scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
+                            for y in (0..240).step_by(panel::TILE_ROWS) {
+                                render::draw(
+                                    &mut panel::Tile { y, pixels },
+                                    &s.app,
+                                    &s.config,
+                                    &catalog,
+                                )
+                                .unwrap();
+                                panel.write_tile(y, pixels).unwrap();
+                            }
+                            backlight.set_high();
+                            drop(s);
+                            // Controller ownership has been consumed. Resume only
+                            // through a fresh boot, never an orphaned REFRESH.
+                            RADIO_OFF.wait().await;
+                        }
+                    }
+                    let mut fingers = [0];
+                    let touched = touch.write_read(0x15, &[0x02], &mut fingers).is_ok()
+                        && fingers[0] & 15 != 0;
+                    if touched {
+                        battery::show_on_wake(retained);
+                    }
+                    backlight.set_low();
+                    if panel.sleep(&mut delay).is_err() {
+                        warn!("Panel sleep command failed");
+                    }
+                    cs.set_high();
+                    reset_pin.rtcio_pad_hold(true);
+                    let mut pins: [(&mut dyn RtcPinWithResistors, WakeupLevel); 1] =
+                        [(&mut wake_pin, WakeupLevel::Low)];
+                    let touch_wake = RtcioWakeupSource::new(&mut pins);
+                    let timer =
+                        TimerWakeupSource::new(core::time::Duration::from_micros(if touched {
+                            1_000
+                        } else {
+                            remaining.max(60_000_000)
+                        }));
+                    info!(
+                        "Battery sleep; next refresh in {} seconds",
+                        remaining / 1_000_000
+                    );
+                    rtc.sleep_deep(&[&touch_wake, &timer]);
+                } else {
+                    warn!("Sleep preparation failed; staying awake");
+                    s.app.sleep_failed = true;
+                    visible = true;
+                    redraw = now;
+                    last_activity = now;
+                    // Restore the active polling mode if preparation failed.
+                    let _ = touch.write(0x15, &[0xfe, 1]);
+                }
+            }
         }
         Timer::after_millis(20).await;
     }
 }
 
+// Keep the large State/App construction out of the retained async main frame.
+#[inline(never)]
+fn initialize_state(
+    settings: Config,
+    generation: u32,
+    scratch: &mut [u8; config::IMAGE_SIZE],
+    retained: &mut [u8; battery::RETAINED_BYTES],
+    rtc_ticks: u64,
+    can_restore: bool,
+) -> (&'static Shared, Option<battery::Wake>, bool) {
+    let shared = STATE.init_with(|| {
+        Mutex::new(State {
+            config: settings,
+            app: App::default(),
+            revision: 0,
+            network_busy: false,
+            completed_delay: None,
+            powering_down: false,
+        })
+    });
+    let mut s = shared.try_lock().unwrap();
+    config::encode(&s.config, generation, scratch).unwrap();
+    let tag = u32::from_le_bytes(scratch[16..20].try_into().unwrap());
+    let restored = if s.config.battery && can_restore {
+        let State { config, app, .. } = &mut *s;
+        battery::restore(retained, config, tag, rtc_ticks, app).ok()
+    } else {
+        None
+    };
+    let connect = !s.config.battery || restored.as_ref().is_none_or(|r| r.refresh_in_us == 0);
+    s.network_busy = connect;
+    drop(s);
+    (shared, restored, connect)
+}
+
+fn start_network(
+    spawner: Spawner,
+    wifi: esp_hal::peripherals::WIFI<'static>,
+    shared: &'static Shared,
+) {
+    let (controller, interfaces) = esp_radio::wifi::new(wifi, Default::default()).unwrap();
+    let mut seed = [0; 8];
+    Rng::new().read(&mut seed);
+    let (stack, runner) = embassy_net::new(
+        interfaces.station,
+        embassy_net::Config::dhcpv4(Default::default()),
+        NET.init(StackResources::new()),
+        u64::from_le_bytes(seed),
+    );
+    spawner.spawn(wifi_connection(controller, shared).unwrap());
+    spawner.spawn(network(runner).unwrap());
+    spawner.spawn(
+        timetable(
+            stack,
+            shared,
+            FEED.init_with(|| Builder::new("20261017".parse().unwrap())),
+            WORKSPACE.init_with(gtfs::zip::Workspace::new),
+        )
+        .unwrap(),
+    );
+}
+
 #[embassy_executor::task]
-async fn wifi_connection(mut controller: WifiController<'static>, shared: &'static Shared) -> ! {
+async fn wifi_connection(mut controller: WifiController<'static>, shared: &'static Shared) {
     let station = {
         let state = shared.lock().await;
         let c = &state.config;
@@ -282,8 +531,9 @@ async fn wifi_connection(mut controller: WifiController<'static>, shared: &'stat
         .unwrap();
     let mut connected_before = false;
     loop {
-        match controller.connect_async().await {
-            Ok(_) => {
+        match select(controller.connect_async(), POWER_DOWN.wait()).await {
+            Either::Second(()) => break,
+            Either::First(Ok(_)) => {
                 info!("Wi-Fi associated");
                 // A brief outage must not leave the timetable in its three-hour
                 // success wait. Initial association already wakes config_up.
@@ -291,13 +541,25 @@ async fn wifi_connection(mut controller: WifiController<'static>, shared: &'stat
                     REFRESH.signal(());
                 }
                 connected_before = true;
-                let _ = controller.wait_for_disconnect_async().await;
+                if matches!(
+                    select(controller.wait_for_disconnect_async(), POWER_DOWN.wait()).await,
+                    Either::Second(())
+                ) {
+                    break;
+                }
             }
-            Err(_) => warn!("Wi-Fi association failed"),
+            Either::First(Err(_)) => warn!("Wi-Fi association failed"),
         }
         shared.lock().await.app.status = Status::Offline;
-        Timer::after_secs(3).await;
+        if matches!(
+            select(Timer::after_secs(3), POWER_DOWN.wait()).await,
+            Either::Second(())
+        ) {
+            break;
+        }
     }
+    drop(controller);
+    RADIO_OFF.signal(());
 }
 #[embassy_executor::task]
 async fn network(mut runner: Runner<'static, Interface<'static>>) -> ! {
@@ -387,12 +649,34 @@ async fn timetable(
     shared: &'static Shared,
     builder: &'static mut Builder,
     workspace: &'static mut gtfs::zip::Workspace,
-) -> ! {
+) {
     loop {
-        stack.wait_config_up().await;
+        {
+            let mut s = shared.lock().await;
+            if s.powering_down {
+                return;
+            }
+            s.network_busy = true;
+        }
+        if with_timeout(Duration::from_secs(30), stack.wait_config_up())
+            .await
+            .is_err()
+        {
+            let mut s = shared.lock().await;
+            s.app.status = Status::Offline;
+            s.network_busy = false;
+            s.completed_delay = Some(battery::RETRY_SECONDS as u32);
+            drop(s);
+            let _ = select(Timer::after_secs(30), REFRESH.wait()).await;
+            continue;
+        }
         shared.lock().await.app.status = Status::Syncing;
         if transport::synchronize(stack).await.is_err() {
-            shared.lock().await.app.status = Status::Offline;
+            let mut s = shared.lock().await;
+            s.app.status = Status::Offline;
+            s.network_busy = false;
+            s.completed_delay = Some(battery::RETRY_SECONDS as u32);
+            drop(s);
             let _ = select(Timer::after_secs(30), REFRESH.wait()).await;
             continue;
         }
@@ -433,6 +717,12 @@ async fn timetable(
                     s.app.status = Status::Failed;
                 }
             }
+            s.network_busy = false;
+            s.completed_delay = Some(if successful {
+                battery::REFRESH_SECONDS
+            } else {
+                battery::RETRY_SECONDS
+            } as u32);
         }
         let _ = select(
             Timer::after_secs(if successful { 3 * 3600 } else { 60 }),

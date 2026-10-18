@@ -10,12 +10,19 @@ settings only, never Wi-Fi credentials.
 off for touch-only selection without deleting time windows; imported manual
 settings can be inspected and switched back to automatic mode here.
 
-Search by line number or destination, then by stop name or platform code; Polish
-accents are optional. Results stay within the chosen line and direction. A line
-and boarding stop must be selected explicitly. Saved choices reopen with their
-selection intact, and outdated catalogue identities ask for an updated choice.
-The catalogue search index is built once, so typing scans only the chosen
-route's stop links. Empty groups have an empty preview rather than sample trips.
+Battery mode is off by default. Enable it to sleep the screen and CPU after
+30 seconds on the idle departure board, wake by touch and refresh Wi-Fi every
+three hours. Cached wakes do not initialize Wi-Fi. Group imports leave this
+device preference unchanged. See [battery operation and hardware limits](../docs/battery.md).
+
+Search any stop by name or platform code in one combobox, then browse the lines
+and directions serving that platform. Polish accents are optional. You can also
+start with a line number or destination; stop results then stay within that line
+and direction. Names and platform codes appear together in selectable results.
+Arrow keys browse; Enter commits the highlighted stop; Escape closes the list.
+A line and boarding stop must be selected explicitly. Saved choices reopen
+intact; outdated identities ask for an updated choice. Forward and reverse
+catalogue indexes are built once. Empty groups have an empty preview.
 
 Group tabs support Left/Right, Home and End. Removing a group or choice offers
 Undo until the next settings edit.

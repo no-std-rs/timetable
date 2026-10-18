@@ -117,6 +117,13 @@ impl<SPI: SpiBus, DC: OutputPin<Error = Infallible>> Panel<SPI, DC> {
         self.spi.write(pixels)?;
         self.spi.flush()
     }
+
+    pub fn sleep(&mut self, delay: &mut impl DelayNs) -> Result<(), SPI::Error> {
+        self.command(0x28, &[])?;
+        self.command(0x10, &[])?;
+        delay.delay_ms(120);
+        Ok(())
+    }
 }
 
 /// Clip drawing to 16 rows, stored in the panel's big-endian RGB565 wire format.

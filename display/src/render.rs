@@ -333,6 +333,8 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
             }
             let _ = foot.push_str(if app.save_failed {
                 "NOT SAVED"
+            } else if app.sleep_failed {
+                "SLEEP FAILED"
             } else if app.status == Status::Offline {
                 "OFFLINE / TAP RETRY"
             } else if app.status == Status::Failed {
@@ -358,7 +360,7 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 &foot,
                 120,
                 212,
-                if app.save_failed || fault {
+                if app.save_failed || app.sleep_failed || fault {
                     CHILLI
                 } else {
                     MUTED

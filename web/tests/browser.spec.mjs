@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 const catalog = JSON.parse(await readFile(new URL("../../catalog/catalog.json", import.meta.url), "utf8"));
 const saved = JSON.parse(await readFile(new URL("../../display/tests/settings.json", import.meta.url), "utf8"));
 const firmware = Buffer.alloc(1e5, 233);
-const release = { chip: "ESP32-C3", board: "GUITION ESP32-2424S012-V1.0", flash_size: 4194304, config_offset: 4128768, config_version: 1, revision: "a".repeat(40), sha256: createHash("sha256").update(firmware).digest("hex"), size: firmware.length };
+const release = { chip: "ESP32-C3", board: "GUITION ESP32-2424S012-V1.0", flash_size: 4194304, config_offset: 4128768, config_version: 2, revision: "a".repeat(40), sha256: createHash("sha256").update(firmware).digest("hex"), size: firmware.length };
 async function prepare(page, { corrupt = false, catalogFailures = 0, releaseFailures = 0 } = {}) {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "serial", { value: { getPorts: async () => [] }, configurable: true });
@@ -16,7 +16,8 @@ async function prepare(page, { corrupt = false, catalogFailures = 0, releaseFail
 }
 async function chooseStop(page, route, direction = 0) {
   const [, stop] = catalog.links.find(([r, , bits]) => r === route && bits & 1 << direction);
-  await page.locator("#stop-select").selectOption(String(stop));
+  await page.locator("#stop-search").fill(catalog.stops[stop].code || catalog.stops[stop].name);
+  await page.locator(`#stop-options [data-stop="${stop}"]`).click();
   return stop;
 }
 test("groups, directions and walking times update a clean responsive preview", async ({ page }, info) => {
@@ -135,7 +136,8 @@ test("searches keep choices explicit, scoped to the line and direction", async (
   await expect(page.locator("#stop-results")).toContainText("No boarding stops match");
   const [, stop] = catalog.links.find(([r, , bits]) => r === route && bits & 1);
   await page.locator("#stop-search").fill(catalog.stops[stop].code.toLowerCase());
-  await page.locator("#stop-select").selectOption(String(stop));
+  await page.locator("#stop-search").fill(catalog.stops[stop].code || catalog.stops[stop].name);
+  await page.locator(`#stop-options [data-stop="${stop}"]`).click();
   await page.screenshot({ path: `/tmp/timetable-picker-${info.project.name}.png` });
   await page.locator("#save-pick").click();
   await expect(page.locator("#preview-empty")).toBeHidden();
@@ -144,12 +146,59 @@ test("searches keep choices explicit, scoped to the line and direction", async (
   await expect(page.locator("#preview-mode")).toContainText("MANUAL");
   await expect(page.locator(".pick-edit")).toBeFocused();
   await page.locator(".pick-edit").click();
-  await expect(page.locator("#stop-select")).toHaveValue(String(stop));
+  await expect(page.locator("#stop-search")).toHaveValue(`${catalog.stops[stop].name} · ${catalog.stops[stop].code}`);
   await page.locator("#route-search").fill("no-such-line");
   await expect(page.locator("#route-results")).toContainText("No lines match");
   await expect(page.locator("#save-pick")).toBeDisabled();
   await page.locator("#cancel-pick").click();
   await expect(page.locator("#preview-line")).toHaveText("4");
+});
+test("one stop box browses serving lines before a line is chosen", async ({ page }, info) => {
+  await prepare(page);
+  await page.locator("#add-pick").click();
+  await expect(page.locator('#pick-dialog input[role="combobox"]')).toHaveCount(1);
+  const route = catalog.routes.findIndex((r) => r.line === "4");
+  const [, stop] = catalog.links.find(([r, s, bits]) => r === route && bits & 1 && catalog.links.some(([other, same]) => same === s && other !== route));
+  await page.locator("#stop-search").fill(catalog.stops[stop].code.toLowerCase());
+  await expect(page.locator("#route-select")).toHaveValue("");
+  await expect(page.locator("#save-pick")).toBeDisabled();
+  await page.locator("#stop-search").press("ArrowDown");
+  await expect(page.locator("#stop-search")).toHaveAttribute("aria-activedescendant", `stop-option-${stop}`);
+  await page.locator("#stop-search").press("Enter");
+  await expect(page.locator("#stop-options")).toBeHidden();
+  const routes = [...new Set(catalog.links.filter(([, s]) => s === stop).map(([r]) => r))];
+  expect(await page.locator("#route-select option").evaluateAll((options) => options.slice(1).map((o) => Number(o.value)))).toEqual(routes);
+  await expect(page.locator("#route-results")).toContainText("serving");
+  await expect(page.locator("#save-pick")).toBeDisabled();
+  await page.locator("#route-select").selectOption({ value: String(route) });
+  const directions = [0, 1].filter((d) => catalog.links.some(([r, s, bits]) => r === route && s === stop && bits & 1 << d));
+  expect(await page.locator("#direction-select option").evaluateAll((options) => options.slice(1).map((o) => Number(o.value)))).toEqual(directions);
+  await page.locator("#direction-select").selectOption("0");
+  await expect(page.locator("#save-pick")).toBeEnabled();
+  await page.screenshot({ path: `/tmp/timetable-stop-first-${info.project.name}.png` });
+  await page.locator("#save-pick").click();
+  await expect(page.locator("#preview-stop")).toHaveText(catalog.stops[stop].name);
+  await page.locator(".pick-edit").click();
+  await expect(page.locator("#stop-search")).toHaveValue(`${catalog.stops[stop].name} · ${catalog.stops[stop].code}`);
+  await expect(page.locator("#direction-select")).toHaveValue("0");
+  await page.locator("#stop-search").fill("no-such-stop");
+  await expect(page.locator("#save-pick")).toBeDisabled();
+  await expect(page.locator("#stop-results")).toContainText("No boarding stops match");
+  await page.locator("#stop-search").fill(catalog.stops[stop].code);
+  await page.locator("#stop-search").press("Enter");
+  // Typing a unique result still requires explicit selection.
+  await expect(page.locator("#save-pick")).toBeDisabled();
+  await page.locator("#stop-search").press("ArrowUp");
+  await expect(page.locator("#stop-search")).toHaveAttribute("aria-activedescendant", `stop-option-${stop}`);
+  await page.locator("#stop-search").press("Escape");
+  await expect(page.locator("#stop-options")).toBeHidden();
+  await expect(page.locator("#pick-dialog")).toBeVisible();
+  await page.locator("#stop-search").press("ArrowDown");
+  await page.locator(`#stop-options [data-stop="${stop}"]`).click();
+  await expect(page.locator("#save-pick")).toBeEnabled();
+  await page.locator("#stop-search").press("Escape");
+  await expect(page.locator("#pick-dialog")).toBeHidden();
+  await expect(page.locator("#preview-stop")).toHaveText(catalog.stops[stop].name);
 });
 test("keyboard groups and undo retain selections without overwriting later edits", async ({ page }) => {
   await prepare(page);
@@ -333,4 +382,32 @@ test("invalid group imports preserve settings and an existing undo", async ({ pa
   }
   await page.locator("#undo-removal").click();
   await expect(page.locator("#group-name")).toHaveValue("Keep my plans");
+});
+
+test("battery mode is explicit, keeps groups and reaches USB settings", async ({ page }) => {
+  await prepare(page);
+  await expect(page.locator("#prepare")).toBeEnabled();
+  await expect(page.locator("#battery-mode")).not.toBeChecked();
+  await page.locator("#wifi-ssid").fill('Home "2.4"');
+  await page.locator("#wifi-password").fill('pa\\ss"word');
+  await page.locator("#prepare").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+  await page.locator("#battery-mode").check();
+  await expect(page.locator("#install-area")).toBeHidden();
+  await expect(page.locator("#battery-hint")).toContainText("Tap to wake");
+  await page.locator("#import-groups").setInputFiles({ name: "groups.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ version: 1, automatic: saved.automatic, groups: saved.groups })) });
+  await expect(page.locator(".pick-edit")).toHaveCount(1);
+  await expect(page.locator("#battery-mode")).toBeChecked();
+  await page.locator("#prepare").click();
+  const settings = await page.evaluate(async () => {
+    const manifest = await (await fetch(document.querySelector("#installer").manifest)).json();
+    const bytes = await (await fetch(manifest.builds[0].parts[1].path)).arrayBuffer();
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 24, new DataView(bytes).getUint32(12, true))));
+  });
+  expect(settings.battery).toBe(true);
+  expect(settings.wifi_ssid).toBe('Home "2.4"');
+  expect(settings.wifi_password).toBe('pa\\ss"word');
+  expect(settings.groups).toEqual(saved.groups);
+  await page.locator("#battery-mode").uncheck();
+  await expect(page.locator("#install-area")).toBeHidden();
 });

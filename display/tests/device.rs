@@ -154,6 +154,92 @@ fn settings_crc_covers_generation_and_recovers_only_complete_images() {
 }
 
 #[test]
+fn browser_and_unicode_escaped_credentials_survive_flash_roundtrips() {
+    let mut image = *include_bytes!("settings-escaped.bin");
+    let (expected, _) = config::decode(&mut image).unwrap();
+    assert_eq!(expected.wifi_ssid, "Home \"2.4\" \\ Łódź");
+    assert_eq!(expected.wifi_password, "pa\\ss\"word");
+    assert_eq!(expected.groups[0].name, "Work \"home\"");
+    assert_eq!(
+        expected.groups[0].picks[0].stop_name,
+        "\"Łąkowa\" \\ północ"
+    );
+    assert!(expected.battery);
+    config::encode(&expected, 17, &mut image).unwrap();
+    assert!(config::decode(&mut image).unwrap().0 == expected);
+    let mut limits = expected.clone();
+    limits.wifi_ssid = "\\".repeat(32).as_str().try_into().unwrap();
+    limits.wifi_password = "\\".repeat(63).as_str().try_into().unwrap();
+    limits.groups[0].picks[0].stop_name = "\"".repeat(64).as_str().try_into().unwrap();
+    config::encode(&limits, 18, &mut image).unwrap();
+    assert!(config::decode(&mut image).unwrap().0 == limits);
+    config::encode(&expected, 17, &mut image).unwrap();
+    // JSON producers may encode Unicode rather than writing UTF-8 literally.
+    let payload = include_bytes!("settings-escaped.json");
+    image[config::HEADER_SIZE..].fill(0xff);
+    image[config::HEADER_SIZE..config::HEADER_SIZE + payload.len()].copy_from_slice(payload);
+    image[12..16].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    image[16..20].fill(0);
+    let crc = config::crc32(&image[..config::HEADER_SIZE + payload.len()]);
+    image[16..20].copy_from_slice(&crc.to_le_bytes());
+    assert!(config::decode(&mut image).unwrap().0 == expected);
+}
+
+#[test]
+fn legacy_full_settings_reencode_without_growing_a_default_field() {
+    let mut c = settings();
+    let mut p = c.groups[0].picks[0].clone();
+    p.route = "\"".repeat(32).as_str().try_into().unwrap();
+    p.line = "\"".repeat(8).as_str().try_into().unwrap();
+    p.stop = "\"".repeat(32).as_str().try_into().unwrap();
+    p.stop_name = "\"".repeat(64).as_str().try_into().unwrap();
+    p.stop_code = "\"".repeat(16).as_str().try_into().unwrap();
+    p.headsign = "\"".repeat(64).as_str().try_into().unwrap();
+    let mut g = c.groups[0].clone();
+    g.name = "\"".repeat(24).as_str().try_into().unwrap();
+    g.picks.clear();
+    for _ in 0..4 {
+        g.picks.push(p.clone()).unwrap();
+    }
+    c.groups.clear();
+    for _ in 0..4 {
+        c.groups.push(g.clone()).unwrap();
+    }
+    let mut json = [0; 16384];
+    let limit = config::IMAGE_SIZE - config::HEADER_SIZE;
+    loop {
+        let len = serde_json_core::to_slice(&c, &mut json).unwrap();
+        if len <= limit {
+            assert!(len >= limit - 1);
+            assert!(
+                !core::str::from_utf8(&json[..len])
+                    .unwrap()
+                    .contains("battery")
+            );
+            break;
+        }
+        c.groups
+            .iter_mut()
+            .flat_map(|g| &mut g.picks)
+            .find(|p| !p.headsign.is_empty())
+            .unwrap()
+            .headsign
+            .pop();
+    }
+    let mut image = [0; config::IMAGE_SIZE];
+    config::encode(&c, 99, &mut image).unwrap();
+    let (decoded, generation) = config::decode(&mut image).unwrap();
+    assert!(!decoded.battery);
+    config::encode(&decoded, generation, &mut image).unwrap();
+    assert!(config::decode(&mut image).unwrap().0 == c);
+    c.battery = true;
+    assert_eq!(
+        config::encode(&c, 100, &mut image),
+        Err(config::Error::Capacity)
+    );
+}
+
+#[test]
 fn overnight_groups_use_the_day_the_window_started() {
     let mut g = settings().groups.remove(0);
     g.start = 22 * 60;

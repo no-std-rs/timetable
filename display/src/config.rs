@@ -16,7 +16,14 @@ pub struct Config {
     pub wifi_ssid: String<32>,
     pub wifi_password: String<64>,
     pub automatic: bool,
+    /// Optional for settings installed before battery operation was available.
+    #[serde(default, skip_serializing_if = "disabled")]
+    pub battery: bool,
     pub groups: Vec<Group, MAX_GROUPS>,
+}
+
+fn disabled(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -165,8 +172,9 @@ pub fn decode(bytes: &mut [u8; IMAGE_SIZE]) -> Result<(Config, u32), Error> {
     if actual != expected {
         return Err(Error::Corrupt);
     }
+    let mut escaped = [0; 64];
     let (config, used): (Config, _) =
-        serde_json_core::from_slice(&bytes[HEADER_SIZE..HEADER_SIZE + len])
+        serde_json_core::from_slice_escaped(&bytes[HEADER_SIZE..HEADER_SIZE + len], &mut escaped)
             .map_err(|_| Error::Corrupt)?;
     if used != len {
         return Err(Error::Corrupt);

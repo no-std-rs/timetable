@@ -288,3 +288,22 @@ available for the call stack. The 300,000-byte regression ceiling and parser/UI
 capacities are unchanged. The isolated display query/reserve probe remains
 250,312 B. These are compiler/linker bounds; hardware peak RAM and touch timing
 remain unmeasured.
+
+## Battery retention
+
+The optional sleep/tap mode retains a fixed 4,096-byte RTC image, including all
+512 departures and 32 headsigns in the existing 1,024-byte text pool. A full
+snapshot occupies 3,184 encoded bytes; credentials are excluded. Restore checks
+CRC, configuration identity, bounds and the RTC tick interval before publishing.
+Repeated short sleeps preserve fractional seconds and the refresh deadline.
+
+The pinned Rust 1.95.0 linked budget is **296,756 B**, including the unchanged
+65,536-byte heap and 24,576-byte stack reserve. Static RAM including RTC is
+272,180 B; the linker leaves 52,424 B for the call stack. This is 4,224 B above
+the previous release and below the unchanged 300,000-byte ceiling. The
+[raw section report](benchmarks/device-battery-ram.json) includes RTC retention.
+Synchronous in-place application initialization avoids retaining a redundant
+7.5 KiB aggregate in the main async task. The isolated query probe is unchanged.
+See [battery mode](docs/battery.md) for policy and sources. Physical peak memory,
+board current, battery life, sleep-clock drift and wake reliability remain
+unmeasured; no battery-hour estimate is inferred from the linked-memory bound.
