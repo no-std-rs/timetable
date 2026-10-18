@@ -32,19 +32,21 @@ fn u32_at(b: &[u8], i: usize) -> u32 {
 /// Keep this in caller-owned memory and reuse it between entries and queries.
 pub struct Workspace {
     dictionary: [u8; 32768],
-    inflater: DecompressorOxide,
+    inflater: Option<DecompressorOxide>,
 }
 
 impl Workspace {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             dictionary: [0; 32768],
-            inflater: DecompressorOxide::new(),
+            inflater: None,
         }
     }
 
     fn reset(&mut self) {
-        self.inflater.init();
+        self.inflater
+            .get_or_insert_with(DecompressorOxide::new)
+            .init();
     }
 }
 
@@ -676,7 +678,7 @@ impl<R: Read> Read for Reader<'_, R> {
             };
             let pos = self.dictionary_pos;
             let (status, consumed, produced) = decompress(
-                &mut self.workspace.inflater,
+                self.workspace.inflater.as_mut().unwrap(),
                 &self.input[self.start..self.start + available],
                 &mut self.workspace.dictionary,
                 pos,

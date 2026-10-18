@@ -11,7 +11,7 @@ for name in ['index.html', 'style.css', 'app.js', 'config.js', 'catalog-search.j
     shutil.copyfile(root / 'web' / name, site / name)
 shutil.copyfile(root / 'web/dist/installer.js', site / 'installer.js')
 shutil.copyfile(root / 'catalog/catalog.json', site / 'catalog.json')
-for name in ['timetable-display.bin', 'latest.json', 'manifest.json', 'SHA256SUMS', 'RAM.json']:
+for name in ['timetable-display.bin', 'latest.json', 'manifest.json', 'SHA256SUMS', 'RAM.json', 'STACK.json']:
     shutil.copyfile(firmware / name, site / name)
 (site / '.nojekyll').touch()
 print(site)

@@ -10,6 +10,7 @@ cargo build --locked --release --features firmware
 target_dir=${CARGO_TARGET_DIR:-target}
 elf="$target_dir/riscv32imc-unknown-none-elf/release/timetable-display"
 python3 "$repo_dir/tools/check-device-ram.py" "$elf" "$output_dir/RAM.json"
+python3 "$repo_dir/tools/check-device-stack.py" "$elf" "$output_dir/STACK.json"
 espflash save-image --skip-update-check --chip esp32c3 --merge --skip-padding \
     --flash-mode dio --flash-freq 80mhz --flash-size 4mb --partition-table partitions.csv \
     "$elf" "$output_dir/timetable-display.bin"

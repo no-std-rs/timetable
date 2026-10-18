@@ -40,6 +40,11 @@ page. The firmware image itself contains no credentials. Installation replaces
 the device's previous firmware and saved settings; device flash settings are
 not encrypted.
 
+If the screen stays black or the USB connection fails, hold **BOOT** while
+reconnecting USB, release it, and select the new port in the installer. This
+uses the ROM flasher without running the app; another firmware is unnecessary
+as an intermediate step. See [boot failure and recovery](../docs/boot-recovery.md).
+
 On the display:
 
 - **Swipe left/right:** change group, overriding automatic selection for two hours.
@@ -116,12 +121,17 @@ epoch; access reconstructs full `i64` timestamps, including after 2038.
 TLS borrows its verifier and connection instead of moving large async state.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. It requires a separate 24 KiB available call stack and enforces the
-400,000-byte limit plus a **300,000-byte regression ceiling**. The measured
-release budget is **296,756 B**, down from **317,756 B**, with the same heap, stack
-reserve and application capacities. `RAM.json` reports each exact build.
-This is a linked-memory bound; physical stack/heap high-water and screen/radio/touch behaviour
-still require the physical board. No physical flash or hardware test has been
+excluded. The static-plus-minimum-stack regression account is **296,996 B**,
+including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
+**300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
+stack. Static RAM plus all 52,184 linker-available stack bytes is **324,604 B**,
+below 400,000 B. `RAM.json` labels both quantities explicitly.
+`tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
+checks audited boot paths against 24 KiB and runtime paths against the actual
+available stack, with 4 KiB headroom. The original binary fails this check.
+`STACK.json` records the scoped audit; it is not a complete call-graph proof or
+physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
+Physical screen/radio/touch behaviour still requires the board. No hardware test has been
 performed as part of this implementation. Serial logs report allocator current,
 peak-since-boot and total bytes after startup and refresh attempts, including
 allocations already freed by the TLS handshake. Keep the full heap allowance

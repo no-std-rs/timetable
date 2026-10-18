@@ -35,7 +35,7 @@ jobs:
           cargo fmt --all --check
           cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
           cargo clippy --locked --release --features firmware -- -D warnings
-      - name: Build the factory image and enforce linked RAM
+      - name: Build the factory image and enforce linked RAM and stack
         run: |
           sh tools/build-device-artifact.sh
           python3 -c 'import json; assert not json.load(open("dist/firmware/latest.json"))["dirty"]'

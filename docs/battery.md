@@ -36,11 +36,13 @@ absolute RTC microsecond readings across boots would be incorrect because HAL
 recalibrates on boot. Subsecond time survives repeated short sleeps. The RTC
 oscillator can drift between SNTP synchronizations.
 
-The complete linked budget is **296,756 bytes**, including RTC retention, the
-unchanged 64 KiB radio/TLS heap and 24 KiB stack reserve. It remains below the
-300,000-byte regression ceiling. The linker leaves 52,424 bytes for the call
-stack. See [the linked report](../benchmarks/device-battery-ram.json) and
-[performance notes](../PERFORMANCE.md). These are compiler/linker bounds.
+The minimum-reserve regression account is **296,996 bytes**, including RTC,
+the unchanged 64 KiB heap and 24 KiB minimum stack reserve. It remains below
+300,000 bytes but is not a runtime peak. Static RAM plus the complete
+52,184-byte available stack is **324,604 bytes**, below 400,000. TLS uses more
+than the minimum reserve; a separate compiled-stack audit checks known paths
+with headroom. See [the linked report](../benchmarks/device-boot-ram.json),
+[boot-stack audit](boot-recovery.md) and [performance notes](../PERFORMANCE.md).
 
 ## Board support and verification
 

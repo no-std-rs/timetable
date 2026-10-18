@@ -92,6 +92,7 @@
           <div id="install-area" hidden><esp-web-install-button id="installer"><button slot="activate" type="button" class="button primary">Install on display ↗</button><span slot="unsupported">Use desktop Chrome or Edge to install over USB.</span><span slot="not-allowed">Open this page over HTTPS or localhost to install.</span></esp-web-install-button></div>
           <div class="install-notes"><p>Desktop Chrome or Edge · GUITION ESP32-2424S012-V1.0 · 4 MB flash</p><p>Installation replaces the device’s firmware and saved settings. Wi-Fi settings are stored in its local flash.</p></div>
           <details class="download-details"><summary>Prefer to flash it yourself?</summary><p><a id="download" hidden download="timetable-display.bin">Download verified firmware</a><span id="no-download">A binary will be available after the first published build.</span></p><code id="digest"></code></details>
+          <details class="download-details"><summary>Black screen or USB won’t connect?</summary><p>Hold the board’s BOOT button while reconnecting USB, then release it. Select the newly appeared port and install again. This starts the chip’s built-in flasher and bypasses the current app; installing different firmware first is unnecessary.</p></details>
         </div>
       </section>
     </form>

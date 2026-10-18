@@ -240,6 +240,71 @@ fn legacy_full_settings_reencode_without_growing_a_default_field() {
 }
 
 #[test]
+fn bounded_settings_parser_keeps_strict_schema_and_full_capacity() {
+    fn parse(payload: &str) -> Result<Config, config::Error> {
+        let mut image = [0xff; config::IMAGE_SIZE];
+        image[..8].copy_from_slice(config::MAGIC);
+        image[8..12].fill(0);
+        image[12..16].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+        image[16..24].fill(0);
+        image[24..24 + payload.len()].copy_from_slice(payload.as_bytes());
+        let crc = config::crc32(&image[..24 + payload.len()]);
+        image[16..20].copy_from_slice(&crc.to_le_bytes());
+        config::decode(&mut image).map(|(c, _)| c)
+    }
+    let pick = r#"{"route":"4","line":"4","stop":"S1","stop_name":"Stop","stop_code":"S01","headsign":"Town","direction":0,"walk":6,"spread":1,"margin":1}"#;
+    let group = format!(r#"{{"name":"Work","days":31,"start":360,"end":660,"picks":[{pick}]}}"#);
+    let json =
+        format!(r#"{{"wifi_ssid":"test","wifi_password":"","automatic":true,"groups":[{group}]}}"#);
+    let c = parse(&json).unwrap();
+    assert!(!c.battery);
+    let reordered = format!(
+        r#"{{"groups":[{group}],"battery":false,"automatic":true,"wifi_password":"","wifi_\u0073sid":"test"}}"#
+    );
+    assert!(parse(&reordered).unwrap() == c);
+    for malformed in [
+        json.replace(r#""wifi_ssid":"test","#, ""),
+        json.replace(r#""wifi_password":"","#, ""),
+        json.replace(r#""automatic":true,"#, ""),
+        json.replace(
+            r#""wifi_ssid":"test""#,
+            r#""wifi_ssid":"test","wifi_ssid":"other""#,
+        ),
+        json.replace(
+            r#""groups":["#,
+            r#""battery":true,"battery":false,"groups":["#,
+        ),
+        json.replace(r#""groups":["#, r#""extra":0,"groups":["#),
+        json.replace(r#""name":"Work","#, ""),
+        json.replace(r#""days":31,"#, ""),
+        json.replace(r#""start":360,"#, ""),
+        json.replace(r#""end":660,"#, ""),
+        json.replace(r#""picks":["#, r#""days":31,"picks":["#),
+        json.replace(r#""picks":["#, r#""extra":0,"picks":["#),
+        json.replace(r#""margin":1"#, r#""margin":1,"extra":0"#),
+        json.replace(r#""walk":6"#, r#""walk":6,"walk":7"#),
+        json.replace(r#""days":31"#, r#""days":null"#),
+        json.replace(r#""automatic":true"#, r#""automatic":1"#),
+        format!("{json} false"),
+    ] {
+        assert!(parse(&malformed).is_err(), "accepted {malformed}");
+    }
+    let full_group = group.replace(pick, &[pick; 4].join(","));
+    let full = json.replace(&group, &[full_group.as_str(); 4].join(","));
+    let full = parse(&full).unwrap();
+    assert_eq!(full.groups.len(), 4);
+    assert!(full.groups.iter().all(|g| g.picks.len() == 4));
+    let mut snapshot = Config::empty();
+    snapshot.clone_from(&full);
+    assert!(snapshot == full);
+    snapshot.battery = true;
+    snapshot.clone_from(&c);
+    assert!(snapshot == c);
+    assert!(parse(&json.replace(&group, &[group.as_str(); 5].join(","))).is_err());
+    assert!(parse(&json.replace(pick, &[pick; 5].join(","))).is_err());
+}
+
+#[test]
 fn overnight_groups_use_the_day_the_window_started() {
     let mut g = settings().groups.remove(0);
     g.start = 22 * 60;

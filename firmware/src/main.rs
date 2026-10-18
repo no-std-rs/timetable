@@ -34,11 +34,11 @@ use esp_radio::wifi::{
 };
 use esp_storage::FlashStorage;
 use log::{info, warn};
-use static_cell::StaticCell;
+use static_cell::{ConstStaticCell, StaticCell};
 use timetable_display::{
     App, Config, catalog::Catalog, config, feed::Builder, model::Status, render, ui,
 };
-use timetable_firmware::{battery, panel, sources::Archives};
+use timetable_firmware::{battery, panel, settings, sources::Archives};
 use transport::{Error, Http, Operation};
 
 struct State {
@@ -55,7 +55,9 @@ static NET: StaticCell<StackResources<4>> = StaticCell::new();
 static SETTINGS: StaticCell<[u8; config::IMAGE_SIZE]> = StaticCell::new();
 const _: () = assert!(panel::TILE_BYTES <= config::IMAGE_SIZE);
 static FEED: StaticCell<Builder> = StaticCell::new();
-static WORKSPACE: StaticCell<gtfs::zip::Workspace> = StaticCell::new();
+static QUERY_CONFIG: ConstStaticCell<Config> = ConstStaticCell::new(Config::empty());
+static WORKSPACE: ConstStaticCell<gtfs::zip::Workspace> =
+    ConstStaticCell::new(gtfs::zip::Workspace::new());
 static REFRESH: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 static POWER_DOWN: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 static RADIO_OFF: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -71,34 +73,39 @@ fn log_heap() {
     );
 }
 
-fn load(
-    flash: &mut FlashStorage<'_>,
-    scratch: &mut [u8; config::IMAGE_SIZE],
-) -> Option<(Config, u32, u32)> {
+#[inline(never)]
+fn has_settings_partition(flash: &mut FlashStorage<'_>) -> bool {
     use esp_bootloader_esp_idf::partitions::{PARTITION_TABLE_MAX_LEN, read_partition_table};
     let mut table = [0; PARTITION_TABLE_MAX_LEN];
-    let table = read_partition_table(flash, &mut table).ok()?;
-    table.iter().find(|p| {
+    let Ok(table) = read_partition_table(flash, &mut table) else {
+        return false;
+    };
+    table.iter().any(|p| {
         p.label().starts_with(b"timetable\0")
             && p.offset() == config::FLASH_OFFSET
             && p.len() == 0x10000
             && p.raw_type() == 1
             && p.raw_subtype() == 6
-    })?;
-    let mut chosen: Option<(Config, u32, u32)> = None;
-    for bank in [0, config::BANK_SIZE as u32] {
-        if ReadNorFlash::read(flash, config::FLASH_OFFSET + bank, scratch).is_ok()
-            && let Ok((c, g)) = config::decode(scratch)
-            && chosen
-                .as_ref()
-                .is_none_or(|(_, old, _)| config::newer(g, *old))
-        {
-            chosen = Some((c, g, bank));
-        }
-    }
-    chosen
+    })
 }
 
+#[inline(never)]
+fn load(
+    flash: &mut FlashStorage<'_>,
+    scratch: &mut [u8; config::IMAGE_SIZE],
+    output: &mut Config,
+) -> Option<(u32, u32)> {
+    if !has_settings_partition(flash) {
+        return None;
+    }
+    settings::load_banks(
+        |offset, bytes| ReadNorFlash::read(flash, offset, bytes),
+        scratch,
+        output,
+    )
+}
+
+#[inline(never)]
 fn save(
     flash: &mut FlashStorage<'_>,
     scratch: &mut [u8; config::IMAGE_SIZE],
@@ -144,6 +151,10 @@ async fn main(spawner: Spawner) -> ! {
         timers.timer0,
         SoftwareInterruptControl::new(p.SW_INTERRUPT).software_interrupt0,
     );
+    info!(
+        "Boot: starting timetable; reset {:?}",
+        esp_hal::system::reset_reason()
+    );
     let mut backlight = Output::new(p.GPIO3, Level::Low, OutputConfig::default());
     let mut cs = Output::new(p.GPIO10, Level::Low, OutputConfig::default());
     let dc = Output::new(p.GPIO2, Level::Low, OutputConfig::default());
@@ -170,9 +181,34 @@ async fn main(spawner: Spawner) -> ! {
     delay.delay_millis(400);
     let _ = touch.write(0x15, &[0xfe, 1]);
     let scratch = SETTINGS.init([0; config::IMAGE_SIZE]);
+    if !matches!(wake, SleepSource::Timer) {
+        let pixels = scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
+        for y in (0..240).step_by(panel::TILE_ROWS) {
+            render::starting(&mut panel::Tile { y, pixels }).unwrap();
+            panel.write_tile(y, pixels).unwrap();
+        }
+        backlight.set_high();
+    }
+    info!("Boot: panel ready; loading settings");
     let mut flash = FlashStorage::new(p.FLASH);
     let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
-    let Some((settings, mut generation, mut bank)) = load(&mut flash, scratch) else {
+    // Only this main task accesses persistent bytes; restore validates them
+    // before publishing an app. Settings load writes directly into static State.
+    let retained = unsafe { &mut *core::ptr::addr_of_mut!(RETAINED) };
+    let Some(Boot {
+        shared,
+        mut generation,
+        mut bank,
+        restored,
+        connect,
+    }) = initialize_state(
+        &mut flash,
+        scratch,
+        retained,
+        rtc::stamp().0,
+        matches!(wake, SleepSource::Gpio | SleepSource::Timer),
+    )
+    else {
         let pixels = scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
         for y in (0..240).step_by(panel::TILE_ROWS) {
             render::setup(&mut panel::Tile { y, pixels }).unwrap();
@@ -183,17 +219,6 @@ async fn main(spawner: Spawner) -> ! {
             Timer::after_secs(60).await;
         }
     };
-    // Only this main task accesses the persistent byte array, once per boot.
-    // Bytes are checked (including CRC/config identity) before becoming app data.
-    let retained = unsafe { &mut *core::ptr::addr_of_mut!(RETAINED) };
-    let (shared, restored, connect) = initialize_state(
-        settings,
-        generation,
-        scratch,
-        retained,
-        rtc::stamp().0,
-        matches!(wake, SleepSource::Gpio | SleepSource::Timer),
-    );
     if let Some(utc) = restored.as_ref().and_then(|r| r.utc_micros) {
         transport::restore_clock(utc);
     }
@@ -210,8 +235,10 @@ async fn main(spawner: Spawner) -> ! {
     let mut suppress_touch = wake_ui.suppress_touch;
     let mut radio = Some(p.WIFI);
     if connect {
+        info!("Boot: settings ready; starting network");
         start_network(spawner, radio.take().unwrap(), shared);
     }
+    info!("Boot: application ready");
     log_heap();
     let mut down_at = None;
     let mut start = (0u16, 0u16);
@@ -450,28 +477,40 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
-// Keep the large State/App construction out of the retained async main frame.
+// Finish large State/App construction before loading or parsing any settings.
 #[inline(never)]
-fn initialize_state(
-    settings: Config,
-    generation: u32,
-    scratch: &mut [u8; config::IMAGE_SIZE],
-    retained: &mut [u8; battery::RETAINED_BYTES],
-    rtc_ticks: u64,
-    can_restore: bool,
-) -> (&'static Shared, Option<battery::Wake>, bool) {
-    let shared = STATE.init_with(|| {
+fn create_state() -> &'static Shared {
+    STATE.init_with(|| {
         Mutex::new(State {
-            config: settings,
+            config: Config::default(),
             app: App::default(),
             revision: 0,
             network_busy: false,
             completed_delay: None,
             powering_down: false,
         })
-    });
+    })
+}
+
+struct Boot {
+    shared: &'static Shared,
+    generation: u32,
+    bank: u32,
+    restored: Option<battery::Wake>,
+    connect: bool,
+}
+#[inline(never)]
+fn initialize_state(
+    flash: &mut FlashStorage<'_>,
+    scratch: &mut [u8; config::IMAGE_SIZE],
+    retained: &mut [u8; battery::RETAINED_BYTES],
+    rtc_ticks: u64,
+    can_restore: bool,
+) -> Option<Boot> {
+    let shared = create_state();
     let mut s = shared.try_lock().unwrap();
-    config::encode(&s.config, generation, scratch).unwrap();
+    let (generation, bank) = load(flash, scratch, &mut s.config)?;
+    config::encode(&s.config, generation, scratch).ok()?;
     let tag = u32::from_le_bytes(scratch[16..20].try_into().unwrap());
     let restored = if s.config.battery && can_restore {
         let State { config, app, .. } = &mut *s;
@@ -482,9 +521,16 @@ fn initialize_state(
     let connect = !s.config.battery || restored.as_ref().is_none_or(|r| r.refresh_in_us == 0);
     s.network_busy = connect;
     drop(s);
-    (shared, restored, connect)
+    Some(Boot {
+        shared,
+        generation,
+        bank,
+        restored,
+        connect,
+    })
 }
 
+#[inline(never)]
 fn start_network(
     spawner: Spawner,
     wifi: esp_hal::peripherals::WIFI<'static>,
@@ -505,8 +551,9 @@ fn start_network(
         timetable(
             stack,
             shared,
+            QUERY_CONFIG.take(),
             FEED.init_with(|| Builder::new("20261017".parse().unwrap())),
-            WORKSPACE.init_with(gtfs::zip::Workspace::new),
+            WORKSPACE.take(),
         )
         .unwrap(),
     );
@@ -647,6 +694,7 @@ async fn refresh(
 async fn timetable(
     stack: Stack<'static>,
     shared: &'static Shared,
+    query_config: &'static mut Config,
     builder: &'static mut Builder,
     workspace: &'static mut gtfs::zip::Workspace,
 ) {
@@ -680,13 +728,14 @@ async fn timetable(
             let _ = select(Timer::after_secs(30), REFRESH.wait()).await;
             continue;
         }
-        let (c, revision) = {
+        let revision = {
             let mut s = shared.lock().await;
             s.app.status = Status::Loading;
-            (s.config.clone(), s.revision)
+            query_config.clone_from(&s.config);
+            s.revision
         };
         let result = select(
-            refresh(&Http(stack), builder, workspace, &c),
+            refresh(&Http(stack), builder, workspace, query_config),
             REFRESH.wait(),
         )
         .await;

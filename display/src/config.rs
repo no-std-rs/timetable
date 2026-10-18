@@ -1,6 +1,7 @@
 //! Bounded settings shared by the USB installer and firmware.
 use heapless::{String, Vec};
 use serde::{Deserialize, Serialize};
+mod decode;
 
 pub const FLASH_OFFSET: u32 = 0x3f0000;
 pub const BANK_SIZE: usize = 0x8000;
@@ -10,7 +11,7 @@ pub const MAX_GROUPS: usize = 4;
 pub const MAX_PICKS: usize = 4;
 pub const MAGIC: &[u8; 8] = b"TTABLE01";
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub wifi_ssid: String<32>,
@@ -62,6 +63,17 @@ pub enum Error {
 }
 
 impl Config {
+    /// Empty provisional storage; fill and validate it before application use.
+    pub const fn empty() -> Self {
+        Self {
+            wifi_ssid: String::new(),
+            wifi_password: String::new(),
+            automatic: false,
+            battery: false,
+            groups: Vec::new(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), Error> {
         if self.wifi_ssid.is_empty() || self.wifi_ssid.contains('\0') {
             return Err(Error::Invalid("Wi-Fi name"));
@@ -91,6 +103,36 @@ impl Config {
             }
         }
         Ok(())
+    }
+}
+
+impl Clone for Config {
+    fn clone(&self) -> Self {
+        let mut output = Self::empty();
+        output.clone_from(self);
+        output
+    }
+
+    // Copy one group at a time into existing storage. Returning a complete
+    // nested Config temporary consumes several KiB in async task poll frames.
+    #[inline(never)]
+    fn clone_from(&mut self, source: &Self) {
+        self.wifi_ssid.clone_from(&source.wifi_ssid);
+        self.wifi_password.clone_from(&source.wifi_password);
+        self.automatic = source.automatic;
+        self.battery = source.battery;
+        self.groups.clear();
+        for group in &source.groups {
+            self.groups
+                .push(Group {
+                    name: group.name.clone(),
+                    days: group.days,
+                    start: group.start,
+                    end: group.end,
+                    picks: group.picks.clone(),
+                })
+                .unwrap();
+        }
     }
 }
 
@@ -156,7 +198,17 @@ pub fn encode(config: &Config, generation: u32, out: &mut [u8; IMAGE_SIZE]) -> R
     Ok(())
 }
 
+#[inline(never)]
 pub fn decode(bytes: &mut [u8; IMAGE_SIZE]) -> Result<(Config, u32), Error> {
+    let mut config = Config::default();
+    let generation = decode_into(bytes, &mut config)?;
+    Ok((config, generation))
+}
+
+/// Decode into provisional caller-owned settings with bounded parser frames.
+/// On error `config` is incomplete and must not be published or used.
+#[inline(never)]
+pub fn decode_into(bytes: &mut [u8; IMAGE_SIZE], config: &mut Config) -> Result<u32, Error> {
     if &bytes[..8] != MAGIC {
         return Err(Error::Missing);
     }
@@ -173,14 +225,18 @@ pub fn decode(bytes: &mut [u8; IMAGE_SIZE]) -> Result<(Config, u32), Error> {
         return Err(Error::Corrupt);
     }
     let mut escaped = [0; 64];
-    let (config, used): (Config, _) =
-        serde_json_core::from_slice_escaped(&bytes[HEADER_SIZE..HEADER_SIZE + len], &mut escaped)
-            .map_err(|_| Error::Corrupt)?;
+    let mut deserializer = serde_json_core::de::Deserializer::new(
+        &bytes[HEADER_SIZE..HEADER_SIZE + len],
+        Some(&mut escaped),
+    );
+    serde::de::DeserializeSeed::deserialize(decode::ConfigSeed(config), &mut deserializer)
+        .map_err(|_| Error::Corrupt)?;
+    let used = deserializer.end().map_err(|_| Error::Corrupt)?;
     if used != len {
         return Err(Error::Corrupt);
     }
     config.validate()?;
-    Ok((config, generation))
+    Ok(generation)
 }
 
 /// Generations can wrap; their distance must remain below half the u32 range.

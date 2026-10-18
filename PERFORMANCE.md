@@ -307,3 +307,26 @@ Synchronous in-place application initialization avoids retaining a redundant
 See [battery mode](docs/battery.md) for policy and sources. Physical peak memory,
 board current, battery life, sleep-clock drift and wake reliability remain
 unmeasured; no battery-hour estimate is inferred from the linked-memory bound.
+
+## Boot-stack correction
+
+A physical report of an immediate black screen and BOOT-only recovery prompted
+a linked-code audit. Before the fix, cold main plus settings decode needed at
+least 80,736 bytes, and main plus network construction at least 69,344 bytes,
+versus 52,424 bytes available. Static RAM checks did not expose those temporary
+stack allocations. The previous static-plus-24-KiB figure must not be read as a
+whole-runtime peak bound.
+
+The fixed [stack report](benchmarks/device-boot-stack.json) checks progressive
+settings decoding, constant ZIP workspace storage and query snapshots. Boot
+settings uses a 14,480-byte frame sum; partition loading uses 17,920. Both fit
+24 KiB with 4 KiB headroom. A conservative audited TLS sum is 43,680 bytes plus
+that headroom, below 52,184 available bytes. The guard uses release DWARF CFI and
+is a named-path regression audit, not a complete runtime or physical bound.
+
+The [RAM report](benchmarks/device-boot-ram.json) records 272,420 bytes static
+including the unchanged 64 KiB heap, 296,996 bytes with the unchanged minimum
+24 KiB reserve, and 324,604 bytes including all linker-available stack. The
+existing 300,000-byte static/minimum-reserve ceiling remains unchanged; the full
+linked-memory account separately fits 400,000 bytes. Hardware cold boot, USB
+reflashing and stack high-water remain unverified. See [recovery and analysis](docs/boot-recovery.md).
