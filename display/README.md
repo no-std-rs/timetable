@@ -35,6 +35,12 @@ removals), a 1 KiB shared headsign buffer and
 512 departure slots. Capacity failures are errors. IDs are never shortened;
 display labels may be clipped to the screen's supported Latin-2 font.
 
+`departures::Departures` stores each cached event in four bytes relative to the
+snapshot's shared `i64` UTC epoch. Its `get()` and `iter()` return full
+`Departure` values; `sort()` orders by time, group and choice. `reset(now)`
+starts a new snapshot. Out-of-horizon times, invalid selections and a full
+512-slot cache return errors without modifying existing entries.
+
 The editor keeps the selected route and stop page, highlights the saved choice,
 and uses stepwise Back navigation without committing drafts. The catalogue is
 still read from flash. Validated, ordered route links use binary range lookup;

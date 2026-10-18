@@ -85,17 +85,21 @@ pub fn display_task_bytes() -> usize {
 }
 
 #[inline(never)]
+pub fn display_departure_cache_bytes() -> usize {
+    core::mem::size_of::<timetable_display::departures::Departures>()
+}
+
+#[inline(never)]
 pub fn display_reserves_bytes() -> usize {
     // Explicit allowances: radio/RSA heap, network/driver state, TLS records,
-    // HTTP headers, 24 KiB stack, 7.5 KiB panel tile and the retained UI cache.
+    // HTTP headers, 24 KiB stack, shared tile/settings scratch and retained UI.
     65536
         + 32768
         + 16640
         + 2304
         + 2048
         + 24576
-        + 7680
         + core::mem::size_of::<timetable_display::App>()
         + core::mem::size_of::<timetable_display::Config>()
-        + 8192 // settings flash write/verification image
+        + 8192 // shared settings flash image / panel tile (never concurrent)
 }

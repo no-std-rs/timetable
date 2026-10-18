@@ -162,3 +162,56 @@ host observations do not measure ESP32 screen latency or physical RAM high-water
 ```sh
 cargo run -p timetable-display --release --example bench_catalog
 ```
+
+## Linked firmware RAM reduction
+
+Measured on 2026-10-18 with the pinned Rust 1.95.0 release build for
+`riscv32imc-unknown-none-elf`, from main `fa842824` and the optimized source.
+These are linked IRAM/DRAM bytes, not a physical high-water measurement.
+Raw section reports: [before](benchmarks/firmware-ram-before.json),
+[after](benchmarks/firmware-ram-after.json).
+
+| Account | Before | After |
+| --- | ---: | ---: |
+| Static RAM, including the 65,536-byte heap | 293,180 B | 267,788 B |
+| Separate call-stack reserve | 24,576 B | 24,576 B |
+| **Budgeted total** | **317,756 B** | **292,364 B** |
+| Linker-available call stack | 27,328 B | 52,720 B |
+
+The saving is **25,392 B (8.0%)**, with no reduction to parser row/field bounds,
+TLS record or TCP buffers, trip/service capacities, or the 512-event horizon.
+Both retained and pending departure caches use four-byte entries rather than
+full timestamp structs. One shared `i64` epoch reconstructs exact event times;
+checked offsets preserve the inclusive six-hour boundary and dates after 2038.
+The panel renders directly into wire-format bytes borrowed from settings
+scratch, and TLS borrows its connection and certificate verifier across awaits.
+Allocator high-water tracking adds a small amount of bookkeeping to the result.
+
+Full-capacity cache comparisons, invalid/overflowing timestamps, simultaneous
+events, DST/25:xx queries and cancellation/footer rollback are covered by tests.
+All six device screens match a full-framebuffer reference pixel for pixel when
+rendered through the shared scratch; representative board previews also match
+the pre-change output byte for byte. The panel's complete SPI payload is checked.
+
+The same original archive above, line `4`, platform `MAGA42`, UTC `1792215000`
+(2026-10-17 05:30), produces 20 identical departures before and after, with
+zero allocations/reallocations. Seven alternating host release rounds after
+warmup measured 254 ms and 253 ms median respectively; this shows no material
+query-time change on this host, not an MCU timing result. The host compiler was
+Rust 1.97.1. [Raw rounds](benchmarks/firmware-query-ram.csv) include the output
+SHA-256 `91dfc20ade8a66aa59dc561347b3419bcd8f1459e4664c6142ca793fe97846f3`.
+
+CI enforces a 300,000-byte firmware regression ceiling in addition to the
+400,000-byte target and unchanged 24 KiB stack reserve. The ABI display-query
+probe separately reports a 2,064-byte departure cache and 250,256-byte combined
+query/reserve budget. Serial logs expose allocator current and peak-since-boot
+usage after startup and refresh attempts; real board measurements are still
+needed for stack high-water and a smaller radio/RSA heap allowance.
+
+```sh
+sh tools/build-device-artifact.sh
+python3 checks/check_ram.py
+cargo run -p timetable-display --release --example query -- /path/to/20261015_20261031.zip 4 MAGA42 1792215000
+cd firmware
+cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
+```

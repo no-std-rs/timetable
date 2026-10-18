@@ -1,4 +1,4 @@
-use crate::{Config, Pick, clock};
+use crate::{Config, Pick, clock, departures::Departures};
 use heapless::Vec;
 
 #[derive(Default)]
@@ -91,7 +91,7 @@ pub struct App {
     pub save_failed: bool,
     pub clock: Option<i64>,
     pub loaded_at: Option<i64>,
-    pub departures: Vec<Departure, MAX_DEPARTURES>,
+    pub departures: Departures,
     pub headsigns: Headings,
 }
 
@@ -110,7 +110,7 @@ impl Default for App {
             save_failed: false,
             clock: None,
             loaded_at: None,
-            departures: Vec::new(),
+            departures: Departures::new(0),
             headsigns: Headings::default(),
         }
     }
@@ -153,20 +153,15 @@ impl App {
 
     /// Keep the previous validated snapshot on failed refreshes. Publishing is
     /// one operation, after both the GTFS footer and all capacities are checked.
-    pub fn publish(
-        &mut self,
-        mut events: Vec<Departure, MAX_DEPARTURES>,
-        headsigns: Headings,
-        now: i64,
-    ) {
-        events.sort_unstable_by_key(|d| (d.at, d.group, d.pick));
+    pub fn publish(&mut self, mut events: Departures, headsigns: Headings, now: i64) {
+        events.sort();
         self.departures = events;
         self.headsigns = headsigns;
         self.loaded_at = Some(now);
         self.status = Status::Ready;
     }
 
-    pub fn upcoming(&self) -> impl Iterator<Item = &Departure> {
+    pub fn upcoming(&self) -> impl Iterator<Item = Departure> {
         let now = self.clock.unwrap_or(i64::MAX);
         self.departures
             .iter()

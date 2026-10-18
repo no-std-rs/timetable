@@ -36,7 +36,12 @@ def measure(path):
     reserve = 24 * 1024
     if static + reserve > 400000 or stack < reserve:
         raise ValueError(f'C3 RAM budget failed: {static} static bytes, {stack} stack bytes; reserve {reserve}')
-    return {'target': 'riscv32imc-unknown-none-elf', 'sections': selected, 'static_bytes_including_65536_byte_heap': static, 'stack_available_bytes': stack, 'stack_reserve_bytes': reserve, 'budgeted_bytes': static + reserve, 'limit_bytes': 400000, 'fits': True, 'hardware_high_water_measured': False}
+    # Ratchet the optimized firmware below 300 KB without reducing its heap,
+    # stack reserve, parser bounds or departure capacity to meet the check.
+    regression_limit = 300000
+    if static + reserve > regression_limit:
+        raise ValueError(f'C3 RAM regression: {static + reserve} budgeted bytes exceeds {regression_limit}')
+    return {'target': 'riscv32imc-unknown-none-elf', 'sections': selected, 'static_bytes_including_65536_byte_heap': static, 'stack_available_bytes': stack, 'stack_reserve_bytes': reserve, 'budgeted_bytes': static + reserve, 'limit_bytes': 400000, 'regression_limit_bytes': regression_limit, 'fits': True, 'hardware_high_water_measured': False}
 
 
 if __name__ == '__main__':

@@ -118,20 +118,24 @@ impl Http {
             .map_err(|_| Error::Network)?;
         let mut tls_rx = [0; 16 * 1024 + 256];
         let mut tls_tx = [0; 2048 + 256];
-        let tls_config = TlsConfig::new()
-            .with_server_name(HOST)
-            .enable_rsa_signatures();
         let mut tls = TlsConnection::new(socket, &mut tls_rx, &mut tls_tx);
-        let provider = Provider {
-            rng: Trng::try_new().map_err(|_| Error::Tls)?,
-            verifier: CertVerifier::new(Certificate::X509(include_bytes!(
-                "../certs/certum-trusted-root.der"
-            ))),
-        };
-        tls.open(TlsContext::new(&tls_config, provider))
-            .await
-            .map_err(|_| Error::Tls)?;
-        let mut stream = Io(tls);
+        {
+            let tls_config = TlsConfig::new()
+                .with_server_name(HOST)
+                .enable_rsa_signatures();
+            let mut provider = Provider {
+                rng: Trng::try_new().map_err(|_| Error::Tls)?,
+                verifier: CertVerifier::new(Certificate::X509(include_bytes!(
+                    "../certs/certum-trusted-root.der"
+                ))),
+            };
+            // Keep the 8 KiB verifier out of owned async-context copies.
+            tls.open(TlsContext::new(&tls_config, &mut provider))
+                .await
+                .map_err(|_| Error::Tls)?;
+        }
+        // Keep the live TLS connection in place while reqwless borrows it.
+        let mut stream = Io(&mut tls);
         let mut headers = [0; 2048];
         Request::get(path)
             .host(HOST)

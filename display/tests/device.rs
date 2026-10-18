@@ -246,18 +246,17 @@ fn editing_is_provisional_and_manual_groups_expire_after_two_hours() {
     assert_eq!(app.manual_until, 7300);
     app.tick(&c, 200);
     assert_eq!(app.group, 1);
-    app.publish(
-        heapless::Vec::from_slice(&[Departure {
+    let mut departures = timetable_display::departures::Departures::new(200);
+    departures
+        .push(Departure {
             at: 1000,
             group: 0,
             pick: 0,
             conditional: false,
             headsign: 0,
-        }])
-        .unwrap(),
-        model::Headings::default(),
-        200,
-    );
+        })
+        .unwrap();
+    app.publish(departures, model::Headings::default(), 200);
     assert!(app.upcoming().next().is_none());
 }
 
@@ -290,10 +289,17 @@ fn streaming_device_query_uses_exceptions_and_rolls_back_a_late_footer_error() {
             .unwrap();
         assert_eq!(builder.events.len(), 1);
         assert_eq!(
-            builder.headsigns.get(builder.events[0].headsign),
+            builder
+                .headsigns
+                .get(builder.events.get(0).unwrap().headsign),
             Some("Branch")
         );
-        assert_eq!(clock::warsaw(builder.events[0].at).unwrap().hour(), 9);
+        assert_eq!(
+            clock::warsaw(builder.events.get(0).unwrap().at)
+                .unwrap()
+                .hour(),
+            9
+        );
         builder.events.clear();
         assert!(
             builder
@@ -333,7 +339,7 @@ fn previous_service_day_supplies_a_25_hour_departure_after_midnight() {
             .await
             .unwrap();
         assert_eq!(builder.events.len(), 1);
-        let date = clock::warsaw(builder.events[0].at).unwrap();
+        let date = clock::warsaw(builder.events.get(0).unwrap().at).unwrap();
         assert_eq!((date.day(), date.hour(), date.minute()), (18, 1, 10));
     });
 }
@@ -365,15 +371,15 @@ fn spring_dst_service_day_is_included_before_civil_midnight() {
             .departures(source, &c, &mut workspace)
             .await
             .unwrap();
-        builder.events.sort_unstable_by_key(|event| event.at);
+        builder.events.sort();
         // Sunday's 00:30 GTFS time is Saturday 23:30 civil time on this transition.
         assert_eq!(builder.events.len(), 2);
         assert_eq!(
-            builder.events[0].at,
+            builder.events.get(0).unwrap().at,
             datetime!(2026-03-28 22:30 UTC).unix_timestamp()
         );
         assert_eq!(
-            builder.events[1].at,
+            builder.events.get(1).unwrap().at,
             datetime!(2026-03-28 22:45 UTC).unix_timestamp()
         );
         let tomorrow = clock::service_epoch("20260329".parse().unwrap()).unwrap();
@@ -449,15 +455,17 @@ fn evening_queries_include_next_day_service_and_rollback_headsigns() {
             .departures(source, &c, &mut workspace)
             .await
             .unwrap();
-        builder.events.sort_unstable_by_key(|d| d.at);
+        builder.events.sort();
         assert_eq!(builder.events.len(), 2);
-        let tomorrow = clock::warsaw(builder.events[1].at).unwrap();
+        let tomorrow = clock::warsaw(builder.events.get(1).unwrap().at).unwrap();
         assert_eq!(
             (tomorrow.day(), tomorrow.hour(), tomorrow.minute()),
             (18, 0, 30)
         );
         assert_eq!(
-            builder.headsigns.get(builder.events[1].headsign),
+            builder
+                .headsigns
+                .get(builder.events.get(1).unwrap().headsign),
             Some("Platform branch")
         );
         let mut app = App::default();
@@ -468,7 +476,7 @@ fn evening_queries_include_next_day_service_and_rollback_headsigns() {
             now,
         );
         assert_eq!(
-            app.headsigns.get(app.departures[1].headsign),
+            app.headsigns.get(app.departures.get(1).unwrap().headsign),
             Some("Platform branch")
         );
         // When the saved exact route disappears, duplicate public names fail.

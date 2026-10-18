@@ -38,6 +38,7 @@ for capacity in [1024, 2048, 4096]:
 display_task = constant("display_task_bytes")
 display_reserves = constant("display_reserves_bytes")
 display = dict(task_bytes=display_task, reserves_bytes=display_reserves,
+               departure_cache_bytes=constant("display_departure_cache_bytes"),
                total_bytes=display_task + display_reserves,
                fits_400000=display_task + display_reserves <= 400_000)
 print(json.dumps(dict(target=args.target, profiles=rows, display=display), indent=2))

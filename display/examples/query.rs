@@ -65,8 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         builder.events.len(),
         elapsed.as_secs_f64()
     );
-    builder.events.sort_unstable_by_key(|e| e.at);
-    for event in &builder.events {
+    builder.events.sort();
+    for event in builder.events.iter() {
         let local = timetable_display::clock::warsaw(event.at).unwrap();
         println!(
             "{:02}:{:02} {}{}",

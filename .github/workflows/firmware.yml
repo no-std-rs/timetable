@@ -33,7 +33,7 @@ jobs:
         working-directory: firmware
         run: |
           cargo fmt --all --check
-          cargo test --lib --locked --target x86_64-unknown-linux-gnu
+          cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
           cargo clippy --locked --release --features firmware -- -D warnings
       - name: Build the factory image and enforce linked RAM
         run: |

@@ -170,14 +170,15 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
             let now = app.clock.unwrap_or(0);
             let chosen = app
                 .upcoming()
-                .find(|e| {
+                .enumerate()
+                .find(|(_, e)| {
                     config.groups[e.group as usize]
                         .picks
                         .get(e.pick as usize)
                         .is_some_and(|p| walking_chance(e.at, now, p) >= 50)
                 })
-                .or_else(|| app.upcoming().next());
-            if let Some(event) = chosen {
+                .or_else(|| app.upcoming().enumerate().next());
+            if let Some((chosen_index, event)) = chosen {
                 let p = &group.picks[event.pick as usize];
                 pill(d, 32, 62, 47, 29, INK)?;
                 Text::with_text_style(
@@ -245,7 +246,9 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 label(d, &text, 120, 151, MUTED, true)?;
                 for (i, next) in app
                     .upcoming()
-                    .filter(|e| e.at >= event.at && !core::ptr::eq(*e, event))
+                    .enumerate()
+                    .filter(|(index, e)| e.at >= event.at && *index != chosen_index)
+                    .map(|(_, event)| event)
                     .take(2)
                     .enumerate()
                 {
