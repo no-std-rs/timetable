@@ -117,6 +117,10 @@ impl Default for App {
 }
 
 impl App {
+    pub fn can_retry(&self) -> bool {
+        !self.save_failed && matches!(self.status, Status::Offline | Status::Failed)
+    }
+
     pub fn tick(&mut self, config: &Config, now: i64) {
         self.clock = Some(now);
         if self.manual_until == i64::MAX {

@@ -215,3 +215,39 @@ cargo run -p timetable-display --release --example query -- /path/to/20261015_20
 cd firmware
 cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
 ```
+
+## Streaming lookup and scheduling
+
+Measured on 2026-10-18 against main `c588c861`, with Rust 1.97.1 host release
+builds and the same dated original ZIP, line `4`, platform `MAGA42`, UTC
+`1792215000`. Seven alternating rounds follow a warmup. Consecutive exact trip
+hits and misses are cached in a 32-byte key; interleaved rows still use binary
+search and long unselected IDs are never shortened.
+
+| Display query pipeline | Median host time |
+| --- | ---: |
+| Binary search on every stop-time row | 270 ms |
+| Consecutive hit/miss cache | 201 ms |
+
+That is **25.6% less host time**, with 20 identical departures and zero
+allocations/reallocations in every round. [Raw CSV](benchmarks/device-trip-cache.csv)
+includes output SHA-256
+`91dfc20ade8a66aa59dc561347b3419bcd8f1459e4664c6142ca793fe97846f3`.
+The host query excludes network transport and does not establish MCU latency.
+Regression archives compare grouped/interleaved rows, repeated misses and a
+long missing ID sharing a selected ID's complete 32-byte prefix.
+
+The firmware's HTTP reader caps reads and yields after each 2 KiB budget,
+allowing other ready executor tasks to run when a download keeps returning
+ready bytes. This is a cooperative scheduling point, not a wall-clock bound:
+TLS handshakes, decompression and record callbacks also perform work. Tests
+explicitly poll an always-ready source, verify the wake/Pending boundary,
+reconstruct all bytes, and exercise partial reads, EOF, empty buffers and I/O
+errors. Retry signals preserve the published board and never write settings.
+
+The pinned Rust 1.95.0 linked firmware now budgets **292,516 B**, including the
+unchanged 65,536-byte heap and 24,576-byte stack reserve. That is 152 B above
+PR #6 and below the enforced 300,000-byte ceiling. [Raw linked report](benchmarks/device-responsive-ram.json)
+records 267,940 B static RAM and 52,568 B linker-available stack. The isolated
+32-bit display ABI query/reserve probe totals 250,312 B; core GTFS probe values
+are unchanged. Physical peak memory and touch latency remain unmeasured.

@@ -68,6 +68,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => Screen::Stops,
         };
+    } else if mode == "offline" {
+        app.status = Status::Offline;
+    } else if mode == "loading" {
+        app.status = Status::Loading;
     } else if mode == "urgent" {
         app.departures.truncate(1);
         app.clock = Some(now + 11 * 60);

@@ -24,10 +24,10 @@
     }
   ],
   "display": {
-    "task_bytes": 90480,
+    "task_bytes": 90536,
     "reserves_bytes": 159776,
     "departure_cache_bytes": 2064,
-    "total_bytes": 250256,
+    "total_bytes": 250312,
     "fits_400000": true
   }
 }

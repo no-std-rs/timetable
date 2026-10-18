@@ -5,3 +5,7 @@ next-day departures, stop-specific headsign rollback, duplicate public line
 names, clipped/normalized stop names and a drop-off-only terminus.
 `spring-dst.zip` shifts the service dates to the spring clock change, when the
 next GTFS service day starts before civil midnight.
+The `lookup-*.zip` pair contains the same events grouped and interleaved, with
+repeated selected/missing trip IDs and a long unselected ID sharing the full
+32-byte prefix of a selected trip. Neither ordering nor lookup caching may
+change the results.

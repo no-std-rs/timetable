@@ -19,6 +19,9 @@ Undo until the next settings edit. Failed catalogue or firmware downloads have
 retry controls that retain group edits. Browser history restores those edits,
 clears Wi-Fi credentials and resets password visibility. Search Enter moves to
 the choices; it does not submit an unfinished edit.
+Weekday toggles retain keyboard focus after updating. The walking preview
+distinguishes a possible rush from insufficient walking time, matching the
+device's zero-percent message.
 
 The browser downloads `latest.json` and `timetable-display.bin`, validates board,
 settings format, size and SHA-256, then creates local Blob URLs for the factory

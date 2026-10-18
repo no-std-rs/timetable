@@ -18,6 +18,7 @@ use reqwless::{
     request::{Method, Request, RequestBuilder},
     response::Response,
 };
+use timetable_firmware::cooperative::Cooperative;
 
 const HOST: &str = "www.ztm.poznan.pl";
 static UTC_OFFSET: AtomicI64 = AtomicI64::new(i64::MIN);
@@ -135,7 +136,7 @@ impl Http {
                 .map_err(|_| Error::Tls)?;
         }
         // Keep the live TLS connection in place while reqwless borrows it.
-        let mut stream = Io(&mut tls);
+        let mut stream = Io(Cooperative::new(&mut tls));
         let mut headers = [0; 2048];
         Request::get(path)
             .host(HOST)

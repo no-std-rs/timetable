@@ -29,6 +29,9 @@ when its GTFS service epoch enters the six-hour horizon, including before civil
 midnight at the spring clock change. Mask bits 0/1/2 refer to yesterday,
 today and tomorrow; `day_mask()` reports which dates need archives.
 The device retains a six-hour horizon, not a whole day's timetable.
+Consecutive trip lookups cache exact hits and misses; interleaved rows fall
+back to binary search. Long unselected IDs are never shortened or mistaken for
+a selected prefix.
 Selected trip IDs remain exact in a 16 KiB shared byte buffer; there is a
 1,024-trip limit, 64 distinct service IDs across the date window (including
 removals), a 1 KiB shared headsign buffer and
@@ -52,6 +55,9 @@ Firmware swaps results into the visible app only after the entire refresh
 succeeds and the selected settings still match its revision. `App::publish`
 installs events and their matching headsign table together. The prior
 validated snapshot survives a failed background refresh.
+An offline or failed footer offers a retry that keeps that snapshot and does
+not write settings. Updating, clock-sync and capacity states have distinct
+labels; holding still opens the editor.
 
 The settings protocol is versioned, bounded to 8 KiB, and CRC-protected over
 generation, length and JSON. Firmware alternates two flash banks and verifies

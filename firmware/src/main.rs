@@ -217,24 +217,28 @@ async fn main(spawner: Spawner) -> ! {
                 let dy = end.1 as i16 - start.1 as i16;
                 if dx.unsigned_abs() > 35 || dy.unsigned_abs() > 35 {
                     ui::swipe(app, c, &catalog, dx, dy);
-                } else if end.0 < 240
-                    && end.1 < 240
-                    && let ui::Action::Save { refresh } = ui::tap(
+                } else if end.0 < 240 && end.1 < 240 {
+                    match ui::tap(
                         app,
                         c,
                         &catalog,
                         end.0,
                         end.1,
                         now.duration_since(pressed) >= Duration::from_millis(700),
-                    )
-                {
-                    app.save_failed = !save(&mut flash, scratch, c, &mut generation, &mut bank);
-                    if app.save_failed {
-                        warn!("Settings could not be saved");
-                    }
-                    if refresh {
-                        *revision = revision.wrapping_add(1);
-                        REFRESH.signal(());
+                    ) {
+                        ui::Action::Save { refresh } => {
+                            app.save_failed =
+                                !save(&mut flash, scratch, c, &mut generation, &mut bank);
+                            if app.save_failed {
+                                warn!("Settings could not be saved");
+                            }
+                            if refresh {
+                                *revision = revision.wrapping_add(1);
+                                REFRESH.signal(());
+                            }
+                        }
+                        ui::Action::Refresh => REFRESH.signal(()),
+                        ui::Action::None => {}
                     }
                 }
                 redraw = now;
@@ -382,7 +386,7 @@ async fn timetable(
         shared.lock().await.app.status = Status::Syncing;
         if transport::synchronize(stack).await.is_err() {
             shared.lock().await.app.status = Status::Offline;
-            Timer::after_secs(30).await;
+            let _ = select(Timer::after_secs(30), REFRESH.wait()).await;
             continue;
         }
         let (c, revision) = {

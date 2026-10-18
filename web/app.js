@@ -60,9 +60,10 @@ function preview() {
   $("preview-direction").textContent = p.headsign || "Either direction";
   $("preview-stop").textContent = p.stop_name;
   const left = 12 - p.walk - p.margin;
-  $("preview-leave").textContent = left > 0 ? `Leave in ${left} min` : "Leave now";
+  const chance = walkingChance(12, p.walk, p.spread, p.margin);
+  $("preview-leave").textContent = chance === 0 ? "Not enough walk time" : left > 0 ? `Leave in ${left} min` : "Leave now";
   $("preview-leave").classList.toggle("urgent", left <= 0);
-  $("preview-walk").textContent = `${p.walk}m walk \xB7 ${walkingChance(12, p.walk, p.spread, p.margin)}% walk est.`;
+  $("preview-walk").textContent = `${p.walk}m walk \xB7 ${chance}% walk est.`;
   const next = g.picks[1] ?? p;
   $("preview-next-line").textContent = `${next.line} \xB7 ${next.headsign || "Either direction"}`;
   $("preview-last-line").textContent = `${p.line} \xB7 ${p.headsign || "Either direction"}`;
@@ -135,6 +136,7 @@ function renderGroup() {
       g.days ^= 1 << i;
       renderGroup();
       changed();
+      (g.days ? $("days").children[i] : $("scheduled")).focus();
     });
     $("days").append(b);
   });

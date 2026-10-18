@@ -4,6 +4,7 @@ use crate::{App, Config, Pick, Screen, catalog::Catalog, model::Status};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     None,
+    Refresh,
     Save { refresh: bool },
 }
 
@@ -103,7 +104,14 @@ pub fn tap(
     }
     match app.screen {
         Screen::Board => {
-            if held || y > 190 {
+            if !held && y > 190 && app.can_retry() {
+                app.status = if app.status == Status::Offline {
+                    Status::Connecting
+                } else {
+                    Status::Loading
+                };
+                return Action::Refresh;
+            } else if held || y > 190 {
                 app.screen = Screen::Picks;
             } else if y < 50 {
                 app.screen = Screen::Groups;
