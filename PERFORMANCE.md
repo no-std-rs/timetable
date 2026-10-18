@@ -377,3 +377,41 @@ the named TLS path at 44,032 B plus 4,096 B headroom. Parser capacities, runtime
 buffers and connection policy are unchanged. Physical peak RAM, cold boot and
 Wi-Fi connectivity remain unmeasured; log-stage coverage does not prove a
 physical connection issue has been fixed.
+
+## TLS heap exhaustion correction
+
+A physical device completed Wi-Fi association, DHCP and NTP, then aborted on a
+1,024-byte allocation during RSA certificate verification. Its startup heap
+sample was **46,376 B current / 46,548 B peak / 65,536 B capacity**, leaving
+19,160 B at that point; this sample predates the handshake and is not its peak.
+The real ZTM chain reproduced exhaustion in an offline first-fit arena of that
+size. The unchanged verifier completes in a **24,576-byte** arena at **22,328 B
+peak** with no retained allocations across repeated checks. These are x86_64
+host allocator measurements using the firmware's pinned crypto dependencies,
+not measurements of the radio or the device's combined runtime peak.
+
+The radio now uses two static RX, two dynamic RX and two dynamic TX buffers,
+two-entry RX/TX queues and no A-MPDU aggregation. Compared with the default ten
+static RX buffers, this is expected to release approximately 12.8 KB of persistent
+heap; the new physical value remains to be measured. Smaller queues and disabled
+aggregation can reduce throughput. The device performs one streaming transfer
+at a time, and retains the original TCP/TLS buffers, parser limits and TLS
+certificate/hostname/time/signature verification. The shared heap remains 64 KiB.
+See the pinned [radio buffer configuration](https://docs.espressif.com/projects/rust/esp-radio/0.18.0/esp32c3/esp_radio/wifi/struct.ControllerConfig.html)
+and Espressif's [Wi-Fi buffer guidance](https://docs.espressif.com/projects/esp-idf/en/v6.1-rc1/esp32c3/api-guides/wifi-driver/overview.html).
+
+A verifier wrapper checks for 24 KiB free immediately before certificate or
+handshake-signature verification. Insufficient memory returns a TLS error and
+uses the existing refresh retry path. This admission check is not a reservation
+against concurrent radio allocations or a fragmentation proof. Bounded radio
+queues reduce that competition; physical testing is still required. TLS logs
+report free heap before negotiation and current/peak heap after a successful
+handshake, and include the TLS failure reason on failure.
+
+The [linked RAM report](benchmarks/device-tls-heap-ram.json) records **273,316 B**
+static and **297,892 B** with the unchanged minimum 24 KiB stack reserve, below
+the unchanged 300,000-byte regression ceiling. The full linked account remains
+**324,604 B** including all 51,288 available stack bytes. The
+[stack audit](benchmarks/device-tls-heap-stack.json) retains the 44,032-byte TLS
+path plus 4,096-byte headroom. Physical combined peak, post-fix connectivity and
+throughput remain unmeasured.
