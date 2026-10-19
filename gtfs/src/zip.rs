@@ -48,6 +48,12 @@ impl Workspace {
             .get_or_insert_with(DecompressorOxide::new)
             .init();
     }
+
+    /// Reuse the dictionary as caller-owned scratch while no ZIP reader borrows
+    /// this workspace. The next reader resets the inflater before decoding.
+    pub fn scratch(&mut self) -> &mut [u8] {
+        &mut self.dictionary
+    }
 }
 
 impl Default for Workspace {
@@ -111,6 +117,7 @@ impl Manifest {
         for table in Table::ALL {
             result.tables[table as usize] = directory.member(table).map(|m| m.fingerprint());
         }
+        result.updated_at = directory.updated_at;
         result
     }
     pub fn get(&self, table: Table) -> Option<Fingerprint> {
@@ -118,7 +125,7 @@ impl Manifest {
     }
     /// Latest UTC modification time among recognized GTFS tables, from central
     /// Info-ZIP UT fields. Unknown if any table lacks valid metadata. Available
-    /// after a complete forward scan/verification; directory-only indexes omit it.
+    /// after a complete forward scan/verification or validated directory scan.
     /// This advisory metadata is separate from uncompressed snapshot identity.
     pub fn updated_at(&self) -> Option<i64> {
         self.updated_at
@@ -861,6 +868,7 @@ impl Member {
 #[derive(Debug)]
 pub struct Directory {
     members: [Option<Member>; Table::COUNT],
+    updated_at: Option<i64>,
 }
 
 impl Directory {
@@ -935,7 +943,9 @@ impl Directory {
         }
         let mut result = Self {
             members: [None; Table::COUNT],
+            updated_at: None,
         };
+        let mut missing_timestamp = false;
         let mut pos = offset as u64;
         for _ in 0..count {
             if pos + 46 > end_offset {
@@ -990,13 +1000,68 @@ impl Directory {
                 if result.members[table as usize].replace(member).is_some() {
                     return Err(Error::DuplicateTable(table));
                 }
+                let modified = directory_timestamp(source, u16_at(&h, 30)).await?;
+                missing_timestamp |= modified.is_none();
+                if let Some(modified) = modified {
+                    result.updated_at =
+                        Some(result.updated_at.map_or(modified, |old| old.max(modified)));
+                }
             }
         }
         if pos != end_offset {
             return Err(Error::InvalidZip);
         }
+        if missing_timestamp {
+            result.updated_at = None;
+        }
         Ok(result)
     }
+}
+
+// Central Info-ZIP UT mtime has the same advisory semantics as forward scans.
+// Seeking over other extras avoids allocating space for a 65535-byte field.
+async fn directory_timestamp<R: Read + Seek>(
+    source: &mut R,
+    mut remaining: u16,
+) -> Result<Option<i64>, Error> {
+    let mut modified = None;
+    let mut seen = false;
+    let mut valid = true;
+    while remaining >= 4 {
+        let mut header = [0; 4];
+        read_exact(source, &mut header).await?;
+        remaining -= 4;
+        let length = u16_at(&header, 2);
+        if length > remaining {
+            return Ok(None);
+        }
+        if u16_at(&header, 0) == 0x5455 {
+            valid &= !seen;
+            seen = true;
+            if length == 5 {
+                let mut time = [0; 5];
+                read_exact(source, &mut time).await?;
+                if time[0] & 1 != 0 && time[0] & !7 == 0 {
+                    modified = Some(i64::from(u32_at(&time, 1) as i32));
+                } else {
+                    valid = false;
+                }
+            } else {
+                valid = false;
+                source
+                    .seek(SeekFrom::Current(i64::from(length)))
+                    .await
+                    .map_err(|e| Error::Io(e.kind()))?;
+            }
+        } else {
+            source
+                .seek(SeekFrom::Current(i64::from(length)))
+                .await
+                .map_err(|e| Error::Io(e.kind()))?;
+        }
+        remaining -= length;
+    }
+    Ok(modified.filter(|_| valid && remaining == 0))
 }
 
 #[cfg(test)]

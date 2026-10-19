@@ -85,6 +85,9 @@ async fn fetch(
     flush: bool,
 ) -> Result<(), reqwless::Error> {
     let started = Instant::now();
+    let full_url = format!("https://{HOST}{path}");
+    let endpoint =
+        http_request::endpoint(&full_url).map_err(|_| reqwless::Error::ConnectionAborted)?;
     let socket = TcpStream::connect((HOST, 443)).expect("TCP connect");
     socket
         .set_read_timeout(Some(Duration::from_secs(if flush { 30 } else { 2 })))
@@ -93,28 +96,27 @@ async fn fetch(
         .set_write_timeout(Some(Duration::from_secs(30)))
         .unwrap();
     let mut rx = [0; 16 * 1024 + 256];
-    let mut tx = [0; 2048 + 256];
+    let mut tx = [0; http_request::TLS_TX_BYTES];
     let mut tls = TlsConnection::new(Tcp(socket), &mut rx, &mut tx);
     let config = TlsConfig::new()
-        .with_server_name(HOST)
+        .with_server_name(endpoint.host)
         .enable_rsa_signatures();
     let mut provider = Provider {
         rng: rand_core::OsRng,
         // Host admission is unconstrained. The separate offline tls_heap test
         // exercises the C3's budget with the actual first-fit allocator.
         verifier: tls_memory::HeapCheckedVerifier::new(
-            CertVerifier::new(Certificate::X509(include_bytes!(
-                "../certs/certum-trusted-root.der"
-            ))),
+            CertVerifier::new(Certificate::X509(endpoint.root)),
             || usize::MAX,
-        ),
+        )
+        .with_redundant_root(endpoint.redundant_root),
     };
     tls.open(TlsContext::new(&config, &mut provider))
         .await
         .expect("authenticated TLS");
     let mut stream = http_request::Stream(Cooperative::new(&mut tls));
     if flush {
-        http_request::send_get(&mut stream, path, HOST).await?;
+        http_request::send_get(&mut stream, endpoint.path, endpoint.host).await?;
     } else {
         // Intentionally reproduce the previous device path for comparison.
         Request::get(path)
@@ -126,10 +128,8 @@ async fn fetch(
     }
     let mut headers = [0; 2048];
     let response = Response::read(&mut stream, Method::GET, &mut headers).await?;
-    assert_eq!(response.status.0, 200, "HTTP status for {path}");
-    assert!(!response.headers().any(
-        |(name, value)| name.eq_ignore_ascii_case("content-encoding") && value != b"identity"
-    ));
+    http_request::validate(response.status.0, response.headers(), None)
+        .map_err(|_| reqwless::Error::ConnectionAborted)?;
     operation.read(response.body().reader()).await;
     println!(
         "HTTP 200 and complete body: {path} ({:.3} s)",

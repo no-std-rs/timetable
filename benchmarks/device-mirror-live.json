@@ -1,0 +1,42 @@
+{
+  "date_utc": "2026-10-19",
+  "query_unix_utc": 1792367882,
+  "line": "4",
+  "stop_code": "MT44",
+  "host_toolchain": "Rust1.95.0; release opt-level=s, fat LTO; x86_64 Linux",
+  "heap_capacity_bytes": 65536,
+  "reserved_radio_bytes": 34320,
+  "cpu_duty_limit_percent": 20,
+  "tls_tx_bytes": 1024,
+  "measurement": "one sequential live run per source, shared firmware download::refresh and embedded-tls/reqwless; no complete archive buffer",
+  "limitations": [
+    "Host OS socket buffers, native stack and code are outside the allocator arena.",
+    "CPU duty limiting is not ESP32 instruction, power or throughput emulation.",
+    "Network timing is a single observation; mirror is slower on this host.",
+    "Complete C3 linked RAM and audited stack are reported separately; physical combined peak is unmeasured."
+  ],
+  "mirror": {
+    "requests": 33,
+    "body_bytes": 16957797,
+    "wall_ms": 20857,
+    "cpu_ms": 863,
+    "heap_peak_bytes": 56648,
+    "retained_bytes": 0,
+    "fallback": false,
+    "events": 18,
+    "output_fnv1a64": "043c5d4a37aade22",
+    "source_updated_at": 1791966267
+  },
+  "official": {
+    "requests": 7,
+    "body_bytes": 71092577,
+    "wall_ms": 7208,
+    "cpu_ms": 1006,
+    "heap_peak_bytes": 56648,
+    "retained_bytes": 0,
+    "fallback": true,
+    "events": 18,
+    "output_fnv1a64": "043c5d4a37aade22",
+    "source_updated_at": 1791966267
+  }
+}

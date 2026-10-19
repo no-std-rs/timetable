@@ -32,6 +32,8 @@ def write_archive(name, tables):
 
 
 write_archive('edge.zip', files)
+write_archive('mirror.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261015,20261031\n'})
+write_archive('mirror-tomorrow.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261018,20261031\n'})
 write_archive('spring-dst.zip', {
     path: content.replace('20261015', '20260328')
                  .replace('20261031', '20260329')

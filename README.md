@@ -6,7 +6,8 @@ libraries.
 The [USB installer](https://no-std-rs.github.io/timetable/) and [round-screen app](firmware/README.md) run on the GUITION
 ESP32-C3 display. Set up named groups of lines and stops, choose walking times,
 and switch groups by touch or an optional time-of-day schedule. The installer
-also offers [battery mode](docs/battery.md): sleep when idle, wake on tap with
+keeps the screen on while releasing Wi-Fi between three-hour updates, with NTP
+on every connection. It also offers [battery mode](docs/battery.md): sleep when idle, wake on tap with
 retained departures and reconnect Wi-Fi only for refreshes. The
 [`timetable-display`](display/) crate contains its allocation-free model,
 streaming query builder and tile renderer; [`web/`](web/) contains the matching

@@ -89,14 +89,32 @@ def audit(frames, stack):
     if not request_frames:
         raise ValueError('missing audited timeout/request frame')
     request = sum(request_frames)
+    # The mirror pipeline adds outlined coroutine callers above the transport.
+    # A fetch monomorphization inlines request and calls TLS.open directly;
+    # the official branch retains request. They are alternatives, not nested.
+    # network_service/network_session are inlined into Select::poll in this
+    # build. Select is still a real caller above update_once, not task storage.
+    session = frame('embassy_futures', 'select', 'Select', '4poll')
+    for parts in [('__network_service_task_inner_function', 'closure'),
+                  ('timetable_display15network_session', 'closure')]:
+        outlined = [size for name, size in frames if all(part in name for part in parts)]
+        if outlined:
+            session += max(outlined)
+    update = frame('timetable_display11update_once', 'closure')
+    worker = session + update
+    mirror = frame('timetable_firmware', 'download6mirror', 'closure')
+    fetch = frame('transport', 'download', '5fetch', 'closure')
+    runtime_callers = task + worker + max(request, mirror + fetch)
     paths = {
         'boot_state': main + initialize + frame('create_state'),
         'boot_settings': main + initialize + load + frame('settings', 'load_banks') + parser,
         'boot_partition': main + initialize + load + frame('has_settings_partition') + nor_read,
         'boot_network': main + frame('start_network'),
         'save_validation': main + frame('timetable_display4save') + frame('config6decode') + parser,
-        'runtime_inflate': task + request + frame('gtfs', 'next_entry'),
-        'runtime_tls': task + request + frame('embedded_tls', 'TlsConnection', '4open')
+        'runtime_network_setup': task + session + frame('open_network'),
+        'runtime_settings_copy': task + worker + frame('copy_query'),
+        'runtime_inflate': runtime_callers + max(frame('gtfs', 'next_entry'), frame('gtfs', 'zip', '4data')),
+        'runtime_tls': runtime_callers + frame('embedded_tls', 'TlsConnection', '4open')
             + frame('process_server_verify') + frame('pki', 'verify_signature')
             + frame('der', 'from_der') + frame('ContextSpecific', 'decode_explicit')
             + frame('SliceReader', '6decode') + frame('header', 'Header', '6decode')

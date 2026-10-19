@@ -2,6 +2,53 @@
 use embedded_io_async::{Error as _, ErrorType, Read, Write};
 use reqwless::request::{Request, RequestBuilder};
 
+// Only ClientHello/Finished and short GET headers are sent. Incoming server
+// records keep their full 16 KiB receive allowance.
+pub const TLS_TX_BYTES: usize = 1024;
+
+pub struct Endpoint<'a> {
+    pub host: &'static str,
+    pub path: &'a str,
+    pub root: &'static [u8],
+    pub redundant_root: Option<&'static [u8]>,
+}
+pub fn endpoint(url: &str) -> Result<Endpoint<'_>, timetable_firmware::download::Error> {
+    for (host, root, redundant_root) in [
+        (
+            "www.ztm.poznan.pl",
+            &include_bytes!("../certs/certum-trusted-root.der")[..],
+            None,
+        ),
+        (
+            "mobilitydatabase.org",
+            &include_bytes!("../certs/gts-root-r4.der")[..],
+            Some(&include_bytes!("../certs/mobility-cross.der")[..]),
+        ),
+        (
+            "files.mobilitydatabase.org",
+            &include_bytes!("../certs/gts-root-r1.der")[..],
+            Some(&include_bytes!("../certs/mobility-files-cross.der")[..]),
+        ),
+    ] {
+        if let Some(path) = url
+            .strip_prefix("https://")
+            .and_then(|s| s.strip_prefix(host))
+            .filter(|s| s.starts_with('/'))
+        {
+            if path.bytes().any(|b| b <= 32 || b == 127 || b == b'#') {
+                break;
+            }
+            return Ok(Endpoint {
+                host,
+                path,
+                root,
+                redundant_root,
+            });
+        }
+    }
+    Err(timetable_firmware::download::Error::Http)
+}
+
 /// Adapt a caller-owned stream to reqwless without a second read buffer.
 pub struct Stream<S>(pub S);
 impl<S: ErrorType> ErrorType for Stream<S> {
@@ -27,16 +74,84 @@ pub async fn send_get<S: Write>(
     path: &str,
     host: &str,
 ) -> Result<(), reqwless::Error> {
+    send_get_range(stream, path, host, None).await
+}
+
+pub async fn send_get_range<S: Write>(
+    stream: &mut S,
+    path: &str,
+    host: &str,
+    range: Option<&str>,
+) -> Result<(), reqwless::Error> {
+    let headers = [
+        ("Accept-Encoding", "identity"),
+        ("Connection", "close"),
+        ("User-Agent", "timetable/0.1"),
+        ("Range", range.unwrap_or("")),
+    ];
     Request::get(path)
         .host(host)
-        .headers(&[("Accept-Encoding", "identity"), ("Connection", "close")])
+        .headers(&headers[..if range.is_some() { 4 } else { 3 }])
         .build()
         .write_header(stream)
         .await?;
-    // embedded-tls buffers a short request until flush. Reading does not send
-    // that buffer, so the peer otherwise waits for a request we never deliver.
     stream
         .flush()
         .await
         .map_err(|e| reqwless::Error::Network(e.kind()))
+}
+
+pub fn validate<'a>(
+    status: u16,
+    headers: impl Iterator<Item = (&'a str, &'a [u8])>,
+    range: Option<(gtfs::http::ByteRange, Option<u64>)>,
+) -> Result<timetable_firmware::download::Metadata, timetable_firmware::download::Error> {
+    use timetable_firmware::download::{Error, Metadata};
+    if status != if range.is_some() { 206 } else { 200 } {
+        return Err(Error::Http);
+    }
+    let mut content_range = None;
+    let mut length = None;
+    let mut encoding = false;
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case("content-encoding") {
+            if encoding || value != b"identity" {
+                return Err(Error::Http);
+            }
+            encoding = true;
+        }
+        if name.eq_ignore_ascii_case("content-range") && content_range.replace(value).is_some() {
+            return Err(Error::Http);
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
+                return Err(Error::Http);
+            }
+            let n = core::str::from_utf8(value)
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or(Error::Http)?;
+            if length.replace(n).is_some() {
+                return Err(Error::Http);
+            }
+        }
+    }
+    if let Some((range, expected)) = range {
+        let total = range.validate_content_range(content_range.ok_or(Error::Http)?)?;
+        if expected.is_some_and(|n| n != total) || length.is_some_and(|n| n != range.len()) {
+            return Err(Error::Http);
+        }
+        Ok(Metadata {
+            length: Some(total),
+            modified: None,
+        })
+    } else {
+        if content_range.is_some() {
+            return Err(Error::Http);
+        }
+        Ok(Metadata {
+            length,
+            modified: None,
+        })
+    }
 }

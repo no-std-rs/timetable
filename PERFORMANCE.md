@@ -448,3 +448,81 @@ unchanged 300,000-byte ceiling. Including all 51,200 linker-available stack byte
 the full linked account remains **324,604 B**. The
 [stack audit](benchmarks/device-http-flush-stack.json) keeps the 44,032-byte TLS
 path plus 4,096 B headroom. Heap capacity and parser/TLS buffers are unchanged.
+
+
+## Selective firmware updates and always-on radio idle
+
+Measured on 2026-10-19 with the firmware's pinned Rust 1.95.0, release
+`opt-level=s`/fat LTO, x86_64 Linux. `probe_device` calls the same
+`download::refresh`, query builder, reqwless sender and embedded-tls verifier as
+the C3. Both sequential live runs use line `4`, platform `MT44`, fixed query UTC
+`1792367882`, a hard **65,536 B first-fit allocator** with **34,320 B reserved**
+for the observed pre-handshake radio/application baseline, and a **20% host CPU
+duty upper bound**. There is no system-allocator fallback during the operation;
+an exhausted arena aborts. OS socket buffers, native stack and code are excluded.
+CPU duty is enforced between cooperative polls using thread CPU time; it is not
+ESP32 instruction, power or network emulation. Network waits can keep CPU usage
+below that limit without extra sleeping.
+
+| Same selection and query time | Mirror primary | Official fallback |
+| --- | ---: | ---: |
+| HTTP requests | 33 | 7 |
+| Received body bytes | 16,957,797 | 71,092,577 |
+| Wall time, one host run | 20,857 ms | 7,208 ms |
+| Thread CPU time | 863 ms | 1,006 ms |
+| Peak heap including reserve | 56,648 B | 56,648 B |
+| Retained allocations | 0 B | 0 B |
+| Published departures | 18 | 18 |
+
+[Raw results and limits](benchmarks/device-mirror-live.json). Both paths produce
+checksum `043c5d4a37aade22`, hashing sorted UTC times, group/choice, boarding
+condition and resolved destination text. Source update UTC is `1791966267` in
+both cases; the mirror's HTTP modification time is not source freshness.
+The host update future is 47,384 B, with separate caller-owned Builder 30,392 B,
+ZIP Workspace 43,272 B and Config 4,672 B. These host type sizes are not C3
+static RAM or a stack bound.
+
+The mirror transfers **76.1% fewer body bytes**, but is **slower on this fast
+host connection** because it makes more HTTPS connections. These single-run
+times establish neither a latency improvement nor ESP32 throughput. Two
+snapshots are needed at this feed handover; each required table's payload is
+read once per selected snapshot. Shapes and unused members are skipped. The
+official fallback retains three forward ZIP passes per required archive. A
+mirror failure, including one after table callbacks, restarts staging before
+that fallback; cancellation never publishes partial departures. Offline tests
+cover range/header/body validation, corruption, calendar exceptions and times
+after 24:00. CI does not contact the live feeds.
+
+The always-visible mode now runs the CPU at **80 MHz**, enables minimum modem
+power saving during active Wi-Fi, then drops the controller, runner and sockets
+after each attempt. Successful updates wait **three hours**, with NTP before
+each new query; daily correction depends on an available network. Manual
+refresh and configuration changes can wake the service sooner. The LCD and
+touch remain active. Optional battery mode additionally blanks and deep-sleeps
+as before. Current, temperature, clock drift and physical refresh latency still
+need measurement on the board; no energy-saving percentage is claimed.
+
+The [linked C3 RAM report](benchmarks/device-eco-mirror-ram.json) counts
+**272,636 B static** including the unchanged 64 KiB heap, **768 B less** than the
+HTTP-flush base. The unchanged 24 KiB minimum stack reserve yields **297,212 B**,
+below the unchanged 300,000 B regression ceiling. Static RAM plus all **51,968 B**
+of available stack remains **324,604 B**, below 400,000 B. Short GETs use 1 KiB
+TCP/TLS transmit buffers; the 4 KiB TCP and 16,640 B TLS receive buffers, parser
+limits and 512-event capacity remain unchanged. Directory reads borrow the idle
+ZIP dictionary for scratch, without an additional buffer.
+
+The [linked stack audit](benchmarks/device-eco-mirror-stack.json) includes
+`TaskStorage::poll`, `Select::poll`, `update_once`, mirror/fetch and lower TLS
+frames. The TLS path is **46,688 B + 4,096 B headroom < 51,968 B**; inflation is
+22,752 B before headroom. A regression checks the exact bound, missing selection
+frame and additional outlined session. An async wrapper that duplicated a large
+owned network future was rejected by the unchanged RAM/stack guards; the final
+selection constructor owns only one copy. These scoped checks are not a complete
+call-graph proof or physical high-water measurement. The isolated RISC-V display
+query/reserve probe is 250,488 B; the core GTFS probe remains 316,952 B.
+
+```sh
+cd firmware
+cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882
+cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --official
+```

@@ -89,10 +89,11 @@ fn get_flushes_the_tls_request_before_reading_response() {
         assert_eq!(ready(response.body().reader().read(&mut body)).unwrap(), 3);
         assert_eq!(&body, b"zip");
     }
+    assert!(peer.sent.len() < http_request::TLS_TX_BYTES);
     assert_eq!(peer.flushes, 1);
     assert_eq!(peer.reads, 1);
     assert!(peer.pending.is_empty());
-    assert_eq!(peer.sent, b"GET /feed.zip HTTP/1.1\r\nHost: www.ztm.poznan.pl\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n");
+    assert_eq!(peer.sent, b"GET /feed.zip HTTP/1.1\r\nHost: www.ztm.poznan.pl\r\nAccept-Encoding: identity\r\nConnection: close\r\nUser-Agent: timetable/0.1\r\n\r\n");
 }
 #[test]
 fn previous_header_only_path_times_out_with_buffered_tls() {
@@ -126,5 +127,68 @@ fn write_and_flush_errors_stop_the_request_without_response_reads() {
         assert!(peer.sent.is_empty());
         assert_eq!(peer.reads, 0);
         assert_eq!(peer.flushes, usize::from(!write));
+    }
+}
+
+#[test]
+fn endpoints_require_a_known_https_host_and_use_its_pinned_root() {
+    for host in [
+        "www.ztm.poznan.pl",
+        "mobilitydatabase.org",
+        "files.mobilitydatabase.org",
+    ] {
+        let url = format!("https://{host}/feed");
+        let endpoint = http_request::endpoint(&url).unwrap();
+        assert_eq!(endpoint.host, host);
+        assert_eq!(endpoint.path, "/feed");
+        assert!(endpoint.root.len() > 500);
+        assert_eq!(
+            endpoint.redundant_root.is_some(),
+            host != "www.ztm.poznan.pl"
+        );
+    }
+    for bad in [
+        "http://mobilitydatabase.org/feed",
+        "https://mobilitydatabase.org.evil/feed",
+        "https://mobilitydatabase.org@evil/feed",
+        "https://mobilitydatabase.org/feed\r\nHost: evil",
+        "https://files.mobilitydatabase.org",
+    ] {
+        assert!(http_request::endpoint(bad).is_err());
+    }
+}
+
+#[test]
+fn ranges_require_exact_status_extent_object_length_and_identity_encoding() {
+    let range = gtfs::http::ByteRange::new(10, 12).unwrap();
+    let headers = [
+        ("Content-Range", &b"bytes 10-12/50"[..]),
+        ("Content-Length", &b"3"[..]),
+    ];
+    assert_eq!(
+        http_request::validate(206, headers.into_iter(), Some((range, Some(50))))
+            .unwrap()
+            .length,
+        Some(50)
+    );
+    assert!(http_request::validate(200, headers.into_iter(), Some((range, Some(50)))).is_err());
+    assert!(http_request::validate(206, headers.into_iter(), Some((range, Some(51)))).is_err());
+    assert!(http_request::validate(200, headers.into_iter(), None).is_err());
+    for bad in [
+        vec![("Content-Range", &b"bytes 11-13/50"[..])],
+        vec![
+            ("Content-Range", &b"bytes 10-12/50"[..]),
+            ("Content-Length", &b"4"[..]),
+        ],
+        vec![
+            ("Content-Range", &b"bytes 10-12/50"[..]),
+            ("Content-Encoding", &b"gzip"[..]),
+        ],
+        vec![
+            ("Content-Range", &b"bytes 10-12/50"[..]),
+            ("Content-Range", &b"bytes 10-12/50"[..]),
+        ],
+    ] {
+        assert!(http_request::validate(206, bad.into_iter(), Some((range, Some(50)))).is_err());
     }
 }
