@@ -23,7 +23,7 @@ impl std::task::Wake for Wakes {
 
 #[test]
 fn always_ready_download_yields_and_wakes_without_losing_bytes() {
-    let source = [0x5a; 5000];
+    let source = [0x5a; 1300];
     let mut reader = Cooperative::new(source.as_slice());
     let wake = Arc::new(Wakes::default());
     let waker = Waker::from(wake.clone());
@@ -32,14 +32,14 @@ fn always_ready_download_yields_and_wakes_without_losing_bytes() {
     let mut output = Vec::new();
     {
         let mut first = pin!(reader.read(&mut out));
-        assert_eq!(first.as_mut().poll(&mut cx), Poll::Ready(Ok(2048)));
+        assert_eq!(first.as_mut().poll(&mut cx), Poll::Ready(Ok(512)));
     }
-    output.extend_from_slice(&out[..2048]);
+    output.extend_from_slice(&out[..512]);
     {
         let mut empty = pin!(reader.read(&mut []));
         assert_eq!(empty.as_mut().poll(&mut cx), Poll::Ready(Ok(0)));
     }
-    for count in [2048, 904] {
+    for count in [512, 276] {
         {
             let mut next = pin!(reader.read(&mut out));
             assert!(next.as_mut().poll(&mut cx).is_pending());
@@ -105,4 +105,53 @@ fn partial_reads_and_io_errors_keep_the_underlying_contract() {
         assert_eq!(pin!(io.flush()).as_mut().poll(&mut cx), Poll::Ready(Ok(())));
     }
     assert_eq!((inner.writes, inner.flushes), (1, 1));
+}
+
+#[test]
+fn poll_measurement_excludes_pending_waits_and_borrows_the_future() {
+    use std::cell::{Cell, RefCell};
+    let clock = Cell::new(u32::MAX - 2);
+    let dropped = Cell::new(false);
+    struct DropGuard<'a>(&'a Cell<bool>);
+    impl Drop for DropGuard<'_> {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+    let observed = RefCell::new(Vec::new());
+    let mut polls = 0;
+    let mut inner = pin!(core::future::poll_fn(|cx| {
+        polls += 1;
+        clock.set(clock.get().wrapping_add(if polls == 1 { 4 } else { 6 }));
+        if polls == 1 {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        } else {
+            Poll::Ready(42)
+        }
+    }));
+    let mut measured = pin!(timetable_firmware::cooperative::measure(
+        inner.as_mut(),
+        || clock.get(),
+        |us| observed.borrow_mut().push(us),
+    ));
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(measured.as_mut().poll(&mut cx).is_pending());
+    clock.set(clock.get().wrapping_add(1000));
+    assert_eq!(measured.as_mut().poll(&mut cx), Poll::Ready(42));
+    assert_eq!(*observed.borrow(), [4, 6]);
+    {
+        let guard = DropGuard(&dropped);
+        let mut inner = pin!(async {
+            let _guard = guard;
+            core::future::pending::<()>().await
+        });
+        let mut measured = pin!(timetable_firmware::cooperative::measure(
+            inner.as_mut(),
+            || 0,
+            |_| {}
+        ));
+        assert!(measured.as_mut().poll(&mut cx).is_pending());
+    }
+    assert!(dropped.get());
 }

@@ -74,6 +74,7 @@ extern "C" fn main() -> ! {
     bench::<aes_gcm::Aes128Gcm>("AES128GCM", &[7; 16]);
     bench::<chacha20poly1305::ChaCha20Poly1305>("CHACHA20POLY1305", &[7; 32]);
     bench_csv();
+    bench_zip();
     unsafe { (0x100000 as *mut u32).write_volatile(0x5555) }
     loop {
         unsafe { asm!("wfi") }
@@ -135,5 +136,71 @@ macro_rules! csvbench {
 fn bench_csv() {
     for _ in 0..3 {
         csvbench!(gtfs, "current");
+    }
+}
+
+#[allow(dead_code)]
+#[path = "../../../firmware/src/cooperative.rs"]
+mod cooperative;
+
+fn scheduled<F: core::future::Future>(f: F) -> (F::Output, u64, u64, u32) {
+    let mut f = core::pin::pin!(f);
+    let mut total = 0;
+    let mut longest = 0;
+    let mut polls = 0;
+    loop {
+        let start = instret();
+        let result = f.as_mut().poll(&mut core::task::Context::from_waker(
+            core::task::Waker::noop(),
+        ));
+        let used = instret() - start;
+        total += used;
+        longest = longest.max(used);
+        polls += 1;
+        if let core::task::Poll::Ready(value) = result {
+            return (value, total, longest, polls);
+        }
+    }
+}
+async fn parse_zip<R: embedded_io_async::Read>(source: R) -> (usize, usize) {
+    let mut rows = gtfs::csv::Reader::<_>::new(source, gtfs::Table::StopTimes);
+    let mut count = 0;
+    let mut sum = 0;
+    while let Some(row) = rows.next().await.unwrap() {
+        sum += black_box(row.required(gtfs::csv::Column::TripId).unwrap()).len();
+        count += 1;
+    }
+    (count, sum)
+}
+fn bench_zip() {
+    for (fixture, bytes, expected_rows, expected_sum) in [
+        (
+            "normal",
+            include_bytes!("../stop_times.zip").as_slice(),
+            512,
+            6130,
+        ),
+        (
+            "repeated",
+            include_bytes!("../stop_times-repeated.zip").as_slice(),
+            8192,
+            98080,
+        ),
+    ] {
+        for decoded in [false, true] {
+            let mut workspace = gtfs::zip::Workspace::new();
+            let ((rows, sum), total, longest, polls) = scheduled(async {
+                let compressed = cooperative::Cooperative::new(Bytes(bytes));
+                let mut zip = gtfs::zip::Reader::new(compressed, &mut workspace);
+                assert!(zip.next_entry().await.unwrap().is_some());
+                if decoded {
+                    parse_zip(cooperative::Cooperative::new(zip)).await
+                } else {
+                    parse_zip(zip).await
+                }
+            });
+            assert_eq!((rows, sum), (expected_rows, expected_sum));
+            writeln!(Uart,"ZIP fixture={fixture} decoded={decoded} rows={rows} sum={sum} total_inst={total} max_poll_inst={longest} polls={polls}").unwrap();
+        }
     }
 }

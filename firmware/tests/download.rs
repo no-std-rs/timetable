@@ -325,3 +325,69 @@ fn empty_selection_never_reports_a_timetable_check_or_contacts_http() {
     assert_eq!(result.source_updated_at, None);
     assert!(client.calls.borrow().is_empty());
 }
+
+#[test]
+fn mirror_decoded_work_yields_even_with_an_always_ready_http_source() {
+    use timetable_display::feed::Tables;
+    use timetable_firmware::cooperative::Cooperative;
+    const ZIP: &[u8] = include_bytes!("../../checks/device-cpu/stop_times-repeated.zip");
+    struct ReadyClient;
+    impl Http for ReadyClient {
+        async fn fetch(
+            &self,
+            _: &str,
+            range: Option<(ByteRange, Option<u64>)>,
+            op: &mut impl Operation,
+        ) -> Result<Metadata, Error> {
+            let (r, _) = range.unwrap();
+            op.read(Cooperative::new(
+                &ZIP[r.start() as usize..=r.end() as usize],
+            ))
+            .await?;
+            Ok(Metadata {
+                length: Some(ZIP.len() as u64),
+                modified: None,
+            })
+        }
+    }
+    let mut workspace = zip::Workspace::new();
+    let mut mirror = run(download::Mirror::open(
+        &ReadyClient,
+        OLD.parse().unwrap(),
+        &mut workspace,
+    ))
+    .unwrap();
+    let rows = Cell::new(0);
+    let sum = Cell::new(0);
+    let mut longest = 0;
+    let mut yields = 0;
+    {
+        let mut future = pin!(
+            mirror.scan(&[Table::StopTimes], None, &mut workspace, |row| {
+                rows.set(rows.get() + 1);
+                sum.set(sum.get() + row.required(gtfs::csv::Column::TripId)?.len());
+                Ok(())
+            })
+        );
+        let mut cx = Context::from_waker(Waker::noop());
+        loop {
+            let before = rows.get();
+            let result = future.as_mut().poll(&mut cx);
+            longest = longest.max(rows.get() - before);
+            if let Poll::Ready(result) = result {
+                result.unwrap();
+                break;
+            }
+            yields += 1;
+        }
+    }
+    assert_eq!((rows.get(), sum.get()), (8192, 98080));
+    assert!(
+        yields > 32,
+        "decoded rows must yield independently of HTTP reads"
+    );
+    assert!(
+        longest <= 32,
+        "too many CSV callbacks without returning to the runner: {longest}"
+    );
+}

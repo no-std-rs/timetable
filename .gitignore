@@ -2,6 +2,7 @@ target/
 *.zip
 !display/tests/fixtures/*.zip
 !gtfs/tests/fixtures/*.zip
+!checks/device-cpu/stop_times*.zip
 node_modules/
 dist/
 test-results/

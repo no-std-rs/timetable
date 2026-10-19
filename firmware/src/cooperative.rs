@@ -1,8 +1,9 @@
 //! Bound ready-to-read streaming work between executor scheduling points.
+//! Apply to both TLS plaintext and decoded members: compression can amplify work.
 use core::{future::poll_fn, task::Poll};
 use embedded_io_async::{ErrorType, Read, Write};
 
-const QUANTUM: usize = 2048;
+const QUANTUM: usize = 512;
 
 pub struct Cooperative<R> {
     inner: R,
@@ -56,4 +57,19 @@ impl<R: Write> Write for Cooperative<R> {
     async fn flush(&mut self) -> Result<(), Self::Error> {
         self.inner.flush().await
     }
+}
+
+/// Measure synchronous work in each poll, excluding time spent Pending. The
+/// observer runs after the poll; cancellation simply drops the wrapped future.
+pub fn measure<F: core::future::Future>(
+    mut future: core::pin::Pin<&mut F>,
+    micros: impl Fn() -> u32,
+    mut observe: impl FnMut(u32),
+) -> impl core::future::Future<Output = F::Output> {
+    poll_fn(move |cx| {
+        let start = micros();
+        let result = future.as_mut().poll(cx);
+        observe(micros().wrapping_sub(start));
+        result
+    })
 }

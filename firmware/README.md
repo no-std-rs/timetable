@@ -181,8 +181,10 @@ times extending past two civil days need a wider application policy.
 
 The footer marks connection, clock synchronization and timetable updates even
 while a cached board stays visible. Downloads yield to other ready executor
-tasks after each 2 KiB of HTTP stream reads. This is a scheduling point rather
-than a measured physical touch-latency bound; TLS handshakes and decompression
+tasks after each 512 B of TLS plaintext reads. Mirror members also yield after
+512 B of decoded CSV, so high compression cannot postpone scheduling until the
+next network read. These are scheduling points rather than a measured physical
+touch-latency bound; TLS handshakes and decompression
 also contribute work. A manual retry interrupts the failed clock-sync wait too.
 
 Both application crates are `no_std` and use no allocator. Radio, RSA TLS and the cache filter use
@@ -202,21 +204,29 @@ time and signature verification. See [the reproducible comparison](../PERFORMANC
 The ZIP dictionary supplies directory scratch while no inflater is active.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **299,892 B**,
+excluded. The static-plus-minimum-stack regression account is **299,972 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 49,288 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 49,208 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
 available stack, with 4 KiB headroom. The original binary fails this check.
 `STACK.json` records the scoped audit, including the network selection, update,
-mirror and transport callers. Its TLS bound is 43,088 B plus 4,096 B headroom; it is not a complete call-graph proof or
+mirror and transport callers. Its TLS bound is 43,168 B plus 4,096 B headroom; it is not a complete call-graph proof or
 physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
 Physical screen/radio/touch behaviour still requires the board. No hardware test has been
 performed as part of this implementation. Serial logs report allocator current,
 peak-since-boot and total bytes after startup and refresh attempts, including
-allocations already freed by the TLS handshake. Keep the full heap allowance
+allocations already freed by the TLS handshake. `Scheduler (session)` logs
+cumulative elapsed poll work and longest poll for the verified HTTP/query
+application and network runner, plus drawing/SPI tile work. They exclude time
+waiting Pending; application timing starts after certificate verification.
+They include interrupt/preemption time, are sampled after completed polls, and
+do not measure pure CPU time or packet loss. A large app poll can delay the
+cooperatively polled runner. TLS records, inflater calls and flash operations
+still contain synchronous work; these logs distinguish them from simply waiting
+for remote data. Session counters reset when each radio session starts. Keep the full heap allowance
 until these logs and physical stack measurements justify reducing it.
 
 The fixed app limits are four groups, four choices each, 1,024 active trips in a
