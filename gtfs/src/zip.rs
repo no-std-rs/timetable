@@ -112,6 +112,17 @@ impl Manifest {
         tables: [None; Table::COUNT],
         updated_at: None,
     };
+    /// Reconstruct persisted table identities. The caller must validate its
+    /// storage and table bytes before treating this descriptor as trusted.
+    pub fn from_fingerprints(
+        tables: impl IntoIterator<Item = (Table, Fingerprint)>,
+    ) -> Result<Self, Error> {
+        let mut manifest = Self::EMPTY;
+        for (table, fingerprint) in tables {
+            manifest.record(table, fingerprint)?;
+        }
+        Ok(manifest)
+    }
     pub fn from_directory(directory: &Directory) -> Self {
         let mut result = Self::EMPTY;
         for table in Table::ALL {

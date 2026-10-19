@@ -599,3 +599,55 @@ official inflation **19,872 B**, each separately with 4,096 B headroom. This is
 a conservative envelope including both HTTP wrapper frame families, even when
 a specialization inlines one into its caller; it is not a complete call-graph
 proof or a physical stack high-water measurement.
+
+
+## Persistent selected timetable cache
+
+The shared device query now stores all-period selected GTFS in transactional flash
+banks. [Cache format, capacity and cold-boot semantics](docs/persistent-cache.md).
+The release `probe_device --cache PATH` uses the same parser, selector, verified
+TLS transport and persistent range session. Its file-backed NOR model checks
+1-to-0 programming and counts erase/program calls. The hard 65,536 B first-fit
+heap includes a 34,320 B radio reservation; the executor limits host CPU duty to
+20%. Query UTC1792367882, line4, stopMT44 are fixed across paired rounds.
+
+Three paired rounds on 2026-10-19 produced the same 18 departures and checksum
+`043c5d4a37aade22` in every mode. Medians from
+[all nine raw observations](benchmarks/device-cache-live.json):
+
+| Mode | Wall ms | CPU ms | HTTP requests | Body bytes | Flash erase/program calls |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Normal streaming | 6,458 | 463 | 19 | 16,958,205 | — |
+| Unchanged source check + replay | 2,308 | 13 | 7 | 466,338 | 0 / 0 |
+| Cold-cache replay only | 6 | 1 | 0 | 0 | 0 / 0 |
+
+The unchanged check transfers **97.25% fewer body bytes**. Its remaining discovery
+HTML and coverage requests are visible in the logs. Both network modes peak at
+56,648 B bounded heap including the radio reservation; replay peaks at the
+reservation alone, with no query allocation. All runs retained zero allocations.
+The paired rounds preceded the review fixes. A post-review confirmation produced
+the same checksum in all four modes: streaming 6,023 ms, unchanged check 2,352 ms,
+replay 7 ms, and first fill 12,349 ms. The first fill made 41 requests and read
+49,740,526 body bytes, with 22 erases and 337 program calls (86,040 bytes). Its
+read-only preflight now checks the exact active query before writing, adding a
+trip/stop-times scan to the comparison and write passes. A too-large active query
+therefore retries with zero flash writes. Subsequent identical checks still
+transfer 466,338 bytes and cause zero erases/programs. These post-review timings
+are single observations, not paired medians; both sets are in the raw report.
+
+These are **host measurements**, excluding host OS socket buffers and stack.
+The file model does not emulate ESP32 flash latency; 6 ms replay excludes boot,
+DHCP and clock synchronization. The same cached tables work after the initial
+six-hour window; offline fixtures cover exceptions, times after 24:00, duplicate
+platform codes, snapshot handovers, quoted fields, more than 1,024 all-period
+trips, oversized selections and interrupted writes. Active query limits remain.
+
+[The linked C3 report](benchmarks/device-cache-ram.json) counts **275,420 B static**
+including the unchanged 64 KiB heap, plus the unchanged 24 KiB minimum reserve:
+**299,996 B**, below the unchanged 300,000 B regression ceiling. The complete
+linked account, including all **49,184 B available stack**, is **324,604 B**,
+below 400,000 B. [The scoped stack audit](benchmarks/device-cache-stack.json)
+includes cache replay, validation and synchronous flash frames: TLS 43,056 B plus
+4,096 B headroom fits. These remain compiler/linker estimates and audited paths,
+not physical stack high-water or a complete call-graph proof. No buffer, heap,
+stack reserve, active trip capacity or departure capacity was reduced.

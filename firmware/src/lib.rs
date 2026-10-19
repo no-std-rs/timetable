@@ -1,5 +1,6 @@
 #![no_std]
 pub mod battery;
+pub mod cache;
 pub mod cooperative;
 pub mod download;
 pub mod panel;

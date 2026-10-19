@@ -8,6 +8,7 @@ mod tls_cipher;
 mod tls_memory;
 mod transport;
 
+use core::cell::RefCell;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
 use embassy_net::{Runner, Stack, StackResources};
@@ -42,7 +43,7 @@ use static_cell::{ConstStaticCell, StaticCell};
 use timetable_display::{
     App, Config, catalog::Catalog, config, feed::Builder, model::Status, render, ui,
 };
-use timetable_firmware::{battery, panel, power, settings};
+use timetable_firmware::{battery, cache, panel, power, settings};
 use transport::{Error, Http};
 
 struct State {
@@ -55,6 +56,84 @@ struct State {
 }
 type Shared = Mutex<CriticalSectionRawMutex, State>;
 static STATE: StaticCell<Shared> = StaticCell::new();
+type FlashMutex =
+    embassy_sync::blocking_mutex::Mutex<CriticalSectionRawMutex, RefCell<FlashStorage<'static>>>;
+static FLASH: StaticCell<FlashMutex> = StaticCell::new();
+#[derive(Clone, Copy)]
+struct CachePartition {
+    flash: &'static FlashMutex,
+    enabled: bool,
+}
+
+struct CacheFlash {
+    flash: &'static FlashMutex,
+    shared: &'static Shared,
+    revision: u32,
+}
+impl CacheFlash {
+    fn bounds(offset: u32, length: usize) -> Result<(), gtfs::Error> {
+        if offset < cache::OFFSET
+            || offset
+                .checked_add(length as u32)
+                .is_none_or(|end| end > cache::OFFSET + cache::SIZE)
+        {
+            return Err(gtfs::Error::InvalidRange);
+        }
+        Ok(())
+    }
+}
+impl cache::Storage for CacheFlash {
+    fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), gtfs::Error> {
+        Self::bounds(offset, out.len())?;
+        self.flash
+            .lock(|flash| ReadNorFlash::read(&mut *flash.borrow_mut(), offset, out))
+            .map_err(|_| gtfs::Error::Io(embedded_io_async::ErrorKind::Other))
+    }
+    fn write(&self, offset: u32, bytes: &[u8]) -> Result<(), gtfs::Error> {
+        Self::bounds(offset, bytes.len())?;
+        self.flash
+            .lock(|flash| flash.borrow_mut().write(offset, bytes))
+            .map_err(|_| gtfs::Error::Io(embedded_io_async::ErrorKind::Other))
+    }
+    fn erase(&self, start: u32, end: u32) -> Result<(), gtfs::Error> {
+        Self::bounds(
+            start,
+            end.checked_sub(start).ok_or(gtfs::Error::InvalidRange)? as usize,
+        )?;
+        self.flash
+            .lock(|flash| flash.borrow_mut().erase(start, end))
+            .map_err(|_| gtfs::Error::Io(embedded_io_async::ErrorKind::Other))
+    }
+    async fn current(&self) -> bool {
+        let s = self.shared.lock().await;
+        s.revision == self.revision && !s.powering_down
+    }
+    fn checked_at(&self) -> Option<i64> {
+        transport::now()
+    }
+}
+
+#[inline(never)]
+fn has_cache_partition(flash: &mut FlashStorage<'_>) -> bool {
+    use esp_bootloader_esp_idf::partitions::{PARTITION_TABLE_MAX_LEN, read_partition_table};
+    let mut bytes = [0; PARTITION_TABLE_MAX_LEN];
+    let Ok(table) = read_partition_table(flash, &mut bytes) else {
+        return false;
+    };
+    table.iter().any(|p| {
+        p.label().starts_with(b"ttcache\0")
+            && p.raw_type() == 0x40
+            && p.raw_subtype() == 0
+            && p.offset() == cache::OFFSET
+            && p.len() == cache::SIZE
+    }) && table.iter().all(|p| {
+        p.label().starts_with(b"ttcache\0")
+            || p.offset().checked_add(p.len()).is_some_and(|end| {
+                end <= cache::OFFSET || p.offset() >= cache::OFFSET + cache::SIZE
+            })
+    })
+}
+
 static NET: StaticCell<StackResources<4>> = StaticCell::new();
 static SETTINGS: StaticCell<[u8; config::IMAGE_SIZE]> = StaticCell::new();
 const _: () = assert!(panel::TILE_BYTES <= config::IMAGE_SIZE);
@@ -223,6 +302,18 @@ async fn main(spawner: Spawner) -> ! {
             Timer::after_secs(60).await;
         }
     };
+    let cache_enabled = has_cache_partition(&mut flash);
+    info!(
+        "Cache: dedicated flash partition {}",
+        if cache_enabled {
+            "ready"
+        } else {
+            "absent; streaming only"
+        }
+    );
+    let flash = FLASH.init(embassy_sync::blocking_mutex::Mutex::new(RefCell::new(
+        flash,
+    )));
     if let Some(utc) = restored.as_ref().and_then(|r| r.utc_micros) {
         transport::restore_clock(utc);
     }
@@ -240,7 +331,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut radio = Some(p.WIFI);
     if connect {
         info!("Boot: settings ready; starting network");
-        start_network(spawner, radio.take().unwrap(), shared);
+        start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
     }
     info!("Boot: application ready");
     log_heap();
@@ -298,8 +389,15 @@ async fn main(spawner: Spawner) -> ! {
                         now.duration_since(pressed) >= Duration::from_millis(700),
                     ) {
                         ui::Action::Save { refresh } => {
-                            app.save_failed =
-                                !save(&mut flash, scratch, c, &mut generation, &mut bank);
+                            app.save_failed = !flash.lock(|flash| {
+                                save(
+                                    &mut flash.borrow_mut(),
+                                    scratch,
+                                    c,
+                                    &mut generation,
+                                    &mut bank,
+                                )
+                            });
                             if app.save_failed {
                                 warn!("Settings could not be saved");
                             }
@@ -315,7 +413,7 @@ async fn main(spawner: Spawner) -> ! {
                 if request {
                     s.network_busy = true;
                     if let Some(wifi) = radio.take() {
-                        start_network(spawner, wifi, shared);
+                        start_network(spawner, wifi, shared, flash, cache_enabled);
                     } else {
                         REFRESH.signal(());
                     }
@@ -366,7 +464,7 @@ async fn main(spawner: Spawner) -> ! {
                 )
             {
                 s.network_busy = true;
-                start_network(spawner, radio.take().unwrap(), shared);
+                start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
             }
             if let Some(seconds) = s.completed_delay.take() {
                 next_refresh_rtc = rtc
@@ -556,6 +654,8 @@ fn start_network(
     spawner: Spawner,
     wifi: esp_hal::peripherals::WIFI<'static>,
     shared: &'static Shared,
+    flash: &'static FlashMutex,
+    cache_enabled: bool,
 ) {
     spawner.spawn(
         network_service(
@@ -565,6 +665,10 @@ fn start_network(
             QUERY_CONFIG.take(),
             FEED.init_with(|| Builder::new("20261017".parse().unwrap())),
             WORKSPACE.take(),
+            CachePartition {
+                flash,
+                enabled: cache_enabled,
+            },
         )
         .unwrap(),
     );
@@ -579,6 +683,7 @@ async fn network_service(
     query_config: &'static mut Config,
     builder: &'static mut Builder,
     workspace: &'static mut gtfs::zip::Workspace,
+    cache: CachePartition,
 ) {
     loop {
         {
@@ -602,6 +707,7 @@ async fn network_service(
                 query_config,
                 builder,
                 workspace,
+                cache,
             ),
             POWER_DOWN.wait(),
         )
@@ -679,6 +785,7 @@ async fn network_session(
     query_config: &mut Config,
     builder: &mut Builder,
     workspace: &mut gtfs::zip::Workspace,
+    cache: CachePartition,
 ) -> u32 {
     let (controller, stack, mut runner) = match open_network(wifi, resources) {
         Ok(network) => network,
@@ -694,7 +801,7 @@ async fn network_session(
         runner.run(),
         select(
             wifi_connection(controller, shared),
-            update_once(stack, shared, query_config, builder, workspace),
+            update_once(stack, shared, query_config, builder, workspace, cache),
         ),
     )
     .await
@@ -772,6 +879,7 @@ async fn update_once(
     query_config: &mut Config,
     builder: &mut Builder,
     workspace: &mut gtfs::zip::Workspace,
+    cache: CachePartition,
 ) -> u32 {
     {
         let mut s = shared.lock().await;
@@ -810,9 +918,50 @@ async fn update_once(
         s.app.status = Status::Loading;
         copy_query(&s, query_config)
     };
+    let storage = CacheFlash {
+        flash: cache.flash,
+        shared,
+        revision,
+    };
+    if cache.enabled
+        && let Ok(Some(bank)) = cache::load(&storage).await
+    {
+        match cache::restore(
+            &storage,
+            bank,
+            builder,
+            workspace,
+            query_config,
+            transport::now().unwrap(),
+        )
+        .await
+        {
+            Ok(freshness) => {
+                let mut state = shared.lock().await;
+                if state.revision != revision || state.powering_down {
+                    return 0;
+                }
+                state.app.publish(
+                    core::mem::take(&mut builder.events),
+                    core::mem::take(&mut builder.headsigns),
+                    builder.now,
+                );
+                state.app.freshness = freshness;
+                state.app.status = Status::Loading;
+                info!("Cache: cold-start departures ready; checking remote identity");
+            }
+            Err(error) => info!("Cache: no usable selection/date window: {error:?}"),
+        }
+    }
+    let transport = Http(stack);
+    let cached = cache::Http {
+        inner: &transport,
+        flash: &storage,
+        enabled: cache.enabled,
+    };
     let result = select(
         timetable_firmware::download::refresh(
-            &Http(stack),
+            &cached,
             builder,
             workspace,
             query_config,
