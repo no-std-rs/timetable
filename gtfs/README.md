@@ -301,3 +301,10 @@ See [Runnerless setup and bootstrap enforcement](../docs/runnerless.md) for acti
 and required-check details.
 
 Licensed under MIT or Apache-2.0, at your option.
+
+For HTTP clients that keep a connection open, `Member::record_range()` and
+`zip::Reader::record` consume a member's local header, name, extras, payload
+and descriptor in one forward range. The local metadata must match the validated
+directory; finishing still checks length, CRC and descriptors. Drain the complete
+HTTP body before reusing the connection. Existing separate header/data APIs remain
+available.

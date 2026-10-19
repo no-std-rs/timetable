@@ -2,7 +2,9 @@
 #![no_main]
 extern crate alloc;
 mod http_request;
+mod http_session;
 mod rtc;
+mod tls_cipher;
 mod tls_memory;
 mod transport;
 
@@ -245,6 +247,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut down_at = None;
     let mut start = (0u16, 0u16);
     let mut end = start;
+    let mut animation = 0_u8;
     let mut redraw = Instant::now();
     let mut last_activity = redraw;
     loop {
@@ -329,12 +332,28 @@ async fn main(spawner: Spawner) -> ! {
                 app.tick(c, utc);
             }
             for y in (0..240).step_by(panel::TILE_ROWS) {
-                render::draw(&mut panel::Tile { y, pixels }, &s.app, &s.config, &catalog).unwrap();
+                render::draw_animated(
+                    &mut panel::Tile { y, pixels },
+                    &s.app,
+                    &s.config,
+                    &catalog,
+                    animation,
+                )
+                .unwrap();
                 panel.write_tile(y, pixels).unwrap();
                 embassy_futures::yield_now().await;
             }
             backlight.set_high();
-            redraw = Instant::now() + Duration::from_secs(1);
+            animation = animation.wrapping_add(1);
+            redraw = Instant::now()
+                + if matches!(
+                    s.app.status,
+                    Status::Connecting | Status::Syncing | Status::Loading
+                ) {
+                    Duration::from_millis(500)
+                } else {
+                    Duration::from_secs(1)
+                };
         }
         {
             let mut s = shared.lock().await;
@@ -638,9 +657,9 @@ fn open_network<'d>(
         .with_ampdu_rx_enable(false)
         .with_ampdu_tx_enable(false);
     let (mut controller, interfaces) = esp_radio::wifi::new(wifi, config)?;
-    match controller.set_power_saving(PowerSaveMode::Minimum) {
-        Ok(()) => info!("Wi-Fi: radio initialized; modem power saving enabled"),
-        Err(error) => log_wifi_error("modem power saving unavailable", error),
+    match controller.set_power_saving(PowerSaveMode::None) {
+        Ok(()) => info!("Wi-Fi: radio initialized; transfer mode, modem power save off"),
+        Err(error) => log_wifi_error("transfer power mode unavailable", error),
     }
     let mut seed = [0; 8];
     Rng::new().read(&mut seed);

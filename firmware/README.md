@@ -9,6 +9,11 @@ chilli red for the main action and departure urgency.
 
 ![Rust renderer preview](../docs/previews/device.png)
 
+[Animated update indicator](../docs/previews/device-live.gif). Four departures,
+second-by-second countdowns and the physical platform fit on the board. The
+spinner animates every half-second while connecting, synchronizing NTP or
+updating, including before UTC is known; idle boards redraw once per second.
+
 [Desktop installer preview](../docs/previews/installer-desktop.png) ·
 [Mobile installer preview](../docs/previews/installer-mobile.png) ·
 [Searchable stop picker](../docs/previews/installer-picker-mobile.png) ·
@@ -140,7 +145,10 @@ and reads `feed_info.txt` to select coverage for yesterday, today and tomorrow
 when needed by the six-hour horizon. At a feed handover more than one snapshot
 can be needed. For each chosen snapshot it downloads each required table once:
 calendars, routes/stops, trips and stop times. HTTP ranges skip shapes and other
-unused members; selected table data are decompressed directly into the existing
+unused members. One verified TLS connection serves all ranges from the files
+origin, and each member uses one complete local-record range rather than a
+separate header request. A failed/cancelled or incompletely read response
+invalidates the connection. Selected table data are decompressed directly into the existing
 bounded query builder. Stop times still require reading that table, not just
 individual selected rows. There is no full ZIP buffer or temporary file.
 
@@ -156,7 +164,8 @@ A successful refresh caches six hours of departures and waits three hours.
 Always-on failures retry after 30 seconds (clock) or a minute (other errors);
 battery mode uses five minutes. Between sessions the controller, sockets and
 network runner are dropped, deinitializing the radio while the screen and touch
-remain active. Active Wi-Fi uses minimum modem power saving. A single network
+remain active. Active transfers disable modem power saving to finish sooner; the radio is
+still completely released between sessions. A single network
 service owns this lifecycle; manual refreshes and shutdown cancel its old waits.
 Every new session obtains DHCP and synchronizes NTP. The previous/current/next
 service-day window covers Poznań's normal after-midnight trips; feeds with service
@@ -177,20 +186,22 @@ Each 512-entry departure cache stores four-byte entries with one shared UTC
 epoch; access reconstructs full `i64` timestamps, including after 2038.
 TLS borrows its verifier and connection instead of moving large async state.
 TCP transmit and TLS transmit buffers are 1 KiB each for the short GET requests;
-TCP receive remains 4 KiB and TLS receive remains 16,640 B for full records.
+TCP receive is 6 KiB and TLS receive remains 16,640 B for full records.
+TLS uses RustCrypto ChaCha20-Poly1305 with the existing certificate, hostname,
+time and signature verification. See [the reproducible comparison](../PERFORMANCE.md#persistent-ranges-and-software-crypto).
 The ZIP dictionary supplies directory scratch while no inflater is active.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **297,212 B**,
+excluded. The static-plus-minimum-stack regression account is **298,612 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 51,968 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 50,568 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
 available stack, with 4 KiB headroom. The original binary fails this check.
 `STACK.json` records the scoped audit, including the network selection, update,
-mirror and transport callers. Its TLS bound is 46,688 B plus 4,096 B headroom; it is not a complete call-graph proof or
+mirror and transport callers. Its TLS bound is 40,560 B plus 4,096 B headroom; it is not a complete call-graph proof or
 physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
 Physical screen/radio/touch behaviour still requires the board. No hardware test has been
 performed as part of this implementation. Serial logs report allocator current,

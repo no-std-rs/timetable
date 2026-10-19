@@ -55,9 +55,61 @@ pub trait Http {
         range: Option<(ByteRange, Option<u64>)>,
         operation: &mut impl Operation,
     ) -> Result<Metadata, Error>;
+    /// Transports can scope one authenticated connection around all file ranges.
+    /// The default keeps simple stateless transports and offline fixtures usable.
+    async fn mirror_tables(
+        &self,
+        snapshots: &Snapshots,
+        builder: &mut Builder,
+        workspace: &mut zip::Workspace,
+        config: &Config,
+    ) -> Result<Freshness, Error>
+    where
+        Self: Sized,
+    {
+        mirror_tables(self, snapshots, builder, workspace, config).await
+    }
     fn stage(&self, _message: &str) {}
     fn fallback(&self, _error: &Error) {
         self.stage("MobilityDatabase failed; using official ZTM fallback");
+    }
+}
+
+/// Work scoped to a transport-owned authenticated connection. Buffers stay in
+/// the caller's future; no self-referential connection storage is required.
+#[allow(async_fn_in_trait)]
+pub trait SessionOperation {
+    type Output;
+    async fn run(&mut self, http: &impl Http) -> Result<Self::Output, Error>;
+}
+pub struct Fetch<'a, O> {
+    pub url: &'a str,
+    pub range: Option<(ByteRange, Option<u64>)>,
+    pub operation: &'a mut O,
+}
+impl<O: Operation> SessionOperation for Fetch<'_, O> {
+    type Output = Metadata;
+    async fn run(&mut self, http: &impl Http) -> Result<Metadata, Error> {
+        http.fetch(self.url, self.range, self.operation).await
+    }
+}
+pub struct MirrorQuery<'a> {
+    pub snapshots: &'a Snapshots,
+    pub builder: &'a mut Builder,
+    pub workspace: &'a mut zip::Workspace,
+    pub config: &'a Config,
+}
+impl SessionOperation for MirrorQuery<'_> {
+    type Output = Freshness;
+    async fn run(&mut self, http: &impl Http) -> Result<Freshness, Error> {
+        mirror_tables(
+            http,
+            self.snapshots,
+            self.builder,
+            self.workspace,
+            self.config,
+        )
+        .await
     }
 }
 
@@ -121,13 +173,17 @@ struct Payload<'a, V> {
 impl<V: FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>> Operation for Payload<'_, V> {
     async fn read<R: Read>(&mut self, mut body: R) -> Result<(), Error> {
         {
-            let zip = zip::Reader::data(&mut body, self.workspace, self.member);
+            let zip = zip::Reader::record(&mut body, self.workspace, self.member).await?;
             let mut rows = csv::Reader::<_>::new(zip, self.member.table());
             while let Some(row) = rows.next().await? {
                 (self.visit)(row)?;
             }
         }
-        end(&mut body).await
+        // A complete local record may include a descriptor or padding already
+        // prefetched by the ZIP reader. Consume the exact range before reuse.
+        let mut scratch = [0; 256];
+        while body.read(&mut scratch).await.map_err(|_| Error::Network)? != 0 {}
+        Ok(())
     }
 }
 pub struct Mirror<'a, H> {
@@ -176,19 +232,10 @@ impl<'a, H: Http> Mirror<'a, H> {
             .member(table)
             .ok_or(gtfs::Error::MissingTable(table))?;
         self.http.stage(table.filename());
-        let mut header = [0; 30];
         self.http
             .fetch(
                 self.snapshot.url(),
-                Some((member.header_range(), Some(self.length))),
-                &mut Fill(&mut header),
-            )
-            .await?;
-        let range = member.data_range(&header)?;
-        self.http
-            .fetch(
-                self.snapshot.url(),
-                Some((range, Some(self.length))),
+                Some((member.record_range(), Some(self.length))),
                 &mut Payload {
                     member,
                     workspace,
@@ -254,9 +301,20 @@ pub async fn mirror(
     let mut candidates = Snapshots(heapless::Vec::new());
     http.fetch(gtfs::poznan::MIRROR_PAGE, None, &mut candidates)
         .await?;
+    http.mirror_tables(&candidates, builder, workspace, config)
+        .await
+}
+
+pub async fn mirror_tables<H: Http>(
+    http: &H,
+    candidates: &Snapshots,
+    builder: &mut Builder,
+    workspace: &mut zip::Workspace,
+    config: &Config,
+) -> Result<Freshness, Error> {
     let mut remaining = builder.day_mask();
     let mut times = timetable_display::freshness::SourceTimes::default();
-    for snapshot in candidates.0 {
+    for &snapshot in &candidates.0 {
         let mut source = Mirror::open(http, snapshot, workspace).await?;
         let mask = source.coverage(builder.dates, workspace).await? & remaining;
         if mask == 0 {

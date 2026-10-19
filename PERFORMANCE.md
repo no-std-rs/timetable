@@ -526,3 +526,76 @@ cd firmware
 cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882
 cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --official
 ```
+
+## Persistent ranges and software crypto
+
+The mirror now uses two verified TLS connections per query: one listing
+connection and one persistent files connection. Each requested table is a
+single local-record range, including the local name, extra fields and ZIP data
+descriptor. Directory order need not match physical order. Unused tables remain
+skipped, CRC/length/identity checks remain mandatory, and any cancellation,
+callback error, truncated body or unsupported framing poisons reuse. The official
+streaming fallback still uses its established three-pass policy.
+
+A paired live comparison used the same fixed UTC `1792367882`, line `4`, platform
+`MT44`, pinned compiler/profile and actual firmware download/parser pipeline.
+Each run had a hard 65,536-byte first-fit heap, 34,320 bytes reserved for the
+radio baseline, no allocator fallback, and at most 20% host CPU duty. After one
+warm-up pair, three alternating measured pairs produced:
+
+| Quantity | PR #15 base | Persistent ranges + ChaCha20 |
+| --- | ---: | ---: |
+| HTTP requests | 33 | 19 |
+| TLS connections | 33 | 2 |
+| Body bytes | 16,957,798 | 16,958,206 |
+| Median wall time | 19,108 ms | 6,469 ms |
+| Median host CPU time | 600 ms | 411 ms |
+| Heap peak including radio reserve | 56,648 B | 56,648 B |
+| Retained allocations | 0 B | 0 B |
+| Published departures | 18 | 18 |
+
+All rounds matched checksum `043c5d4a37aade22`. The extra 408 bytes are local
+record metadata included in the combined ranges. The **2.95× host wall-time
+speedup is not an ESP32 throughput prediction**: host socket buffers, native
+execution and stack are outside this test. [Raw rounds](benchmarks/device-throughput-live.json).
+Reproduce each side with `firmware/examples/probe_device`, building the base
+`c7d40e7de9fbae640351d2cd08a9ac064adc4a1f` and current source separately:
+
+```sh
+cd firmware
+cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882
+# Compatibility check of the independently verified official fallback:
+cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --official
+```
+
+A separate allocation-free RV32IMC QEMU probe measures retired instructions,
+not C3 cycles or network speed. On a 16 KiB record with five-byte TLS AAD,
+RustCrypto ChaCha20-Poly1305 decryption takes 1,204,870 instructions versus
+4,538,949 for AES-128-GCM, including per-record setup. The whole-row UTF-8 CSV
+validation reduces the fixed 512-row parse from 1,484,038 to 1,105,727 instructions
+(25.5%). Malformed field boundaries remain rejected.
+[Raw results](benchmarks/device-throughput-rv32.json) and
+[probe/reproduction details](checks/device-cpu/README.md).
+
+Production TLS now negotiates ChaCha20-Poly1305 with the existing certificate,
+hostname, time and signature checks. TCP receive grows from 4 to 6 KiB while
+TLS receive remains 16,640 bytes and both transmit buffers remain 1 KiB. Active
+transfers disable modem power saving; the 80 MHz CPU and complete radio teardown
+between three-hour updates remain. Hardware throughput and energy must be
+measured on the board; no physical speed, power or temperature claim is made.
+
+The actual renderer shows four departures, exact `m:ss` countdowns, platform,
+walking deadline and `HH:MM:SS` clock. A monotonic eight-phase spinner redraws
+every 500 ms during association, NTP or table download, even without UTC; idle
+boards redraw once per second. Rendering remains allocation-free and tiled.
+
+The [linked report](benchmarks/device-throughput-ram.json) counts **274,036 B
+static RAM**, including the unchanged 64 KiB heap, and **298,612 B** with the
+unchanged minimum 24 KiB stack reserve, below the 300,000-byte ratchet. Static
+RAM plus all 50,568 linker-available stack bytes is **324,604 B**, below 400,000.
+The [scoped DWARF audit](benchmarks/device-throughput-stack.json) accounts for
+the new session callers: TLS **40,560 B**, mirror record inflation **29,136 B**,
+official inflation **19,872 B**, each separately with 4,096 B headroom. This is
+a conservative envelope including both HTTP wrapper frame families, even when
+a specialization inlines one into its caller; it is not a complete call-graph
+proof or a physical stack high-water measurement.

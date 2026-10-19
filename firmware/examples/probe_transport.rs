@@ -1,5 +1,7 @@
 //! Host-only live diagnostic. Shares the device GET sender, stream adapter,
 //! cooperative reader and certificate verifier; does not emulate the C3 radio.
+#[path = "../src/tls_cipher.rs"]
+mod tls_cipher;
 use core::{
     future::Future,
     pin::pin,
@@ -7,8 +9,8 @@ use core::{
 };
 use embedded_io_async::{ErrorType, Read, Write};
 use embedded_tls::{
-    Aes128GcmSha256, Certificate, CryptoProvider, TlsClock, TlsConfig, TlsConnection, TlsContext,
-    TlsVerifier, pki::CertVerifier,
+    Certificate, CryptoProvider, TlsClock, TlsConfig, TlsConnection, TlsContext, TlsVerifier,
+    pki::CertVerifier,
 };
 use reqwless::{
     request::{Method, Request, RequestBuilder},
@@ -19,6 +21,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use timetable_firmware::{cooperative::Cooperative, sources::Archives};
+use tls_cipher::CipherSuite;
 #[path = "../src/http_request.rs"]
 mod http_request;
 #[path = "../src/tls_memory.rs"]
@@ -32,17 +35,15 @@ impl TlsClock for Clock {
 }
 struct Provider {
     rng: rand_core::OsRng,
-    verifier: tls_memory::HeapCheckedVerifier<CertVerifier<'static, Aes128GcmSha256, Clock, 8192>>,
+    verifier: tls_memory::HeapCheckedVerifier<CertVerifier<'static, CipherSuite, Clock, 8192>>,
 }
 impl CryptoProvider for Provider {
-    type CipherSuite = Aes128GcmSha256;
+    type CipherSuite = CipherSuite;
     type Signature = [u8; 64];
     fn rng(&mut self) -> impl embedded_tls::CryptoRngCore {
         &mut self.rng
     }
-    fn verifier(
-        &mut self,
-    ) -> Result<&mut impl TlsVerifier<Aes128GcmSha256>, embedded_tls::TlsError> {
+    fn verifier(&mut self) -> Result<&mut impl TlsVerifier<CipherSuite>, embedded_tls::TlsError> {
         Ok(&mut self.verifier)
     }
 }

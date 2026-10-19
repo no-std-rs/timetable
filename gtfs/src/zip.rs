@@ -302,6 +302,39 @@ impl<'a, R: Read> Reader<'a, R> {
         reader
     }
 
+    /// Open a complete indexed local record from a forward-only range stream.
+    /// Use `Member::record_range`; local name, flags, sizes and CRC must match
+    /// the validated directory. Extra fields and descriptors are streamed.
+    pub async fn record(
+        source: R,
+        workspace: &'a mut Workspace,
+        member: Member,
+    ) -> Result<Self, Error> {
+        let mut reader = Self::new(source, workspace);
+        let entry = reader.next_entry().await?.ok_or(Error::InvalidZip)?;
+        if entry.table() != Some(member.table)
+            || entry.flags != member.flags
+            || entry.compression != member.compression
+            || entry
+                .compressed_size
+                .is_some_and(|n| n != member.compressed_size)
+            || entry
+                .uncompressed_size
+                .is_some_and(|n| n != member.uncompressed_size)
+            || entry.crc.is_some_and(|n| n != member.crc)
+            || member.offset as u64 + reader.position + member.compressed_size as u64
+                > member.record_end as u64
+        {
+            return Err(Error::InvalidZip);
+        }
+        let entry = reader.current.as_mut().unwrap();
+        entry.crc = Some(member.crc);
+        entry.compressed_size = Some(member.compressed_size);
+        entry.uncompressed_size = Some(member.uncompressed_size);
+        reader.remaining = Some(member.compressed_size);
+        Ok(reader)
+    }
+
     async fn fill(&mut self) -> Result<(), Error> {
         if self.start == self.end {
             self.start = 0;
@@ -811,6 +844,7 @@ pub struct Member {
     table: Table,
     offset: u32,
     directory_offset: u32,
+    record_end: u32,
     compression: u16,
     flags: u16,
     compressed_size: u32,
@@ -838,6 +872,22 @@ impl Member {
     pub fn header_range(&self) -> crate::http::ByteRange {
         crate::http::ByteRange::new(self.offset as u64, self.offset as u64 + 29)
             .expect("u32 ZIP offset")
+    }
+    /// Local header, name, extras, payload and descriptor up to the next physical
+    /// record. One HTTP range replaces separate header and payload requests.
+    /// The ambiguous all-marker descriptor also includes four lookahead bytes
+    /// from the next record to distinguish its signed and unsigned forms.
+    pub fn record_range(&self) -> crate::http::ByteRange {
+        let lookahead = if self.flags & 8 != 0
+            && (self.crc, self.compressed_size, self.uncompressed_size)
+                == (DESCRIPTOR, DESCRIPTOR, DESCRIPTOR)
+        {
+            4
+        } else {
+            0
+        };
+        crate::http::ByteRange::new(self.offset as u64, self.record_end as u64 - 1 + lookahead)
+            .expect("validated local record bounds")
     }
     pub fn data_range(&self, header: &[u8; 30]) -> Result<crate::http::ByteRange, Error> {
         if u32_at(header, 0) != LOCAL
@@ -986,6 +1036,7 @@ impl Directory {
                     table,
                     offset: u32_at(&h, 42),
                     directory_offset: offset,
+                    record_end: offset,
                     flags: u16_at(&h, 8),
                     compression: u16_at(&h, 10),
                     compressed_size: u32_at(&h, 20),
@@ -1010,6 +1061,36 @@ impl Directory {
         }
         if pos != end_offset {
             return Err(Error::InvalidZip);
+        }
+        // Directory order need not match physical order. A second bounded scan
+        // finds the next header, including unknown tables, without retaining
+        // every member or assuming equal central/local extra-field lengths.
+        // Small directories remain in RangeReader's existing cache.
+        let mut pos = offset as u64;
+        for _ in 0..count {
+            source
+                .seek(SeekFrom::Start(pos))
+                .await
+                .map_err(|e| Error::Io(e.kind()))?;
+            let mut h = [0; 46];
+            read_exact(source, &mut h).await?;
+            let next = u32_at(&h, 42);
+            for member in result.members.iter_mut().flatten() {
+                if next > member.offset && next < member.record_end {
+                    member.record_end = next;
+                }
+            }
+            pos += 46 + u16_at(&h, 28) as u64 + u16_at(&h, 30) as u64 + u16_at(&h, 32) as u64;
+        }
+        for member in result.members.iter().flatten() {
+            if member.offset as u64
+                + 30
+                + member.table.filename().len() as u64
+                + member.compressed_size as u64
+                > member.record_end as u64
+            {
+                return Err(Error::InvalidZip);
+            }
         }
         if missing_timestamp {
             result.updated_at = None;
@@ -1081,6 +1162,37 @@ mod tests {
             self.0 = &self.0[1..];
             Ok(1)
         }
+    }
+
+    #[test]
+    fn record_range_includes_only_required_descriptor_lookahead() {
+        let mut member = Member {
+            table: Table::StopTimes,
+            offset: 100,
+            directory_offset: u32::MAX,
+            record_end: u32::MAX - 46,
+            compression: 0,
+            flags: 8,
+            compressed_size: DESCRIPTOR,
+            uncompressed_size: DESCRIPTOR,
+            crc: DESCRIPTOR,
+        };
+        assert_eq!(member.record_range().start(), 100);
+        assert_eq!(
+            member.record_range().end(),
+            u64::from(member.record_end) + 3
+        );
+        member.crc = 0;
+        assert_eq!(
+            member.record_range().end(),
+            u64::from(member.record_end) - 1
+        );
+        member.crc = DESCRIPTOR;
+        member.flags = 0;
+        assert_eq!(
+            member.record_range().end(),
+            u64::from(member.record_end) - 1
+        );
     }
 
     #[test]

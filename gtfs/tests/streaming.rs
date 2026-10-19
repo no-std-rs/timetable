@@ -56,6 +56,96 @@ impl<R: Read> Read for Forward<R> {
 }
 
 #[test]
+fn csv_utf8_validation_preserves_field_boundaries() {
+    block_on(async {
+        for chunk in 1..=7 {
+            for data in [
+                b"route_id,route_type\n\xc3,\xa9\n".as_slice(),
+                b"route_id,route_type\n\"\xc3\",\"\xa9\"\n",
+            ] {
+                let mut rows = csv::Reader::<_>::new(Memory::new(data, chunk), Table::Routes);
+                assert!(matches!(rows.next().await, Err(Error::InvalidUtf8)));
+            }
+            let mut rows = csv::Reader::<_>::new(
+                Memory::new(b"route_id,route_type\n\xc3\xa9,0\n", chunk),
+                Table::Routes,
+            );
+            assert_eq!(
+                rows.next()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .required(csv::Column::RouteId)
+                    .unwrap(),
+                "é"
+            );
+        }
+    });
+}
+
+#[test]
+fn complete_indexed_record_streams_match_payloads_and_reject_bad_headers() {
+    block_on(async {
+        for bytes in [
+            FIXTURE,
+            include_bytes!("fixtures/descriptor.zip"),
+            include_bytes!("fixtures/stored.zip"),
+            include_bytes!("fixtures/shuffled.zip"),
+            include_bytes!("fixtures/timestamps.zip"),
+            include_bytes!("fixtures/marker-crc-signed.zip"),
+            include_bytes!("fixtures/marker-crc-unsigned.zip"),
+        ] {
+            let directory = zip::Directory::read(&mut Memory::new(bytes, 7), &mut [0; 128])
+                .await
+                .unwrap();
+            for table in Table::ALL {
+                let Some(member) = directory.member(table) else {
+                    continue;
+                };
+                let range = member.record_range();
+                let record = &bytes[range.start() as usize..=range.end() as usize];
+                let mut workspace = zip::Workspace::new();
+                let mut reader =
+                    zip::Reader::record(Forward(Memory::new(record, 3)), &mut workspace, member)
+                        .await
+                        .unwrap();
+                let mut actual = Vec::new();
+                let mut scratch = [0; 127];
+                loop {
+                    let n = reader.read(&mut scratch).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    actual.extend_from_slice(&scratch[..n]);
+                }
+                let mut expected =
+                    zip::Reader::member(Memory::new(bytes, 5), &mut workspace, member)
+                        .await
+                        .unwrap();
+                let mut decoded = Vec::new();
+                loop {
+                    let n = expected.read(&mut scratch).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    decoded.extend_from_slice(&scratch[..n]);
+                }
+                assert_eq!(actual, decoded);
+                for index in [6, 8, 30] {
+                    let mut bad = record.to_vec();
+                    bad[index] ^= 1;
+                    assert!(
+                        zip::Reader::record(Forward(Memory::new(&bad, 1)), &mut workspace, member)
+                            .await
+                            .is_err()
+                    );
+                }
+            }
+        }
+    });
+}
+
+#[test]
 fn source_timestamps_are_optional_and_published_only_after_archive_validation() {
     block_on(async {
         let data = include_bytes!("fixtures/timestamps.zip");

@@ -35,7 +35,7 @@ columns! {
 #[derive(Clone, Copy)]
 pub struct Record<'a> {
     pub(crate) table: Table,
-    data: &'a [u8],
+    data: &'a str,
     ends: &'a [usize],
     columns: &'a [usize; Column::ALL.len()],
 }
@@ -52,11 +52,7 @@ impl<'a> Record<'a> {
         }
         let start = if i == 0 { 0 } else { self.ends[i - 1] };
         let data = &self.data[start..self.ends[i]];
-        if data.is_empty() {
-            None
-        } else {
-            Some(core::str::from_utf8(data).expect("validated CSV field"))
-        }
+        if data.is_empty() { None } else { Some(data) }
     }
 
     pub fn required(self, column: Column) -> Result<&'a str, Error> {
@@ -153,12 +149,6 @@ impl<R: Read, const ROW: usize, const FIELDS: usize> Reader<R, ROW, FIELDS> {
                 ReadRecordResult::OutputEndsFull => return Err(Error::TooManyFields),
                 ReadRecordResult::End => return Ok(false),
                 ReadRecordResult::Record => {
-                    let mut start = 0;
-                    for &end in &self.ends[..self.fields] {
-                        core::str::from_utf8(&self.data[start..end])
-                            .map_err(|_| Error::InvalidUtf8)?;
-                        start = end;
-                    }
                     return Ok(true);
                 }
             }
@@ -194,12 +184,20 @@ impl<R: Read, const ROW: usize, const FIELDS: usize> Reader<R, ROW, FIELDS> {
         if !self.raw_next().await? {
             return Ok(None);
         }
+        let data =
+            core::str::from_utf8(&self.data[..self.data_len]).map_err(|_| Error::InvalidUtf8)?;
+        if self.ends[..self.fields]
+            .iter()
+            .any(|&end| !data.is_char_boundary(end))
+        {
+            return Err(Error::InvalidUtf8);
+        }
         if self.header_fields != Some(self.fields) {
             return Err(Error::InvalidField("CSV record width"));
         }
         Ok(Some(Record {
             table: self.table,
-            data: &self.data[..self.data_len],
+            data,
             ends: &self.ends[..self.fields],
             columns: &self.columns,
         }))

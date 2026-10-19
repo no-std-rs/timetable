@@ -36,6 +36,11 @@ jobs:
           cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
           cargo check --example probe_transport --example probe_device --locked --target x86_64-unknown-linux-gnu
           cargo clippy --locked --release --features firmware -- -D warnings
+      - name: Compile the allocation-free RV32 performance probe
+        working-directory: checks/device-cpu
+        run: |
+          cargo fmt --all --check
+          cargo build --locked --release
       - name: Build the factory image and enforce linked RAM and stack
         run: |
           sh tools/build-device-artifact.sh

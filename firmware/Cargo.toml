@@ -24,7 +24,7 @@ firmware = [
     "dep:embassy-executor", "dep:embassy-net", "dep:embassy-time",
     "dep:embassy-sync", "dep:static_cell", "dep:reqwless", "dep:log",
     "dep:portable-atomic",
-    "dep:esp-storage", "dep:embedded-storage", "dep:embedded-tls", "dep:spin",
+    "dep:chacha20poly1305", "dep:esp-storage", "dep:embedded-storage", "dep:embedded-tls", "dep:spin",
 ]
 
 [dependencies]
@@ -34,6 +34,7 @@ heapless = "0.9.3"
 embedded-io-async = "0.7"
 embedded-graphics = "0.8.2"
 embedded-hal = "1"
+chacha20poly1305 = { version = "=0.10.1", default-features = false, optional = true }
 
 esp-hal = { version = "=1.1.1", features = ["esp32c3", "unstable", "log-04", "exception-handler"], optional = true }
 esp-rtos = { version = "0.3", features = ["esp32c3", "esp-radio", "embassy"], optional = true }
@@ -67,6 +68,7 @@ reqwless = { version = "=0.14.0", default-features = false }
 embedded-io = { version = "0.7", features = ["std"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 libc = "0.2"
+chacha20poly1305 = { version = "=0.10.1", default-features = false }
 
 [profile.dev]
 opt-level = "s"

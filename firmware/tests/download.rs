@@ -96,12 +96,12 @@ impl Http for Client {
         let mut altered = bytes.to_vec();
         // Fail the second snapshot's large stop_times payload, after tomorrow's
         // results have already been staged in Builder.
-        if self.corrupt && url == OLD && bytes.starts_with(b"trip_id,arrival_time") {
+        if self.corrupt && url == OLD && bytes.get(30..44) == Some(b"stop_times.txt") {
             let last = altered.len() - 1;
             altered[last] ^= 1;
         }
         op.read(Body(&altered)).await?;
-        if url == OLD && bytes.starts_with(b"trip_id,arrival_time") {
+        if url == OLD && bytes.get(30..44) == Some(b"stop_times.txt") {
             if self.cancel {
                 core::future::pending::<()>().await;
             }
@@ -177,10 +177,7 @@ fn mirror_fetches_each_table_once_and_matches_the_official_join() {
     let directory = run(zip::Directory::read(&mut directory_source, &mut [0; 128])).unwrap();
     for table in Table::ALL {
         let member = directory.member(table).unwrap();
-        let header = member.header_range();
-        let mut raw = [0; 30];
-        raw.copy_from_slice(&MIRROR[header.start() as usize..header.start() as usize + 30]);
-        let payload = member.data_range(&raw).unwrap();
+        let payload = member.record_range();
         assert_eq!(
             client
                 .calls
