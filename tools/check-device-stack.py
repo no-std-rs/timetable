@@ -125,8 +125,10 @@ def audit(frames, stack):
         outlined_open = [size for name, size in frames
                          if all(part in name for part in ('embedded_tls', 'TlsConnection', '4open'))]
         base = task + session + max(scoped) + max(outlined_update, default=0)
-        # Timed awaits Connection, which awaits either headers or the body
-        # operation. Both frames stay live throughout each transfer path.
+        # Timed awaits Connection, which awaits headers or a body operation.
+        # Specializations can inline either layer into their caller. Include
+        # both outlined frame families as a conservative envelope anyway, so
+        # later outlining cannot silently weaken the transfer-path guard.
         http = (frame('transport', 'Timed', '5fetch', 'closure')
                 + frame('http_session', 'Connection', '5fetch', 'closure'))
         paths.update({

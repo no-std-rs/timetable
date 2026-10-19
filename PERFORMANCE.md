@@ -596,4 +596,6 @@ RAM plus all 50,568 linker-available stack bytes is **324,604 B**, below 400,000
 The [scoped DWARF audit](benchmarks/device-throughput-stack.json) accounts for
 the new session callers: TLS **40,560 B**, mirror record inflation **29,136 B**,
 official inflation **19,872 B**, each separately with 4,096 B headroom. This is
-not a complete call-graph proof or a physical stack high-water measurement.
+a conservative envelope including both HTTP wrapper frame families, even when
+a specialization inlines one into its caller; it is not a complete call-graph
+proof or a physical stack high-water measurement.
