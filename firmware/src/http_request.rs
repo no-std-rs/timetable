@@ -83,9 +83,22 @@ pub async fn send_get_range<S: Write>(
     host: &str,
     range: Option<&str>,
 ) -> Result<(), reqwless::Error> {
+    send_get_connection(stream, path, host, range, false).await
+}
+
+pub async fn send_get_connection<S: Write>(
+    stream: &mut S,
+    path: &str,
+    host: &str,
+    range: Option<&str>,
+    persistent: bool,
+) -> Result<(), reqwless::Error> {
     let headers = [
         ("Accept-Encoding", "identity"),
-        ("Connection", "close"),
+        (
+            "Connection",
+            if persistent { "keep-alive" } else { "close" },
+        ),
         ("User-Agent", "timetable/0.1"),
         ("Range", range.unwrap_or("")),
     ];

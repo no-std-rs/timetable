@@ -1,9 +1,11 @@
 //! Exercise the production verifier in a bounded first-fit arena. On an arena
 //! miss only this host probe falls back to System so it can report the failure
 //! instead of aborting the whole test process. Production has no such fallback.
+#[path = "../src/tls_cipher.rs"]
+mod tls_cipher;
 use embedded_tls::{
-    Aes128GcmSha256, Certificate, CertificateRef, CertificateVerifyRef, Sha256, SignatureScheme,
-    TlsClock, TlsError, TlsVerifier, pki::CertVerifier,
+    Certificate, CertificateRef, CertificateVerifyRef, Sha256, SignatureScheme, TlsClock, TlsError,
+    TlsVerifier, pki::CertVerifier,
 };
 use linked_list_allocator::Heap;
 use std::{
@@ -15,6 +17,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+use tls_cipher::CipherSuite;
 #[path = "../src/tls_memory.rs"]
 mod tls_memory;
 use tls_memory::{HeapCheckedVerifier, VERIFY_HEAP_BYTES};
@@ -103,7 +106,7 @@ fn measure<T>(bytes: usize, operation: impl FnOnce() -> T) -> (T, usize, usize) 
     assert_eq!(meter.heap.used(), 0, "verifier leaked arena allocations");
     (result, meter.peak, meter.misses)
 }
-fn verifier() -> CertVerifier<'static, Aes128GcmSha256, Clock, 8192> {
+fn verifier() -> CertVerifier<'static, CipherSuite, Clock, 8192> {
     let mut verifier = CertVerifier::new(Certificate::X509(ROOT));
     verifier
         .set_hostname_verification("www.ztm.poznan.pl")
@@ -203,7 +206,7 @@ fn mirror_chains(hash: &Sha256) {
     ] {
         let make = || {
             let mut verifier =
-                CertVerifier::<Aes128GcmSha256, Clock, 8192>::new(Certificate::X509(root));
+                CertVerifier::<CipherSuite, Clock, 8192>::new(Certificate::X509(root));
             verifier.set_hostname_verification(host).unwrap();
             HeapCheckedVerifier::new(verifier, available).with_redundant_root(Some(cross))
         };

@@ -100,11 +100,13 @@ def audit(frames, stack):
         outlined = [size for name, size in frames if all(part in name for part in parts)]
         if outlined:
             session += max(outlined)
-    update = frame('timetable_display11update_once', 'closure')
-    worker = session + update
-    mirror = frame('timetable_firmware', 'download6mirror', 'closure')
-    fetch = frame('transport', 'download', '5fetch', 'closure')
-    runtime_callers = task + worker + max(request, mirror + fetch)
+    lower_tls = sum(frame(*parts) for parts in [
+        ('process_server_verify',), ('pki', 'verify_signature'),
+        ('der', 'from_der'), ('ContextSpecific', 'decode_explicit'),
+        ('SliceReader', '6decode'), ('header', 'Header', '6decode'),
+        ('Tag', 'decode_with_constructed_bit'), ('parse_parts',),
+        ('Reader', 'read_byte'), ('Reader', 'read_into'),
+    ])
     paths = {
         'boot_state': main + initialize + frame('create_state'),
         'boot_settings': main + initialize + load + frame('settings', 'load_banks') + parser,
@@ -112,15 +114,36 @@ def audit(frames, stack):
         'boot_network': main + frame('start_network'),
         'save_validation': main + frame('timetable_display4save') + frame('config6decode') + parser,
         'runtime_network_setup': task + session + frame('open_network'),
-        'runtime_settings_copy': task + worker + frame('copy_query'),
-        'runtime_inflate': runtime_callers + max(frame('gtfs', 'next_entry'), frame('gtfs', 'zip', '4data')),
-        'runtime_tls': runtime_callers + frame('embedded_tls', 'TlsConnection', '4open')
-            + frame('process_server_verify') + frame('pki', 'verify_signature')
-            + frame('der', 'from_der') + frame('ContextSpecific', 'decode_explicit')
-            + frame('SliceReader', '6decode') + frame('header', 'Header', '6decode')
-            + frame('Tag', 'decode_with_constructed_bit') + frame('parse_parts')
-            + frame('Reader', 'read_byte') + frame('Reader', 'read_into'),
     }
+    scoped = [size for name, size in frames if 'download7refresh' in name and 'closure' in name]
+    if scoped:
+        # Pinned scoped-session ELF: update_once and session are inlined into
+        # Select/refresh. TLS.open is in TimeoutFuture::poll, BEFORE the
+        # SessionOperation starts reading tables. These paths are alternatives.
+        outlined_update = [size for name, size in frames
+                           if 'timetable_display11update_once' in name and 'closure' in name]
+        outlined_open = [size for name, size in frames
+                         if all(part in name for part in ('embedded_tls', 'TlsConnection', '4open'))]
+        base = task + session + max(scoped) + max(outlined_update, default=0)
+        paths.update({
+            'runtime_settings_copy': task + session + frame('copy_query') + frame('config', 'Config', '10clone_from'),
+            'runtime_mirror_record': base + frame('download13mirror_tables', 'closure') + frame('gtfs', 'zip', '6record', 'closure'),
+            'runtime_official_inflate': base + frame('http_session', 'Connection', '5fetch', 'closure') + frame('gtfs', 'next_entry'),
+            'runtime_http_headers': base + frame('download13mirror_tables', 'closure') + frame('transport', 'Timed', '5fetch', 'closure') + frame('response', 'Response', '7headers'),
+            'runtime_tls': base + request + max(outlined_open, default=0) + lower_tls,
+        })
+    else:
+        # Legacy connection-per-request profile remains covered for regressions.
+        update = frame('timetable_display11update_once', 'closure')
+        worker = session + update
+        mirror = frame('timetable_firmware', 'download6mirror', 'closure')
+        fetch = frame('transport', 'download', '5fetch', 'closure')
+        runtime_callers = task + worker + max(request, mirror + fetch)
+        paths.update({
+            'runtime_settings_copy': task + worker + frame('copy_query'),
+            'runtime_inflate': runtime_callers + max(frame('gtfs', 'next_entry'), frame('gtfs', 'zip', '4data')),
+            'runtime_tls': runtime_callers + frame('embedded_tls', 'TlsConnection', '4open') + lower_tls,
+        })
     margin = 4096
     for name, size in paths.items():
         limit = 24576 if name.startswith('boot_') else stack

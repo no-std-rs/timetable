@@ -1,4 +1,6 @@
 //! Verified TLS 1.3 over embassy-net; reqwless decodes each streaming HTTP body.
+use crate::http_session::{Connection, Observe};
+use crate::tls_cipher::CipherSuite;
 use crate::tls_memory::HeapCheckedVerifier;
 use embassy_net::{
     Stack,
@@ -7,19 +9,17 @@ use embassy_net::{
     udp::{PacketMetadata, UdpSocket},
 };
 use embassy_time::{Duration, Instant, with_timeout};
-use embedded_io_async::{ErrorType, Read};
 use embedded_tls::{
-    Aes128GcmSha256, Certificate, CryptoProvider, TlsClock, TlsConfig, TlsConnection, TlsContext,
-    TlsVerifier, pki::CertVerifier,
+    Certificate, CryptoProvider, TlsClock, TlsConfig, TlsConnection, TlsContext, TlsVerifier,
+    pki::CertVerifier,
 };
 use esp_hal::rng::{Rng, Trng};
 use gtfs::http::ByteRange;
 use portable_atomic::{AtomicI64, Ordering};
-use reqwless::{request::Method, response::Response};
 use timetable_firmware::cooperative::Cooperative;
 pub use timetable_firmware::download::Error;
 use timetable_firmware::download::Operation;
-use timetable_firmware::download::{self, Metadata};
+use timetable_firmware::download::{self, Metadata, SessionOperation};
 
 static UTC_OFFSET: AtomicI64 = AtomicI64::new(i64::MIN);
 
@@ -46,10 +46,10 @@ impl TlsClock for Clock {
 
 struct Provider {
     rng: Trng,
-    verifier: HeapCheckedVerifier<CertVerifier<'static, Aes128GcmSha256, Clock, 8192>>,
+    verifier: HeapCheckedVerifier<CertVerifier<'static, CipherSuite, Clock, 8192>>,
 }
 impl CryptoProvider for Provider {
-    type CipherSuite = Aes128GcmSha256;
+    type CipherSuite = CipherSuite;
     type Signature = [u8; 64];
     fn rng(&mut self) -> impl embedded_tls::CryptoRngCore {
         &mut self.rng
@@ -71,6 +71,25 @@ impl download::Http for Http<'_> {
             error
         );
     }
+    async fn mirror_tables(
+        &self,
+        snapshots: &download::Snapshots,
+        builder: &mut timetable_display::feed::Builder,
+        workspace: &mut gtfs::zip::Workspace,
+        config: &timetable_display::Config,
+    ) -> Result<timetable_display::freshness::Freshness, Error> {
+        self.session(
+            "https://files.mobilitydatabase.org/",
+            &mut download::MirrorQuery {
+                snapshots,
+                builder,
+                workspace,
+                config,
+            },
+            true,
+        )
+        .await
+    }
     async fn fetch(
         &self,
         url: &str,
@@ -79,34 +98,43 @@ impl download::Http for Http<'_> {
     ) -> Result<Metadata, Error> {
         with_timeout(
             Duration::from_secs(300),
-            self.request(url, range, operation),
+            self.session(
+                url,
+                &mut download::Fetch {
+                    url,
+                    range,
+                    operation,
+                },
+                false,
+            ),
         )
         .await
         .map_err(|_| Error::Network)?
     }
 }
 impl Http<'_> {
-    async fn request(
+    async fn session<S: SessionOperation>(
         &self,
         url: &str,
-        range: Option<(ByteRange, Option<u64>)>,
-        operation: &mut impl Operation,
-    ) -> Result<Metadata, Error> {
+        operation: &mut S,
+        persistent: bool,
+    ) -> Result<S::Output, Error> {
         if now().is_none() {
             return Err(Error::Clock);
         }
         let endpoint = crate::http_request::endpoint(url)?;
-        let (host, path) = (endpoint.host, endpoint.path);
+        let host = endpoint.host;
         let addresses = self
             .0
             .dns_query(host, DnsQueryType::A)
             .await
             .map_err(|_| Error::Network)?;
         let ip = *addresses.first().ok_or(Error::Network)?;
-        let mut rx = [0; 4096];
+        let mut rx = [0; 6144];
         let mut tx = [0; 1024];
         let mut socket = TcpSocket::new(self.0, &mut rx, &mut tx);
         socket.set_timeout(Some(Duration::from_secs(30)));
+        socket.set_nagle_enabled(false);
         socket
             .connect((ip, 443))
             .await
@@ -131,111 +159,95 @@ impl Http<'_> {
                 .with_redundant_root(endpoint.redundant_root),
             };
             // Keep the 8 KiB verifier out of owned async-context copies.
-            tls.open(TlsContext::new(&tls_config, &mut provider))
-                .await
-                .map_err(|error| {
-                    log::warn!(
-                        "TLS handshake failed: {:?}; {} B heap free",
-                        error,
-                        esp_alloc::HEAP.free()
-                    );
-                    Error::Tls
-                })?;
+            with_timeout(
+                Duration::from_secs(60),
+                tls.open(TlsContext::new(&tls_config, &mut provider)),
+            )
+            .await
+            .map_err(|_| Error::Tls)?
+            .map_err(|error| {
+                log::warn!(
+                    "TLS handshake failed: {:?}; {} B heap free",
+                    error,
+                    esp_alloc::HEAP.free()
+                );
+                Error::Tls
+            })?;
         }
-        log::info!("TLS: handshake verified");
+        log::info!("TLS: handshake verified; ChaCha20-Poly1305; TCP RX 6144 B");
         crate::log_heap();
-        // Keep the live TLS connection in place while reqwless borrows it.
-        let mut stream = crate::http_request::Stream(Cooperative::new(&mut tls));
-        let mut headers = [0; 2048];
-        let mut range_text = [0; 64];
-        let range_header = range.map(|(r, _)| r.header(&mut range_text)).transpose()?;
+        log::info!("HTTP: opened persistent session for {}", host);
+        let stream = crate::http_request::Stream(Cooperative::new(&mut tls));
+        operation
+            .run(&Timed(Connection::new(stream, host, &Device, persistent)))
+            .await
+    }
+}
+struct Timed<H>(H);
+impl<H: download::Http> download::Http for Timed<H> {
+    fn stage(&self, message: &str) {
+        self.0.stage(message);
+    }
+    async fn fetch(
+        &self,
+        url: &str,
+        range: Option<(ByteRange, Option<u64>)>,
+        operation: &mut impl Operation,
+    ) -> Result<Metadata, Error> {
+        with_timeout(
+            Duration::from_secs(300),
+            self.0.fetch(url, range, operation),
+        )
+        .await
+        .map_err(|_| Error::Network)?
+    }
+}
+struct Device;
+impl Observe for Device {
+    fn millis(&self) -> u64 {
+        Instant::now().as_millis()
+    }
+    fn now(&self) -> Option<i64> {
+        now()
+    }
+    fn stage(&self, message: &str) {
+        log::info!("Feed: {}", message);
+    }
+    fn request(&self, url: &str, range: Option<(ByteRange, Option<u64>)>) {
         log::info!(
-            "HTTP: requesting https://{}{} range {:?}",
-            host,
-            path,
+            "HTTP: requesting {} range {:?}; reusing verified TLS",
+            url,
             range
         );
-        let sent = if range_header.is_some() {
-            crate::http_request::send_get_range(&mut stream, path, host, range_header).await
+    }
+    fn status(&self, status: u16) {
+        log::info!("HTTP: response status {}", status);
+    }
+    fn progress(&self, bytes: u64, total: Option<u64>, elapsed: u64) {
+        let seconds = (elapsed / 1000).max(1);
+        if let Some(total) = total.filter(|n| *n != 0) {
+            log::info!(
+                "HTTP: {} / {} KiB ({}%); {} KiB/s; {} s elapsed",
+                bytes / 1024,
+                total / 1024,
+                bytes.saturating_mul(100) / total,
+                bytes / seconds / 1024,
+                seconds
+            );
         } else {
-            crate::http_request::send_get(&mut stream, path, host).await
-        };
-        sent.map_err(|error| {
-            log::warn!("HTTP request write/flush failed: {:?}", error);
-            Error::Http
-        })?;
-        log::info!("HTTP: request sent; reading response headers");
-        let response = Response::read(&mut stream, Method::GET, &mut headers)
-            .await
-            .map_err(|error| {
-                log::warn!("HTTP response headers failed: {:?}", error);
-                Error::Http
-            })?;
-        log::info!("HTTP: response status {}", response.status.0);
-        let mut meta = crate::http_request::validate(response.status.0, response.headers(), range)?;
-        let modified = timetable_display::freshness::source_modified(
-            response.headers(),
-            now().ok_or(Error::Clock)?,
-        );
-        meta.modified = modified;
-        let started = Instant::now();
-        let mut body = Progress {
-            inner: response.body().reader(),
-            bytes: 0,
-            expected: range.map(|(r, _)| r.len()).or(meta.length),
-            started,
-            report: started,
-        };
-        operation.read(&mut body).await?;
-        log::info!(
-            "HTTP: body complete; {} bytes in {} ms",
-            body.bytes,
-            started.elapsed().as_millis()
-        );
-        Ok(meta)
-    }
-}
-
-struct Progress<R> {
-    inner: R,
-    bytes: u64,
-    expected: Option<u64>,
-    started: Instant,
-    report: Instant,
-}
-impl<R: ErrorType> ErrorType for Progress<R> {
-    type Error = R::Error;
-}
-impl<R: Read> Read for Progress<R> {
-    async fn read(&mut self, out: &mut [u8]) -> Result<usize, Self::Error> {
-        let n = self.inner.read(out).await?;
-        self.bytes += n as u64;
-        if self.report.elapsed() >= Duration::from_secs(5) {
-            let seconds = self.started.elapsed().as_secs().max(1);
-            if let Some(total) = self.expected.filter(|n| *n != 0) {
-                log::info!(
-                    "HTTP: {} / {} KiB ({}%); {} KiB/s; {} s elapsed",
-                    self.bytes / 1024,
-                    total / 1024,
-                    self.bytes.saturating_mul(100) / total,
-                    self.bytes / 1024 / seconds,
-                    seconds
-                );
-            } else {
-                log::info!(
-                    "HTTP: {} KiB; {} KiB/s; {} s elapsed",
-                    self.bytes / 1024,
-                    self.bytes / 1024 / seconds,
-                    seconds
-                );
-            }
-            self.report = Instant::now();
+            log::info!(
+                "HTTP: {} KiB; {} KiB/s; {} s elapsed",
+                bytes / 1024,
+                bytes / seconds / 1024,
+                seconds
+            );
         }
-        Ok(n)
+    }
+    fn complete(&self, bytes: u64, elapsed: u64) {
+        log::info!("HTTP: body complete; {} bytes in {} ms", bytes, elapsed);
     }
 }
 
-/// A nonce-bound SNTP reply supplies UTC before certificate validity is checked.
 pub async fn synchronize(stack: Stack<'_>) -> Result<(), Error> {
     log::info!("Clock sync: resolving NTP server");
     with_timeout(Duration::from_secs(15), async {

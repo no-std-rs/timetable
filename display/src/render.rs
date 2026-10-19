@@ -102,6 +102,13 @@ pub fn freshness_line(app: &App) -> String<40> {
     text
 }
 
+fn countdown(seconds: i64) -> String<12> {
+    let seconds = seconds.max(0);
+    let mut text = String::new();
+    let _ = write!(text, "{}:{:02}", seconds / 60, seconds % 60);
+    text
+}
+
 fn timestamp(stamp: Option<i64>, unknown: &str) -> String<40> {
     let mut text = String::new();
     if let Some(local) = stamp.and_then(clock::warsaw) {
@@ -222,6 +229,24 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
     config: &Config,
     catalog: &Catalog<'_>,
 ) -> Result<(), D::Error> {
+    draw_animated(
+        d,
+        app,
+        config,
+        catalog,
+        app.clock.unwrap_or(0).rem_euclid(8) as u8,
+    )
+}
+
+/// The UI task supplies a monotonic phase so connection/NTP activity animates
+/// even before UTC is known. Cached countdowns continue to use synchronized UTC.
+pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
+    d: &mut D,
+    app: &App,
+    config: &Config,
+    catalog: &Catalog<'_>,
+    phase: u8,
+) -> Result<(), D::Error> {
     background(d)?;
     let Some(group) = config.groups.get(app.group) else {
         return setup(d);
@@ -235,7 +260,7 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
         Screen::Walk => "Your walk",
         Screen::Freshness => "Timetable age",
     };
-    label(d, title, 120, 24, INK, true)?;
+    label(d, &short(title, 20), 120, 24, INK, true)?;
     if app.screen != Screen::Board {
         label(d, "<", 45, 25, INK, false)?;
     }
@@ -274,10 +299,9 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                             .build(),
                     ),
                 )?;
-                let mut value = String::<8>::new();
-                let _ = write!(value, "{}", (event.at - now + 59) / 60);
-                big(d, &value, 129, 55)?;
-                label(d, "min", 197, 85, MUTED, false)?;
+                let value = countdown(event.at - now);
+                big(d, &value, 216 - value.len() as i32 * 20, 55)?;
+                label(d, "IN", 84, 76, MUTED, false)?;
                 label(
                     d,
                     &short(
@@ -292,13 +316,18 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                     INK,
                     true,
                 )?;
-                label(d, &short(&p.stop_name, 27), 120, 108, MUTED, true)?;
+                let mut platform =
+                    short(&p.stop_name, if p.stop_code.is_empty() { 27 } else { 20 });
+                if !p.stop_code.is_empty() {
+                    let _ = write!(platform, " / {}", p.stop_code);
+                }
+                label(d, &short(&platform, 31), 120, 108, MUTED, true)?;
                 let left = leave_in(event.at, now, p);
                 let mut text = String::<64>::new();
                 if walking_chance(event.at, now, p) == 0 {
                     let _ = text.push_str("Not enough walk time");
-                } else if left >= 60 {
-                    let _ = write!(text, "Leave in {} min", left / 60);
+                } else if left > 0 {
+                    let _ = write!(text, "Leave in {}", countdown(left));
                 } else {
                     let _ = text.push_str("Leave now");
                 }
@@ -310,6 +339,20 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                     131,
                     if left < 60 { PORCELAIN } else { INK },
                     true,
+                )?;
+                // Walking confidence is a visual estimate, never vehicle reliability.
+                let chance = walking_chance(event.at, now, p);
+                draw_visible(
+                    d,
+                    &Rectangle::new(
+                        Point::new(40, 145),
+                        Size::new(160 * u32::from(chance) / 100, 2),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(if left < 60 {
+                        PORCELAIN
+                    } else {
+                        INK
+                    })),
                 )?;
                 text.clear();
                 let _ = write!(
@@ -325,7 +368,7 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                     .enumerate()
                     .filter(|(index, e)| e.at >= event.at && *index != chosen_index)
                     .map(|(_, event)| event)
-                    .take(2)
+                    .take(3)
                     .enumerate()
                 {
                     let Some(p) = group.picks.get(next.pick as usize) else {
@@ -342,10 +385,10 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                             .unwrap_or(&p.headsign),
                         if next.conditional { " *" } else { "" }
                     );
-                    label(d, &short(&text, 20), 38, 173 + i as i32 * 17, INK, false)?;
+                    label(d, &short(&text, 20), 38, 166 + i as i32 * 14, INK, false)?;
                     text.clear();
                     let _ = write!(text, "{}m", (next.at - now + 59) / 60);
-                    label(d, &text, 182, 173 + i as i32 * 17, INK, false)?;
+                    label(d, &text, 182, 166 + i as i32 * 14, INK, false)?;
                 }
             } else {
                 let status = match app.status {
@@ -378,7 +421,13 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
             let mut foot = String::<40>::new();
             let fault = app.can_retry() || app.status == Status::Capacity;
             if !fault && let Some(local) = clock::warsaw(now).filter(|_| app.clock.is_some()) {
-                let _ = write!(foot, "{:02}:{:02} / ", local.hour(), local.minute());
+                let _ = write!(
+                    foot,
+                    "{:02}:{:02}:{:02} / ",
+                    local.hour(),
+                    local.minute(),
+                    local.second()
+                );
             }
             let _ = foot.push_str(if app.save_failed {
                 "NOT SAVED"
@@ -395,7 +444,11 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
             } else if app.status == Status::Syncing {
                 "SYNCING"
             } else if app.status == Status::Loading {
-                "UPDATING"
+                match now.rem_euclid(3) {
+                    0 => "UPDATING.",
+                    1 => "UPDATING..",
+                    _ => "UPDATING...",
+                }
             } else if now < app.manual_until
                 || !config.automatic
                 || !config.groups.iter().any(|g| g.days != 0)
@@ -416,7 +469,35 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
                 },
                 true,
             )?;
-            if !fault {
+            if matches!(
+                app.status,
+                Status::Connecting | Status::Syncing | Status::Loading
+            ) {
+                for (i, (x, y)) in [
+                    (0, -4),
+                    (3, -3),
+                    (4, 0),
+                    (3, 3),
+                    (0, 4),
+                    (-3, 3),
+                    (-4, 0),
+                    (-3, -3),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    draw_visible(
+                        d,
+                        &Circle::new(Point::new(48 + x, 47 + y), 2).into_styled(
+                            PrimitiveStyle::with_fill(if i == usize::from(phase % 8) {
+                                CHILLI
+                            } else {
+                                GOLD
+                            }),
+                        ),
+                    )?;
+                }
+            } else if !fault {
                 draw_visible(
                     d,
                     &Circle::new(Point::new(47, 44), 4).into_styled(PrimitiveStyle::with_fill(
@@ -624,4 +705,23 @@ fn page_count<D: DrawTarget<Color = Rgb565>>(
         );
     }
     label(d, &text, 120, 185, MUTED, true)
+}
+
+#[cfg(test)]
+mod countdown_tests {
+    #[test]
+    fn seconds_are_exact_at_minute_and_horizon_boundaries() {
+        for (seconds, text) in [
+            (-1, "0:00"),
+            (0, "0:00"),
+            (1, "0:01"),
+            (59, "0:59"),
+            (60, "1:00"),
+            (599, "9:59"),
+            (600, "10:00"),
+            (21600, "360:00"),
+        ] {
+            assert_eq!(super::countdown(seconds).as_str(), text);
+        }
+    }
 }

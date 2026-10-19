@@ -1,5 +1,7 @@
 //! Actual firmware update with hard 64 KiB first-fit heap, radio baseline and
 //! configurable host CPU duty. This is not ESP32 instruction/power emulation.
+#[path = "../src/tls_cipher.rs"]
+mod tls_cipher;
 use core::{
     cell::Cell,
     future::Future,
@@ -8,10 +10,9 @@ use core::{
 };
 use embedded_io_async::{ErrorType, Read, Write};
 use embedded_tls::{
-    Aes128GcmSha256, Certificate, CryptoProvider, TlsClock, TlsConfig, TlsConnection, TlsContext,
-    TlsVerifier, pki::CertVerifier,
+    Certificate, CryptoProvider, TlsClock, TlsConfig, TlsConnection, TlsContext, TlsVerifier,
+    pki::CertVerifier,
 };
-use reqwless::{request::Method, response::Response};
 use std::{
     net::TcpStream,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -19,12 +20,15 @@ use std::{
 use timetable_display::{App, Config, catalog::Catalog, feed::Builder};
 use timetable_firmware::{
     cooperative::Cooperative,
-    download::{self, Error, Http, Metadata, Operation},
+    download::{self, Error, Http, Metadata, Operation, SessionOperation},
 };
+use tls_cipher::CipherSuite;
 #[path = "support/budget.rs"]
 mod budget;
 #[path = "../src/http_request.rs"]
 mod http_request;
+#[path = "../src/http_session.rs"]
+mod http_session;
 #[path = "../src/tls_memory.rs"]
 mod tls_memory;
 #[global_allocator]
@@ -37,17 +41,15 @@ impl TlsClock for Clock {
 }
 struct Provider {
     rng: rand_core::OsRng,
-    verifier: tls_memory::HeapCheckedVerifier<CertVerifier<'static, Aes128GcmSha256, Clock, 8192>>,
+    verifier: tls_memory::HeapCheckedVerifier<CertVerifier<'static, CipherSuite, Clock, 8192>>,
 }
 impl CryptoProvider for Provider {
-    type CipherSuite = Aes128GcmSha256;
+    type CipherSuite = CipherSuite;
     type Signature = [u8; 64];
     fn rng(&mut self) -> impl embedded_tls::CryptoRngCore {
         &mut self.rng
     }
-    fn verifier(
-        &mut self,
-    ) -> Result<&mut impl TlsVerifier<Aes128GcmSha256>, embedded_tls::TlsError> {
+    fn verifier(&mut self) -> Result<&mut impl TlsVerifier<CipherSuite>, embedded_tls::TlsError> {
         Ok(&mut self.verifier)
     }
 }
@@ -104,32 +106,8 @@ struct Client {
     requests: Cell<u32>,
     fallback: Cell<bool>,
     official_only: bool,
-}
-struct Counting<'a, R> {
-    inner: R,
-    client: &'a Client,
-    bytes: u64,
+    connections: Cell<u32>,
     started: Instant,
-    report: Instant,
-}
-impl<R: ErrorType> ErrorType for Counting<'_, R> {
-    type Error = R::Error;
-}
-impl<R: Read> Read for Counting<'_, R> {
-    async fn read(&mut self, out: &mut [u8]) -> Result<usize, Self::Error> {
-        let n = self.inner.read(out).await?;
-        self.bytes += n as u64;
-        self.client.bytes.set(self.client.bytes.get() + n as u64);
-        if self.report.elapsed() >= Duration::from_secs(5) {
-            println!(
-                "progress: {} bytes / {}ms",
-                self.bytes,
-                self.started.elapsed().as_millis()
-            );
-            self.report = Instant::now();
-        }
-        Ok(n)
-    }
 }
 impl Http for Client {
     fn stage(&self, message: &str) {
@@ -148,12 +126,47 @@ impl Http for Client {
         if self.official_only && url == gtfs::poznan::MIRROR_PAGE {
             return Err(Error::Network);
         }
+        self.session(
+            url,
+            &mut download::Fetch {
+                url,
+                range,
+                operation: op,
+            },
+            false,
+        )
+        .await
+    }
+    async fn mirror_tables(
+        &self,
+        snapshots: &download::Snapshots,
+        builder: &mut Builder,
+        workspace: &mut gtfs::zip::Workspace,
+        config: &Config,
+    ) -> Result<timetable_display::freshness::Freshness, Error> {
+        self.session(
+            "https://files.mobilitydatabase.org/",
+            &mut download::MirrorQuery {
+                snapshots,
+                builder,
+                workspace,
+                config,
+            },
+            true,
+        )
+        .await
+    }
+}
+impl Client {
+    async fn session<S: SessionOperation>(
+        &self,
+        url: &str,
+        operation: &mut S,
+        persistent: bool,
+    ) -> Result<S::Output, Error> {
         let endpoint = http_request::endpoint(url)?;
-        self.requests.set(self.requests.get() + 1);
-        println!(
-            "GET {url} range {range:?}; heap free {}",
-            budget::available()
-        );
+        self.connections.set(self.connections.get() + 1);
+        println!("TLS connect {}", endpoint.host);
         let socket = TcpStream::connect((endpoint.host, 443)).map_err(|_| Error::Network)?;
         socket
             .set_read_timeout(Some(Duration::from_secs(30)))
@@ -167,70 +180,61 @@ impl Http for Client {
         let config = TlsConfig::new()
             .with_server_name(endpoint.host)
             .enable_rsa_signatures();
-        let mut provider = Provider {
-            rng: rand_core::OsRng,
-            verifier: tls_memory::HeapCheckedVerifier::new(
-                CertVerifier::new(Certificate::X509(endpoint.root)),
-                budget::available,
-            )
-            .with_redundant_root(endpoint.redundant_root),
-        };
-        tls.open(TlsContext::new(&config, &mut provider))
-            .await
-            .map_err(|e| {
-                println!("TLS failed: {e:?}");
-                Error::Tls
-            })?;
-        let mut stream = http_request::Stream(Cooperative::new(&mut tls));
-        let mut value = [0; 64];
-        if let Some((r, _)) = range {
-            http_request::send_get_range(
-                &mut stream,
-                endpoint.path,
-                endpoint.host,
-                Some(r.header(&mut value)?),
-            )
-            .await
-        } else {
-            http_request::send_get(&mut stream, endpoint.path, endpoint.host).await
+        {
+            let mut provider = Provider {
+                rng: rand_core::OsRng,
+                verifier: tls_memory::HeapCheckedVerifier::new(
+                    CertVerifier::new(Certificate::X509(endpoint.root)),
+                    budget::available,
+                )
+                .with_redundant_root(endpoint.redundant_root),
+            };
+            tls.open(TlsContext::new(&config, &mut provider))
+                .await
+                .map_err(|e| {
+                    println!("TLS failed: {e:?}");
+                    Error::Tls
+                })?;
         }
-        .map_err(|e| {
-            println!("send failed: {e:?}");
-            Error::Http
-        })?;
-        let mut header = [0; 2048];
-        let response = Response::read(&mut stream, Method::GET, &mut header)
+        let stream = http_request::Stream(Cooperative::new(&mut tls));
+        operation
+            .run(&http_session::Connection::new(
+                stream,
+                endpoint.host,
+                self,
+                persistent,
+            ))
             .await
-            .map_err(|e| {
-                println!("response failed: {e:?}");
-                Error::Http
-            })?;
-        let mut meta = http_request::validate(response.status.0, response.headers(), range)
-            .map_err(|e| {
-                println!("HTTP {} validation: {e:?}", response.status.0);
-                e
-            })?;
-        meta.modified = timetable_display::freshness::source_modified(
-            response.headers(),
-            Clock::now().unwrap() as i64,
-        );
-        let started = Instant::now();
-        let mut body = Counting {
-            inner: response.body().reader(),
-            client: self,
-            bytes: 0,
-            started,
-            report: started,
-        };
-        op.read(&mut body).await?;
-        println!(
-            "body complete: {}bytes / {}ms",
-            body.bytes,
-            started.elapsed().as_millis()
-        );
-        Ok(meta)
     }
 }
+impl http_session::Observe for Client {
+    fn millis(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+    fn now(&self) -> Option<i64> {
+        Clock::now().map(|n| n as i64)
+    }
+    fn stage(&self, message: &str) {
+        println!("stage: {message}");
+    }
+    fn request(&self, url: &str, range: Option<(gtfs::http::ByteRange, Option<u64>)>) {
+        self.requests.set(self.requests.get() + 1);
+        println!(
+            "GET {url} range {range:?}; persistent TLS; heap free {}",
+            budget::available()
+        );
+    }
+    fn received(&self, n: usize) {
+        self.bytes.set(self.bytes.get() + n as u64);
+    }
+    fn progress(&self, bytes: u64, _: Option<u64>, elapsed: u64) {
+        println!("progress: {bytes}bytes / {elapsed}ms");
+    }
+    fn complete(&self, bytes: u64, elapsed: u64) {
+        println!("body complete: {bytes}bytes / {elapsed}ms");
+    }
+}
+
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let line = args.first().map_or("4", String::as_str);
@@ -269,6 +273,8 @@ fn main() {
         requests: Cell::new(0),
         fallback: Cell::new(false),
         official_only: args.iter().any(|s| s == "--official"),
+        connections: Cell::new(0),
+        started: Instant::now(),
     };
     let mut app = App::default();
     // Initialize stdout and entropy before switching to the bounded allocator.
@@ -291,8 +297,9 @@ fn main() {
     let result = run(future, duty);
     let (peak, retained) = budget::finish(34320, reserve);
     println!(
-        "result: {result:?}; requests{}; bytes{}; wall{}ms; CPU{}ms; heap peak{peak}/65536B; retained{retained}B; fallback{}",
+        "result: {result:?}; requests{}; connections{}; bytes{}; wall{}ms; CPU{}ms; heap peak{peak}/65536B; retained{retained}B; fallback{}",
         client.requests.get(),
+        client.connections.get(),
         client.bytes.get(),
         started.elapsed().as_millis(),
         (cpu_time() - cpu).as_millis(),

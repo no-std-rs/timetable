@@ -40,12 +40,12 @@ absolute RTC microsecond readings across boots would be incorrect because HAL
 recalibrates on boot. Subsecond time survives repeated short sleeps. The RTC
 oscillator can drift between SNTP synchronizations.
 
-The minimum-reserve regression account is **297,212 bytes**, including RTC,
+The minimum-reserve regression account is **298,612 bytes**, including RTC,
 the unchanged 64 KiB heap and 24 KiB minimum stack reserve. It remains below
 300,000 bytes but is not a runtime peak. Static RAM plus the complete
-51,968-byte available stack is **324,604 bytes**, below 400,000. TLS uses more
+50,568-byte available stack is **324,604 bytes**, below 400,000. TLS uses more
 than the minimum reserve; a separate compiled-stack audit checks known paths
-with headroom. See [the linked report](../benchmarks/device-eco-mirror-ram.json),
+with headroom. See [the linked report](../benchmarks/device-throughput-ram.json),
 [boot-stack audit](boot-recovery.md) and [performance notes](../PERFORMANCE.md).
 
 ## Board support and verification

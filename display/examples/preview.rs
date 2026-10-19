@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..App::default()
     };
     app.departures.reset(now);
-    for minutes in [12, 21, 28] {
+    for minutes in [12, 21, 28, 35] {
         app.departures
             .push(Departure {
                 at: now + minutes * 60,
@@ -82,8 +82,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if mode == "freshness" {
         app.screen = Screen::Freshness;
     }
+    // Optional elapsed seconds lets docs show the actual one-second countdown.
+    if let Some(seconds) = std::env::args().nth(3) {
+        let seconds: u32 = seconds.parse()?;
+        app.clock = app.clock.map(|now| now + i64::from(seconds));
+    }
     let mut frame = Frame([Rgb565::BLACK; 240 * 240]);
-    render::draw(&mut frame, &app, &c, &catalog)?;
+    let phase = std::env::args()
+        .nth(4)
+        .map(|s| s.parse())
+        .transpose()?
+        .unwrap_or(app.clock.unwrap_or(0).rem_euclid(8) as u8);
+    render::draw_animated(&mut frame, &app, &c, &catalog, phase)?;
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "/tmp/timetable-preview.ppm".into());

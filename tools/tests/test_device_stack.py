@@ -62,3 +62,30 @@ class StackAuditTest(unittest.TestCase):
         frames = self.frames() + [('timetable_display15network_session closure', 2048)]
         with self.assertRaisesRegex(ValueError, 'runtime_tls'):
             device_stack.audit(frames, 51968)
+
+    def scoped_frames(self):
+        old = self.frames()
+        frames = [(name, size) for name, size in old if not any(part in name for part in
+                  ('update_once', 'Http7request', 'download6mirror', 'transport download', 'TlsConnection', 'TaskStorage', 'Select'))]
+        return frames + [
+            ('TaskStorage 4poll', 112), ('embassy_futures select Select 4poll', 4176),
+            ('timetable_firmware download7refresh closure', 1648),
+            ('timetable_firmware download13mirror_tables closure', 6800),
+            ('TimeoutFuture 4poll', 1904), ('gtfs zip 6record closure', 13152),
+            ('http_session Connection 5fetch closure', 1920),
+            ('transport Timed 5fetch closure', 1328),
+            ('response Response 7headers', 2096), ('config Config 10clone_from', 2576),
+        ]
+
+    def test_scoped_handshake_is_separate_from_member_inflation(self):
+        result = device_stack.audit(self.scoped_frames(), 44656)
+        self.assertEqual(result['paths_bytes']['runtime_tls'], 40560)
+        self.assertEqual(result['paths_bytes']['runtime_mirror_record'], 25888)
+        self.assertEqual(result['paths_bytes']['runtime_official_inflate'], 18544)
+        with self.assertRaisesRegex(ValueError, 'runtime_tls'):
+            device_stack.audit(self.scoped_frames(), 44655)
+
+    def test_scoped_profile_counts_new_outlined_callers(self):
+        for name in ('timetable_display11update_once closure', 'embedded_tls TlsConnection 4open'):
+            with self.assertRaisesRegex(ValueError, 'runtime_tls'):
+                device_stack.audit(self.scoped_frames() + [(name, 1024)], 44656)
