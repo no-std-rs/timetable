@@ -183,4 +183,79 @@ fn real_ztm_rsa_chain_respects_heap_admission_and_rejects_invalid_certificates()
     });
     assert!(result.is_err());
     assert_eq!(misses, 0);
+    mirror_chains(&hash);
+}
+
+fn mirror_chains(hash: &Sha256) {
+    for (host, root, cross, bytes) in [
+        (
+            "mobilitydatabase.org",
+            &include_bytes!("../certs/gts-root-r4.der")[..],
+            &include_bytes!("../certs/mobility-cross.der")[..],
+            &include_bytes!("fixtures/tls/mobility-chain.bin")[..],
+        ),
+        (
+            "files.mobilitydatabase.org",
+            &include_bytes!("../certs/gts-root-r1.der")[..],
+            &include_bytes!("../certs/mobility-files-cross.der")[..],
+            &include_bytes!("fixtures/tls/mobility-files-chain.bin")[..],
+        ),
+    ] {
+        let make = || {
+            let mut verifier =
+                CertVerifier::<Aes128GcmSha256, Clock, 8192>::new(Certificate::X509(root));
+            verifier.set_hostname_verification(host).unwrap();
+            HeapCheckedVerifier::new(verifier, available).with_redundant_root(Some(cross))
+        };
+        let (result, peak, misses) = measure(VERIFY_HEAP_BYTES, || {
+            make().verify_certificate(hash, chain(bytes))
+        });
+        assert!(result.is_ok(), "{host}: {result:?}");
+        assert_eq!(misses, 0);
+        println!(
+            "{host}: {peak}/{VERIFY_HEAP_BYTES}B first-fit; modern anchor and exact cross-cert normalization"
+        );
+        let (result, _, misses) = measure(VERIFY_HEAP_BYTES, || {
+            make()
+                .with_redundant_root(None)
+                .verify_certificate(hash, chain(bytes))
+        });
+        assert!(
+            result.is_err(),
+            "fixture must reproduce linear-chain incompatibility"
+        );
+        assert_eq!(misses, 0);
+        for wrong_host in [false, true] {
+            let (result, _, misses) = measure(VERIFY_HEAP_BYTES, || {
+                let mut v = make();
+                if wrong_host {
+                    v.set_hostname_verification("wrong.example").unwrap();
+                } else {
+                    TIME.store(1700000000, Ordering::Relaxed);
+                }
+                v.verify_certificate(hash, chain(bytes))
+            });
+            TIME.store(1792368000, Ordering::Relaxed);
+            assert!(result.is_err());
+            assert_eq!(misses, 0);
+        }
+        // Tamper separately with the leaf, intermediate and redundant cross cert.
+        let mut offset = 4;
+        for _ in 0..3 {
+            let size = ((bytes[offset] as usize) << 16)
+                | ((bytes[offset + 1] as usize) << 8)
+                | bytes[offset + 2] as usize;
+            let mut altered = bytes.to_vec();
+            altered[offset + 3 + size - 1] ^= 1;
+            let (result, _, misses) = measure(VERIFY_HEAP_BYTES, || {
+                make().verify_certificate(hash, chain(&altered))
+            });
+            assert!(
+                result.is_err(),
+                "{host}: certificate signature corruption accepted"
+            );
+            assert_eq!(misses, 0);
+            offset += 3 + size + 2;
+        }
+    }
 }

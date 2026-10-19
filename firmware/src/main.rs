@@ -11,7 +11,6 @@ use embassy_futures::select::{Either, select};
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, signal::Signal};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
-use embedded_io_async::Read;
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use esp_backtrace as _;
 use esp_hal::{
@@ -32,8 +31,8 @@ use esp_hal::{
     timer::timg::TimerGroup,
 };
 use esp_radio::wifi::{
-    AuthenticationMethod, Config as WifiConfig, Interface, WifiController, WifiError,
-    sta::StationConfig,
+    AuthenticationMethod, Config as WifiConfig, Interface, PowerSaveMode, WifiController,
+    WifiError, sta::StationConfig,
 };
 use esp_storage::FlashStorage;
 use log::{info, warn};
@@ -41,8 +40,8 @@ use static_cell::{ConstStaticCell, StaticCell};
 use timetable_display::{
     App, Config, catalog::Catalog, config, feed::Builder, model::Status, render, ui,
 };
-use timetable_firmware::{battery, panel, settings, sources::Archives};
-use transport::{Error, Http, Operation};
+use timetable_firmware::{battery, panel, power, settings};
+use transport::{Error, Http};
 
 struct State {
     config: Config,
@@ -141,7 +140,7 @@ fn save(
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
-    let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz));
     let mut rtc = Rtc::new(p.LPWR);
     let wake = wakeup_cause();
     let mut wake_pin = p.GPIO0;
@@ -539,42 +538,155 @@ fn start_network(
     wifi: esp_hal::peripherals::WIFI<'static>,
     shared: &'static Shared,
 ) {
-    info!("Wi-Fi: initializing radio");
-    // Keep radio buffers small for this single streaming connection.
-    // Leave heap for RSA: DMA buffers persist for the radio's lifetime, while
-    // aggregation and queued packets compete with certificate verification.
-    let config = esp_radio::wifi::ControllerConfig::default()
-        .with_static_rx_buf_num(2)
-        .with_dynamic_rx_buf_num(2)
-        .with_dynamic_tx_buf_num(2)
-        .with_rx_queue_size(2)
-        .with_tx_queue_size(2)
-        .with_rx_ba_win(0) // Unused when RX aggregation is disabled, as in ESP-IDF.
-        .with_ampdu_rx_enable(false)
-        .with_ampdu_tx_enable(false);
-    let (controller, interfaces) = esp_radio::wifi::new(wifi, config).unwrap();
-    info!("Wi-Fi: radio initialized");
-    let mut seed = [0; 8];
-    Rng::new().read(&mut seed);
-    let (stack, runner) = embassy_net::new(
-        interfaces.station,
-        embassy_net::Config::dhcpv4(Default::default()),
-        NET.init(StackResources::new()),
-        u64::from_le_bytes(seed),
-    );
-    spawner.spawn(wifi_connection(controller, shared).unwrap());
-    spawner.spawn(network(runner).unwrap());
     spawner.spawn(
-        timetable(
-            stack,
+        network_service(
+            wifi,
             shared,
+            NET.init(StackResources::new()),
             QUERY_CONFIG.take(),
             FEED.init_with(|| Builder::new("20261017".parse().unwrap())),
             WORKSPACE.take(),
         )
         .unwrap(),
     );
-    info!("Wi-Fi: network tasks started");
+    info!("Wi-Fi: update task started; CPU 80 MHz; radio sleeps between updates");
+}
+
+#[embassy_executor::task]
+async fn network_service(
+    mut wifi: esp_hal::peripherals::WIFI<'static>,
+    shared: &'static Shared,
+    resources: &'static mut StackResources<4>,
+    query_config: &'static mut Config,
+    builder: &'static mut Builder,
+    workspace: &'static mut gtfs::zip::Workspace,
+) {
+    loop {
+        {
+            let mut state = match power::session(shared.lock(), POWER_DOWN.wait()).await {
+                Either::Second(state) => state,
+                Either::First(()) => break,
+            };
+            if state.powering_down {
+                break;
+            }
+            state.network_busy = true;
+        }
+        // Cancelling the entire session drops the runner, sockets and controller
+        // before RADIO_OFF can acknowledge shutdown. The owned WIFI token is
+        // safely reborrowed for the next session; no stolen peripheral handles.
+        let delay = match power::session(
+            network_session(
+                wifi.reborrow(),
+                resources,
+                shared,
+                query_config,
+                builder,
+                workspace,
+            ),
+            POWER_DOWN.wait(),
+        )
+        .await
+        {
+            Either::Second(delay) => delay,
+            Either::First(()) => break,
+        };
+        info!(
+            "Wi-Fi: radio off; next automatic update in {} seconds",
+            delay
+        );
+        log_heap();
+        if delay == 0 {
+            continue;
+        }
+        {
+            let mut state = shared.lock().await;
+            state.network_busy = false;
+            state.completed_delay = Some(if delay == battery::REFRESH_SECONDS as u32 {
+                delay
+            } else {
+                battery::RETRY_SECONDS as u32
+            });
+        }
+        if power::idle(
+            Timer::after_secs(u64::from(delay)),
+            REFRESH.wait(),
+            POWER_DOWN.wait(),
+        )
+        .await
+            == power::Wake::Shutdown
+        {
+            break;
+        }
+    }
+    RADIO_OFF.signal(());
+}
+
+#[inline(never)]
+fn open_network<'d>(
+    wifi: esp_hal::peripherals::WIFI<'d>,
+    resources: &'d mut StackResources<4>,
+) -> Result<(WifiController<'d>, Stack<'d>, Runner<'d, Interface<'d>>), WifiError> {
+    info!("Wi-Fi: initializing radio");
+    let config = esp_radio::wifi::ControllerConfig::default()
+        .with_static_rx_buf_num(2)
+        .with_dynamic_rx_buf_num(2)
+        .with_dynamic_tx_buf_num(2)
+        .with_rx_queue_size(2)
+        .with_tx_queue_size(2)
+        .with_rx_ba_win(0)
+        .with_ampdu_rx_enable(false)
+        .with_ampdu_tx_enable(false);
+    let (mut controller, interfaces) = esp_radio::wifi::new(wifi, config)?;
+    match controller.set_power_saving(PowerSaveMode::Minimum) {
+        Ok(()) => info!("Wi-Fi: radio initialized; modem power saving enabled"),
+        Err(error) => log_wifi_error("modem power saving unavailable", error),
+    }
+    let mut seed = [0; 8];
+    Rng::new().read(&mut seed);
+    let (stack, runner) = embassy_net::new(
+        interfaces.station,
+        embassy_net::Config::dhcpv4(Default::default()),
+        resources,
+        u64::from_le_bytes(seed),
+    );
+    Ok((controller, stack, runner))
+}
+
+async fn network_session(
+    wifi: esp_hal::peripherals::WIFI<'_>,
+    resources: &mut StackResources<4>,
+    shared: &'static Shared,
+    query_config: &mut Config,
+    builder: &mut Builder,
+    workspace: &mut gtfs::zip::Workspace,
+) -> u32 {
+    let (controller, stack, mut runner) = match open_network(wifi, resources) {
+        Ok(network) => network,
+        Err(error) => {
+            log_wifi_error("initialization failed", error);
+            shared.lock().await.app.status = Status::Offline;
+            return 30;
+        }
+    };
+    // The driver stays alive only while a query is in progress. An intentional
+    // idle shutdown does not turn a successfully cached board into Offline.
+    match select(
+        runner.run(),
+        select(
+            wifi_connection(controller, shared),
+            update_once(stack, shared, query_config, builder, workspace),
+        ),
+    )
+    .await
+    {
+        Either::First(_) => unreachable!(),
+        Either::Second(Either::First(_)) => {
+            shared.lock().await.app.status = Status::Offline;
+            30
+        }
+        Either::Second(Either::Second(delay)) => delay,
+    }
 }
 
 fn log_wifi_error(stage: &str, error: WifiError) {
@@ -587,8 +699,10 @@ fn log_wifi_error(stage: &str, error: WifiError) {
     }
 }
 
-#[embassy_executor::task]
-async fn wifi_connection(mut controller: WifiController<'static>, shared: &'static Shared) {
+async fn wifi_connection(
+    mut controller: WifiController<'_>,
+    shared: &'static Shared,
+) -> Result<(), WifiError> {
     let station = {
         let state = shared.lock().await;
         let c = &state.config;
@@ -602,241 +716,127 @@ async fn wifi_connection(mut controller: WifiController<'static>, shared: &'stat
             .with_password(c.wifi_password.as_str().into())
     };
     info!("Wi-Fi: applying station configuration");
-    if let Err(error) = controller.set_config(&WifiConfig::Station(station)) {
-        log_wifi_error("configuration failed", error);
-        panic!("Wi-Fi configuration failed");
-    }
+    controller
+        .set_config(&WifiConfig::Station(station))
+        .inspect_err(|e| log_wifi_error("configuration failed", *e))?;
     info!("Wi-Fi: station configured");
-    let mut connected_before = false;
     loop {
         info!("Wi-Fi: requesting association");
-        match select(controller.connect_async(), POWER_DOWN.wait()).await {
-            Either::Second(()) => break,
-            Either::First(Ok(_)) => {
+        match controller.connect_async().await {
+            Ok(_) => {
                 info!("Wi-Fi associated");
-                // A brief outage must not leave the timetable in its three-hour
-                // success wait. Initial association already wakes config_up.
-                if connected_before {
-                    REFRESH.signal(());
-                }
-                connected_before = true;
-                match select(controller.wait_for_disconnect_async(), POWER_DOWN.wait()).await {
-                    Either::Second(()) => break,
-                    Either::First(Ok(info)) => warn!(
+                match controller.wait_for_disconnect_async().await {
+                    Ok(info) => warn!(
                         "Wi-Fi disconnected: reason {:?}, signal {} dBm",
                         info.reason, info.rssi
                     ),
-                    Either::First(Err(error)) => log_wifi_error("disconnect", error),
+                    Err(error) => log_wifi_error("disconnect", error),
                 }
             }
-            Either::First(Err(error)) => log_wifi_error("association failed", error),
+            Err(error) => log_wifi_error("association failed", error),
         }
         shared.lock().await.app.status = Status::Offline;
-        if matches!(
-            select(Timer::after_secs(3), POWER_DOWN.wait()).await,
-            Either::Second(())
-        ) {
-            break;
-        }
+        Timer::after_secs(3).await;
     }
-    drop(controller);
-    RADIO_OFF.signal(());
-}
-#[embassy_executor::task]
-async fn network(mut runner: Runner<'static, Interface<'static>>) -> ! {
-    runner.run().await
 }
 
-impl Operation for Archives {
-    async fn read<R: Read>(&mut self, body: R) -> Result<(), Error> {
-        let mut listing = gtfs::poznan::Archives::new(body);
-        while let Some(name) = listing.next().await? {
-            self.consider(name);
-        }
-        Ok(())
-    }
+// Keep the settings clone's temporary frame off the later TLS call path.
+#[inline(never)]
+fn copy_query(state: &State, out: &mut Config) -> u32 {
+    out.clone_from(&state.config);
+    state.revision
 }
-enum Phase {
-    Calendars(u8),
-    Trips,
-    Departures,
-}
-struct Pass<'a> {
-    builder: &'a mut Builder,
-    workspace: &'a mut gtfs::zip::Workspace,
-    config: &'a Config,
-    phase: Phase,
-}
-impl Operation for Pass<'_> {
-    async fn read<R: Read>(&mut self, body: R) -> Result<(), Error> {
-        match self.phase {
-            Phase::Calendars(mask) => {
-                self.builder
-                    .calendars(body, mask, self.config, self.workspace)
-                    .await?
-            }
-            Phase::Trips => {
-                self.builder
-                    .trips(body, self.config, self.workspace)
-                    .await?
-            }
-            Phase::Departures => {
-                self.builder
-                    .departures(body, self.config, self.workspace)
-                    .await?
-            }
-        }
-        Ok(())
-    }
-}
-async fn refresh(
-    http: &Http,
+
+async fn update_once(
+    stack: Stack<'_>,
+    shared: &'static Shared,
+    query_config: &mut Config,
     builder: &mut Builder,
     workspace: &mut gtfs::zip::Workspace,
-    c: &Config,
-) -> Result<timetable_display::freshness::Freshness, Error> {
-    builder.begin(transport::now().ok_or(Error::Clock)?)?;
-    if c.groups.iter().all(|g| g.picks.is_empty()) {
-        return Ok(timetable_display::freshness::Freshness::default());
+) -> u32 {
+    {
+        let mut s = shared.lock().await;
+        if s.powering_down {
+            return 0;
+        }
+        s.network_busy = true;
     }
-    let mut listing = Archives::new(builder.dates, builder.day_mask());
-    let _ = http.get(gtfs::poznan::LIST_URL, &mut listing).await?;
-    let sources = listing.sources().ok_or(Error::MissingArchive)?;
-    let mut times = timetable_display::freshness::SourceTimes::default();
-    for (name, mask) in sources {
-        if mask == 0 {
-            continue;
-        }
-        let name = name.ok_or(Error::MissingArchive)?;
-        let mut url = [0; 192];
-        let url = name.url(&mut url)?;
-        for phase in [Phase::Calendars(mask), Phase::Trips, Phase::Departures] {
-            let modified = http
-                .get(
-                    url,
-                    &mut Pass {
-                        builder,
-                        workspace,
-                        config: c,
-                        phase,
-                    },
-                )
-                .await?;
-            // ZTM's PHP download omits Last-Modified. Its ZIP does contain UTC
-            // GTFS table timestamps; use the validated calendar-pass manifest
-            // for this same uncompressed snapshot, never the service date.
-            let modified = modified.or_else(|| {
-                builder
-                    .manifest
-                    .as_ref()
-                    .and_then(gtfs::zip::Manifest::updated_at)
-                    .filter(|stamp| transport::now().is_some_and(|now| (0..=now).contains(stamp)))
-            });
-            times.observe(modified);
-        }
-    }
-    Ok(timetable_display::freshness::Freshness {
-        checked_at: Some(transport::now().ok_or(Error::Clock)?),
-        source_updated_at: times.updated_at(),
-    })
-}
-#[embassy_executor::task]
-async fn timetable(
-    stack: Stack<'static>,
-    shared: &'static Shared,
-    query_config: &'static mut Config,
-    builder: &'static mut Builder,
-    workspace: &'static mut gtfs::zip::Workspace,
-) {
-    loop {
-        {
-            let mut s = shared.lock().await;
-            if s.powering_down {
-                return;
-            }
-            s.network_busy = true;
-        }
-        info!("Network: waiting up to 30 seconds for IPv4/DHCP");
-        if with_timeout(Duration::from_secs(30), stack.wait_config_up())
-            .await
-            .is_err()
-        {
-            warn!(
-                "Network: IPv4/DHCP timeout; Wi-Fi link up: {}",
-                stack.is_link_up()
-            );
-            log_heap();
-            let mut s = shared.lock().await;
-            s.app.status = Status::Offline;
-            s.network_busy = false;
-            s.completed_delay = Some(battery::RETRY_SECONDS as u32);
-            drop(s);
-            let _ = select(Timer::after_secs(30), REFRESH.wait()).await;
-            continue;
-        }
-        info!("Network: IPv4 configuration ready; synchronizing clock");
-        shared.lock().await.app.status = Status::Syncing;
-        if transport::synchronize(stack).await.is_err() {
-            warn!("Clock synchronization failed; retrying in 30 seconds");
-            let mut s = shared.lock().await;
-            s.app.status = Status::Offline;
-            s.network_busy = false;
-            s.completed_delay = Some(battery::RETRY_SECONDS as u32);
-            drop(s);
-            let _ = select(Timer::after_secs(30), REFRESH.wait()).await;
-            continue;
-        }
-        info!("Clock synchronized; starting timetable update");
-        let revision = {
-            let mut s = shared.lock().await;
-            s.app.status = Status::Loading;
-            query_config.clone_from(&s.config);
-            s.revision
-        };
-        let result = select(
-            refresh(&Http(stack), builder, workspace, query_config),
-            REFRESH.wait(),
-        )
-        .await;
+    info!("Network: waiting up to 30 seconds for IPv4/DHCP");
+    if with_timeout(Duration::from_secs(30), stack.wait_config_up())
+        .await
+        .is_err()
+    {
+        warn!(
+            "Network: IPv4/DHCP timeout; Wi-Fi link up: {}",
+            stack.is_link_up()
+        );
         log_heap();
-        let result = match result {
-            Either::First(r) => r,
-            Either::Second(()) => continue,
-        };
-        let successful = result.is_ok();
-        {
-            let mut s = shared.lock().await;
-            if s.revision != revision {
-                continue;
-            }
-            match result {
-                Ok(freshness) => {
-                    s.app.publish(
-                        core::mem::take(&mut builder.events),
-                        core::mem::take(&mut builder.headsigns),
-                        builder.now,
-                    );
-                    s.app.freshness = freshness;
-                }
-                Err(Error::Feed(gtfs::Error::IndexFull | gtfs::Error::IdTooLong)) => {
-                    s.app.status = Status::Capacity
-                }
-                Err(error) => {
-                    warn!("Timetable update failed: {error:?}");
-                    s.app.status = Status::Failed;
-                }
-            }
-            s.network_busy = false;
-            s.completed_delay = Some(if successful {
-                battery::REFRESH_SECONDS
-            } else {
-                battery::RETRY_SECONDS
-            } as u32);
+        let mut s = shared.lock().await;
+        s.app.status = Status::Offline;
+        drop(s);
+        return 30;
+    }
+    info!("Network: IPv4 configuration ready; synchronizing clock");
+    shared.lock().await.app.status = Status::Syncing;
+    if transport::synchronize(stack).await.is_err() {
+        warn!("Clock synchronization failed; retrying in 30 seconds");
+        let mut s = shared.lock().await;
+        s.app.status = Status::Offline;
+        drop(s);
+        return 30;
+    }
+    info!("Clock synchronized; starting timetable update");
+    let revision = {
+        let mut s = shared.lock().await;
+        s.app.status = Status::Loading;
+        copy_query(&s, query_config)
+    };
+    let result = select(
+        timetable_firmware::download::refresh(
+            &Http(stack),
+            builder,
+            workspace,
+            query_config,
+            transport::now().unwrap(),
+        ),
+        REFRESH.wait(),
+    )
+    .await;
+    log_heap();
+    let result = match result {
+        Either::First(r) => r,
+        Either::Second(()) => return 0,
+    };
+    let successful = result.is_ok();
+    {
+        let mut s = shared.lock().await;
+        if s.revision != revision {
+            return 0;
         }
-        let _ = select(
-            Timer::after_secs(if successful { 3 * 3600 } else { 60 }),
-            REFRESH.wait(),
-        )
-        .await;
+        match result {
+            Ok(mut freshness) => {
+                if freshness.checked_at.is_some() {
+                    freshness.checked_at = transport::now();
+                }
+                s.app.publish(
+                    core::mem::take(&mut builder.events),
+                    core::mem::take(&mut builder.headsigns),
+                    builder.now,
+                );
+                s.app.freshness = freshness;
+            }
+            Err(Error::Feed(gtfs::Error::IndexFull | gtfs::Error::IdTooLong)) => {
+                s.app.status = Status::Capacity
+            }
+            Err(error) => {
+                warn!("Timetable update failed: {error:?}");
+                s.app.status = Status::Failed;
+            }
+        }
+    }
+    if successful {
+        battery::REFRESH_SECONDS as u32
+    } else {
+        60
     }
 }

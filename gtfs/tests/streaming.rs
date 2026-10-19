@@ -73,14 +73,20 @@ fn source_timestamps_are_optional_and_published_only_after_archive_validation() 
         assert_eq!(verified.updated_at(), Some(expected));
         async fn scan(data: &[u8]) -> Result<zip::Manifest, Error> {
             let mut workspace = zip::Workspace::new();
-            stream::scan(
+            let manifest = stream::scan(
                 Forward(Memory::new(data, 1)),
                 &[],
                 None,
                 &mut workspace,
                 |_| Ok(()),
             )
-            .await
+            .await?;
+            let directory = zip::Directory::read(&mut Memory::new(data, 3), &mut [0; 64]).await?;
+            assert_eq!(
+                zip::Manifest::from_directory(&directory).updated_at(),
+                manifest.updated_at()
+            );
+            Ok(manifest)
         }
         let manifest = scan(data.as_slice()).await.unwrap();
         assert_eq!(manifest.updated_at(), Some(expected));
@@ -89,7 +95,7 @@ fn source_timestamps_are_optional_and_published_only_after_archive_validation() 
             .unwrap();
         // Recompression and timestamp changes do not change table identity.
         let indexed = zip::Manifest::from_directory(&directory);
-        assert_eq!(indexed.updated_at(), None);
+        assert_eq!(indexed.updated_at(), Some(expected));
         manifest.check(&indexed).unwrap();
         assert!(scan(&data[..data.len() - 1]).await.is_err());
 

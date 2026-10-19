@@ -2,7 +2,8 @@
 
 Rust firmware for **GUITION ESP32-2424S012-V1.0**, with an ESP32-C3, 4 MB flash,
 240×240 round GC9A01 LCD and CST816 touch. It runs independently over 2.4 GHz
-Wi-Fi, reading the official Poznań GTFS ZIP. No companion server is required.
+Wi-Fi, reading selected tables from the MobilityDatabase Poznań mirror, with
+the official GTFS ZIP as a fallback. No companion server is required.
 The UI and installer use warm porcelain, dark ink, restrained kintsugi gold and
 chilli red for the main action and departure urgency.
 
@@ -31,6 +32,11 @@ the walking time for each choice. Optionally schedule groups on selected days.
 touch while retaining every saved time window. Imports expose that same mode
 and offer Undo before further edits.
 Then enter Wi-Fi settings and use desktop Chrome or Edge to install over USB.
+With the screen continuously on, the CPU runs at 80 MHz and Wi-Fi is released
+after an update. Successful automatic updates run every three hours. Each
+connection synchronizes UTC through NTP before downloading, exceeding a daily
+correction while the network is available. A manual retry or selection change
+can start an earlier update.
 Optional **Battery mode** sleeps after 30 seconds idle on the board. A tap wakes
 saved departures without Wi-Fi; a timer refreshes every three hours (five-minute
 retry after failure). Editors stay awake. See [battery mode](../docs/battery.md)
@@ -66,7 +72,11 @@ The HTTP request now explicitly flushes buffered TLS writes before awaiting the
 response. Logs distinguish request write/flush, response-header parsing, status
 and unsupported response encoding. The previous unflushed request was reproduced
 against the real server; the shared fixed sender streamed a dated official ZIP
-successfully on the host. Device HTTP success still needs a physical retest.
+successfully on the host. Device HTTP success still needs a physical retest. Logs now name the source,
+calendar/trip/departure phase and range requests, and report received bytes,
+percentage when known, rate and elapsed time every five seconds while reads
+advance. A stalled read is bounded by the transport timeout. Mirror failure
+logs its reason before starting the original-source fallback.
 The 64 KiB heap is unchanged. Two RX/TX queues and disabled aggregation trade
 potential Wi-Fi throughput for certificate headroom; new hardware throughput
 and combined peak RAM remain unmeasured.
@@ -81,9 +91,10 @@ On the display:
 - **Tap the footer:** see the last successful check and source file update times.
   `Chk14:32 Src15/10` keeps the board compact; older checks show their date.
   Details include year/time in Poznań and a retry action after a failed update.
-  `Src` uses HTTP Last-Modified, falling back to the newest recognized GTFS
-  table's UTC Info-ZIP timestamp after archive validation. ZTM's PHP endpoint
-  currently needs this fallback. With multiple archives, the oldest source wins.
+  `Src` uses validated GTFS UTC Info-ZIP timestamps for mirror snapshots;
+  the mirror's HTTP modification time describes its copy, not the source data.
+  The original source uses HTTP Last-Modified with the ZIP timestamp fallback
+  needed by ZTM's PHP endpoint. With multiple archives, the oldest source wins.
   If either metadata path is unavailable or invalid, the source is unknown.
   Service dates and response Date headers never substitute for source metadata.
 - **Choose a line and stop:** swipe vertically or tap the bottom arrows for more.
@@ -119,25 +130,37 @@ change without selecting a different line or platform. Ambiguous or missing
 identities fail explicitly. Refresh the catalogue when lines/stops change.
 
 After DHCP, SNTP supplies UTC before TLS certificate validity is checked. The
-pure Rust `embedded-tls` transport verifies ZTM's hostname and pinned Certum
-root; `reqwless` parses streaming HTTP responses. Compressed HTTP representations
-and redirects are rejected. The official listing selects a dated immutable ZIP
-for each required service day: yesterday, today, and tomorrow when its GTFS
-service epoch enters the horizon. At the spring clock change this can happen
-before civil midnight. Dates sharing the same latest archive reuse one set of three
-passes for calendars, selected trips and departures. Each distinct archive
-gets its own three-pass validation. This reduces retained metadata versus
-indexing inactive services. The generic `gtfs` crate's existing two-pass and
-mirror-assisted APIs remain available.
+pure Rust `embedded-tls` transport verifies each hostname and its pinned root:
+GTS for MobilityDatabase and Certum for ZTM. `reqwless` parses streaming HTTP
+responses. Compressed HTTP representations and redirects are rejected.
 
-A first refresh downloads several ZIP streams and may take minutes on a slow
-network. Touch and drawing run separately. A successful refresh caches six hours
-of departures and refreshes after three hours; failures retry after a minute.
-Wi-Fi reassociation wakes the update task instead of waiting for that timer.
-Config changes cancel an obsolete in-flight query. Network or validation
-failure never publishes provisional results. The previous/current/next
-service-day window covers Poznań's normal after-midnight trips; feeds with service times
-extending past two civil days need a wider application policy.
+The primary source is [MobilityDatabase mdb-982](https://mobilitydatabase.org/feeds/gtfs/mdb-982).
+The app inspects the newest immutable snapshots, validates their ZIP directories,
+and reads `feed_info.txt` to select coverage for yesterday, today and tomorrow
+when needed by the six-hour horizon. At a feed handover more than one snapshot
+can be needed. For each chosen snapshot it downloads each required table once:
+calendars, routes/stops, trips and stop times. HTTP ranges skip shapes and other
+unused members; selected table data are decompressed directly into the existing
+bounded query builder. Stop times still require reading that table, not just
+individual selected rows. There is no full ZIP buffer or temporary file.
+
+If any mirror step fails, all staged data are cleared. The original ZTM listing
+then selects immutable dated ZIPs for the same service window; each distinct
+archive gets three forward passes for calendars, selected trips and departures.
+That fallback transfers complete ZIP streams. Both paths check lengths, table
+identity, CRCs and end-of-body before publishing. Configuration changes cancel
+an obsolete query; failure retains the previously validated board. The generic
+`gtfs` crate's existing APIs remain available.
+
+A successful refresh caches six hours of departures and waits three hours.
+Always-on failures retry after 30 seconds (clock) or a minute (other errors);
+battery mode uses five minutes. Between sessions the controller, sockets and
+network runner are dropped, deinitializing the radio while the screen and touch
+remain active. Active Wi-Fi uses minimum modem power saving. A single network
+service owns this lifecycle; manual refreshes and shutdown cancel its old waits.
+Every new session obtains DHCP and synchronizes NTP. The previous/current/next
+service-day window covers Poznań's normal after-midnight trips; feeds with service
+times extending past two civil days need a wider application policy.
 
 The footer marks connection, clock synchronization and timetable updates even
 while a cached board stays visible. Downloads yield to other ready executor
@@ -153,17 +176,21 @@ skipped before rasterization. Full-frame and tiled rendering are pixel-equivalen
 Each 512-entry departure cache stores four-byte entries with one shared UTC
 epoch; access reconstructs full `i64` timestamps, including after 2038.
 TLS borrows its verifier and connection instead of moving large async state.
+TCP transmit and TLS transmit buffers are 1 KiB each for the short GET requests;
+TCP receive remains 4 KiB and TLS receive remains 16,640 B for full records.
+The ZIP dictionary supplies directory scratch while no inflater is active.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **297,980 B**,
+excluded. The static-plus-minimum-stack regression account is **297,212 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 51,200 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 51,968 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
 available stack, with 4 KiB headroom. The original binary fails this check.
-`STACK.json` records the scoped audit; it is not a complete call-graph proof or
+`STACK.json` records the scoped audit, including the network selection, update,
+mirror and transport callers. Its TLS bound is 46,688 B plus 4,096 B headroom; it is not a complete call-graph proof or
 physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
 Physical screen/radio/touch behaviour still requires the board. No hardware test has been
 performed as part of this implementation. Serial logs report allocator current,
@@ -199,6 +226,12 @@ cargo fmt --all --check
 cargo test --lib --tests --locked --target x86_64-unknown-linux-gnu
 cargo clippy --locked --release --features firmware -- -D warnings
 cargo build --locked --release --features firmware
+# LIVE constrained run of the actual device query; no USB device required:
+# Hard 64 KiB first-fit heap, 34,320 B radio reserve, at most 20% host CPU duty.
+# Optional fixed query time keeps mirror/fallback outputs comparable:
+cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882
+cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --official
+# See PERFORMANCE.md: host OS buffers/stack and ESP32 instruction timing differ.
 # Optional LIVE host transport diagnostic; no USB device required:
 # Uses the same GET sender, stream adapter, TLS verifier and cooperative reader.
 # This downloads the official listing and a dated ZIP; it is not run in CI.

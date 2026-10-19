@@ -1,8 +1,12 @@
 # Battery operation
 
 Enable **Battery mode** in the USB installer. It is off by default, so existing
-installations keep their always-visible board. Battery mode uses the same
-official ZIP queries, selection limits and validated six-hour departure cache.
+installations keep their always-visible board. Both modes use the same
+selective mirror queries, official fallback, selection limits and validated
+six-hour departure cache. Always-on mode also releases Wi-Fi between three-hour
+updates and runs the CPU at 80 MHz, while keeping the backlight, screen and
+touch active. Every network session corrects UTC with NTP; an available network
+therefore permits correction every three hours, including after sleep.
 
 After 30 seconds of inactivity on the board, the app switches off the backlight,
 sends the LCD display-off and sleep-in commands, stops Wi-Fi and enters CPU
@@ -36,12 +40,12 @@ absolute RTC microsecond readings across boots would be incorrect because HAL
 recalibrates on boot. Subsecond time survives repeated short sleeps. The RTC
 oscillator can drift between SNTP synchronizations.
 
-The minimum-reserve regression account is **296,996 bytes**, including RTC,
+The minimum-reserve regression account is **297,212 bytes**, including RTC,
 the unchanged 64 KiB heap and 24 KiB minimum stack reserve. It remains below
 300,000 bytes but is not a runtime peak. Static RAM plus the complete
-52,184-byte available stack is **324,604 bytes**, below 400,000. TLS uses more
+51,968-byte available stack is **324,604 bytes**, below 400,000. TLS uses more
 than the minimum reserve; a separate compiled-stack audit checks known paths
-with headroom. See [the linked report](../benchmarks/device-boot-ram.json),
+with headroom. See [the linked report](../benchmarks/device-eco-mirror-ram.json),
 [boot-stack audit](boot-recovery.md) and [performance notes](../PERFORMANCE.md).
 
 ## Board support and verification
