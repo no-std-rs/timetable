@@ -316,6 +316,7 @@ fn main() {
             let flash = flash.as_ref().expect("--cache-only requires --cache PATH");
             let bank = timetable_firmware::cache::load(flash)
                 .await
+                .map_err(Error::from)?
                 .ok_or(Error::Feed(gtfs::Error::InvalidZip))?;
             timetable_firmware::cache::restore(
                 flash,

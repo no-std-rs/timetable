@@ -238,30 +238,26 @@ async fn validate(flash: &impl Storage, offset: u32) -> Result<Bank, Error> {
     Ok(bank)
 }
 /// Full payload validation precedes use; a torn/corrupt newer bank falls back.
-pub async fn load(flash: &impl Storage) -> Option<Bank> {
-    let mut generations = [None; 2];
+pub async fn load(flash: &impl Storage) -> Result<Option<Bank>, Error> {
+    let mut generations = [0; 2];
     for (i, g) in generations.iter_mut().enumerate() {
         let mut b = [0; 4];
-        if flash
-            .read(OFFSET + i as u32 * BANK_SIZE + 8, &mut b)
-            .is_ok()
-        {
-            *g = Some(get(&b, 0));
-        }
+        flash.read(OFFSET + i as u32 * BANK_SIZE + 8, &mut b)?;
+        *g = get(&b, 0);
     }
-    let order = if generations[1]
-        .is_some_and(|g| generations[0].is_none_or(|a| timetable_display::config::newer(g, a)))
-    {
+    let order = if timetable_display::config::newer(generations[1], generations[0]) {
         [1, 0]
     } else {
         [0, 1]
     };
     for i in order {
-        if let Ok(bank) = validate(flash, OFFSET + i * BANK_SIZE).await {
-            return Some(bank);
+        match validate(flash, OFFSET + i * BANK_SIZE).await {
+            Ok(bank) => return Ok(Some(bank)),
+            Err(error @ Error::Io(_)) => return Err(error),
+            Err(_) => {}
         }
     }
-    None
+    Ok(None)
 }
 fn key_fields(p: &Pick) -> [&str; 5] {
     [
@@ -761,6 +757,7 @@ async fn build<H: crate::download::Http, F: Storage>(
     config: &Config,
     writer: &mut Writer<'_, F>,
 ) -> Result<(), crate::download::Error> {
+    builder.begin(writer.now)?;
     key(config, |b| writer.append(b))?;
     let mut remaining = builder.day_mask();
     for &snapshot in &snapshots.0 {
@@ -807,6 +804,14 @@ async fn build<H: crate::download::Http, F: Storage>(
                 workspace,
             )
             .await?;
+        // Validate the exact active query while its ID arena is still intact.
+        // Only the read-only pass does this; it precedes every flash erase.
+        if writer.compare {
+            builder.trips_from(&mut source, config, workspace).await?;
+            builder
+                .departures_from(&mut source, config, workspace)
+                .await?;
+        }
         let manifest = source.manifest();
         let (selection, bits) = builder.cache_scratch();
         writer.start(Table::Trips)?;
@@ -827,7 +832,8 @@ async fn build<H: crate::download::Http, F: Storage>(
                 if selection.stop(row.required(C::StopId)?)
                     && bloom(bits, row.required(C::TripId)?, false)
                 {
-                    row.stop_time()?;
+                    // Bloom hits may be unrelated trips. Typed validation belongs
+                    // to the exact query join, before commit and on replay.
                     writer.row(row)?;
                 }
                 Ok(())
@@ -899,7 +905,7 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
     flash: &F,
 ) -> Result<Freshness, crate::download::Error> {
     let mut writer = {
-        let active = load(flash).await;
+        let active = load(flash).await?;
         if let Some(bank) = active
             && same_key(bank, flash, config)?
             && matches(http, snapshots, flash, bank, builder, workspace).await?

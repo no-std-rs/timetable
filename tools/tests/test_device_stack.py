@@ -153,3 +153,22 @@ class CacheStackAuditTest(StackAuditTest):
         for name in ('download7refresh closure', 'embedded_tls TlsConnection 4open'):
             with self.assertRaisesRegex(ValueError, 'runtime_tls'):
                 device_stack.audit(self.cached_frames() + [(name, 1024)], 47136)
+
+
+    def test_exact_preflight_frames_reach_record_and_header_bounds(self):
+        baseline = device_stack.audit(self.cached_frames(), 49192)['paths_bytes']
+        frames = [(n, 5024 if 'departures_from' in n else s) for n, s in self.cached_frames()]
+        grown = device_stack.audit(frames, 49192)['paths_bytes']
+        for path in ('runtime_mirror_record', 'runtime_http_headers'):
+            self.assertEqual(grown[path], baseline[path] + 96)
+        self.assertEqual(grown['runtime_tls'], baseline['runtime_tls'])
+
+
+    def test_explicit_poll_boundary_counts_the_normal_query_frame(self):
+        frames = [(n.replace('download13mirror_tables closure', 'download11poll_mirror'), s)
+                  for n, s in self.cached_frames()]
+        self.assertEqual(device_stack.audit(frames, 49192)['paths_bytes'],
+                         device_stack.audit(self.cached_frames(), 49192)['paths_bytes'])
+        grown = device_stack.audit(frames + [('download13mirror_tables closure', 1024)], 49192)['paths_bytes']
+        baseline = device_stack.audit(frames, 49192)['paths_bytes']
+        self.assertEqual(grown['runtime_mirror_record'], baseline['runtime_mirror_record'] + 1024)

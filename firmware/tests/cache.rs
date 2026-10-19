@@ -30,6 +30,7 @@ struct Memory {
     erases: Cell<usize>,
     writes: Cell<usize>,
     read_bytes: Cell<usize>,
+    read_fault: Cell<Option<u32>>,
     fault: Cell<Option<usize>>,
     operations: Cell<usize>,
     current: Cell<bool>,
@@ -44,6 +45,7 @@ impl Memory {
             erases: Cell::new(0),
             writes: Cell::new(0),
             read_bytes: Cell::new(0),
+            read_fault: Cell::new(None),
             fault: Cell::new(None),
             operations: Cell::new(0),
             current: Cell::new(true),
@@ -68,6 +70,10 @@ impl Memory {
 }
 impl Storage for Memory {
     fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), Error> {
+        if self.read_fault.get() == Some(offset) {
+            self.read_fault.set(None);
+            return Err(Error::Io(embedded_io_async::ErrorKind::Other));
+        }
         let start = (offset - cache::OFFSET) as usize;
         self.read_bytes.set(self.read_bytes.get() + out.len());
         out.copy_from_slice(
@@ -253,7 +259,7 @@ fn update(
     (builder, result)
 }
 fn restore(flash: &Memory, c: &Config, now: i64) -> Builder {
-    let bank = run(cache::load(flash)).expect("valid bank");
+    let bank = run(cache::load(flash)).unwrap().expect("valid bank");
     let mut b = Builder::new("20261017".parse().unwrap());
     let mut ws = zip::Workspace::new();
     run(cache::restore(flash, bank, &mut b, &mut ws, c, now)).unwrap();
@@ -396,7 +402,7 @@ fn late_http_error_and_obsolete_selection_never_commit() {
             .1
             .is_err()
     );
-    assert!(run(cache::load(&flash)).is_some());
+    assert!(run(cache::load(&flash)).unwrap().is_some());
     assert!(
         !restore(&flash, &c, NOW)
             .headsigns
@@ -487,7 +493,7 @@ fn all_period_filter_is_not_limited_to_1024_total_trips() {
     result.unwrap();
     let mut direct = online(&Client::new(data), &c, NOW);
     assert_eq!(events(&mut cached), events(&mut direct));
-    let bank = run(cache::load(&flash)).unwrap();
+    let bank = run(cache::load(&flash)).unwrap().unwrap();
     let mut builder = Builder::new("20261017".parse().unwrap());
     let mut ws = zip::Workspace::new();
     assert_eq!(
@@ -512,7 +518,7 @@ fn oversize_selection_falls_back_without_any_flash_write() {
     let mut direct = online(&Client::new(data), &c, NOW);
     assert_eq!(events(&mut cached), events(&mut direct));
     assert_eq!(flash.counters(), (0, 0));
-    assert!(run(cache::load(&flash)).is_none());
+    assert!(run(cache::load(&flash)).unwrap().is_none());
     update(&flash, &Client::new(data), &c, NOW + 1).1.unwrap();
     assert_eq!(flash.counters(), (0, 0));
 }
@@ -529,7 +535,7 @@ fn persisted_check_time_is_successful_completion_not_query_start() {
             .checked_at,
         Some(NOW + 10)
     );
-    let bank = run(cache::load(&flash)).unwrap();
+    let bank = run(cache::load(&flash)).unwrap().unwrap();
     let mut b = Builder::new("20261017".parse().unwrap());
     let fresh = run(cache::restore(
         &flash,
@@ -562,7 +568,7 @@ fn source_age_ignores_archives_no_longer_used_by_the_window() {
             .source_updated_at,
         None
     );
-    let bank = run(cache::load(&flash)).unwrap();
+    let bank = run(cache::load(&flash)).unwrap().unwrap();
     let mut b = Builder::new("20261017".parse().unwrap());
     let fresh = run(cache::restore(
         &flash,
@@ -625,11 +631,11 @@ fn error_or_cancel_after_writing_the_final_range_keeps_the_old_bank() {
     let saved = initial.bytes.borrow().clone();
     let flash = Memory::from(&saved);
     let mut client = Client::new(CHANGED);
-    client.fail_stop_request = Some(2);
+    client.fail_stop_request = Some(3);
     // The cache backend may safely retry through the normal streaming mirror;
     // the failed provisional bank must still remain uncommitted.
     update(&flash, &client, &c, NOW + 1).1.unwrap();
-    assert!(client.stop_requests.get() >= 3);
+    assert!(client.stop_requests.get() >= 4);
     assert!(flash.writes.get() > 0);
     assert!(!restore(&flash, &c, NOW).events.is_empty());
     assert_eq!(
@@ -638,7 +644,7 @@ fn error_or_cancel_after_writing_the_final_range_keeps_the_old_bank() {
     );
     let flash = Memory::from(&saved);
     let mut client = Client::new(CHANGED);
-    client.cancel_stop_request = Some(2);
+    client.cancel_stop_request = Some(3);
     let http = cache::Http {
         inner: &client,
         flash: &flash,
@@ -648,7 +654,7 @@ fn error_or_cancel_after_writing_the_final_range_keeps_the_old_bank() {
     let mut ws = zip::Workspace::new();
     {
         let mut future = pin!(download::refresh(&http, &mut b, &mut ws, &c, NOW + 1));
-        while client.stop_requests.get() < 2 {
+        while client.stop_requests.get() < 3 {
             assert!(
                 future
                     .as_mut()
@@ -664,4 +670,63 @@ fn error_or_cancel_after_writing_the_final_range_keeps_the_old_bank() {
             .iter()
             .any(|e| old.headsigns.get(e.headsign).unwrap().contains("Changed"))
     );
+}
+
+#[test]
+fn transient_cache_reads_never_choose_a_bank_to_erase() {
+    let base = Memory::new();
+    let c = settings();
+    update(&base, &Client::new(ORIGINAL), &c, NOW).1.unwrap();
+    let saved = base.bytes.borrow().clone();
+    for offset in [cache::OFFSET + 8, cache::OFFSET, cache::OFFSET + 4096] {
+        let flash = Memory::from(&saved);
+        flash.read_fault.set(Some(offset));
+        // A successful ordinary mirror query may still publish changed data;
+        // an unreadable cache is preserved without selecting a write target.
+        update(&flash, &Client::new(CHANGED), &c, NOW + 1)
+            .1
+            .unwrap();
+        assert_eq!(flash.counters(), (0, 0));
+        assert_eq!(*flash.bytes.borrow(), saved);
+        assert!(!restore(&flash, &c, NOW).events.is_empty());
+    }
+}
+
+#[test]
+fn active_query_overflow_is_rejected_before_any_flash_write() {
+    let c = settings();
+    let data = include_bytes!("../../display/tests/fixtures/cache-many.zip");
+    for populated in [false, true] {
+        let flash = Memory::new();
+        if populated {
+            update(&flash, &Client::new(ORIGINAL), &c, NOW).1.unwrap();
+        }
+        let saved = flash.bytes.borrow().clone();
+        let before = flash.counters();
+        for _ in 0..2 {
+            assert!(
+                update(&flash, &Client::new(data), &c, NOW + 3 * 86400)
+                    .1
+                    .is_err()
+            );
+            assert_eq!(flash.counters(), before);
+            assert_eq!(*flash.bytes.borrow(), saved);
+        }
+    }
+}
+
+#[test]
+fn bloom_false_positive_keeps_unselected_malformed_rows_out_of_typed_join() {
+    let data = include_bytes!("../../display/tests/fixtures/cache-bloom.zip");
+    let c = settings();
+    let flash = Memory::new();
+    let (mut cached, result) = update(&flash, &Client::new(data), &c, NOW);
+    result.unwrap();
+    let mut direct = online(&Client::new(data), &c, NOW);
+    assert_eq!(events(&mut cached), events(&mut direct));
+    let mut replay = restore(&flash, &c, NOW);
+    assert_eq!(events(&mut replay), events(&mut direct));
+    let before = flash.counters();
+    update(&flash, &Client::new(data), &c, NOW + 1).1.unwrap();
+    assert_eq!(flash.counters(), before);
 }

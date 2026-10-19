@@ -57,6 +57,12 @@ many['calendar_dates.txt'] += 'FUTURE,20261020,1\n'
 many['trips.txt'] += ''.join(f'R4,FUTURE,F{i:04},Future,0\n' for i in range(1500))
 many['stop_times.txt'] += ''.join(f'F{i:04},12:00:00,12:00:00,S1,{i+1},0,Future\n' for i in range(1500))
 write_archive('cache-many.zip', many)
+# U64611 is a deterministic four-bit Bloom false positive for the selected
+# T1/T2/DAILY/F0000..F1499 set. Its malformed row belongs to unselected R5.
+bloom_false_positive = {**many}
+bloom_false_positive['trips.txt'] += 'R5,ALWAYS,U64611,Unselected,0\n'
+bloom_false_positive['stop_times.txt'] += 'U64611,bad,bad,S1,bad,bad,Unselected\n'
+write_archive('cache-bloom.zip', bloom_false_positive)
 oversize = {**many, 'trips.txt': many['trips.txt'].replace(',Future,0', ',' + 'x'*1000 + ',0')}
 write_archive('cache-oversize.zip', oversize)
 write_archive('cache-stamped.zip', {**cache_files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261018,20261031\n'}, updated=1792200000)

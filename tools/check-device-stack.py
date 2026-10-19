@@ -124,7 +124,16 @@ def audit(frames, stack):
         worker = task + session + update + max(scoped, default=0)
         base = worker + frame('download6mirror', 'closure')
         transport = frame('transport', 'mirror_tables', 'closure')
-        normal = frame('download13mirror_tables', 'closure')
+        # The normal query may be outlined as its coroutine or our explicit
+        # poll boundary. Count both if both survive; neither is part of TLS.open.
+        normal_frames = []
+        for parts in [('download13mirror_tables', 'closure'), ('download11poll_mirror',)]:
+            outlined = [size for name, size in frames if all(p in name for p in parts)]
+            if outlined:
+                normal_frames.append(max(outlined))
+        if not normal_frames:
+            raise ValueError('missing audited normal mirror query frame')
+        normal = sum(normal_frames)
         coverage = frame('download', 'coverage_dates', 'closure')
         http = (frame('transport', 'Timed', '5fetch', 'closure')
                 + frame('http_session', 'Connection', '5fetch', 'closure'))
@@ -133,6 +142,7 @@ def audit(frames, stack):
                          if all(part in name for part in ('embedded_tls', 'TlsConnection', '4open'))]
         stages = max(frame('feed', 'Builder', stage) for stage in
                      ('calendars_from', 'trips_from', 'departures_from'))
+        scan_context = max(coverage, stages)
         flash_read = (frame('CacheFlash', '4read') + nor_read
                       + frame('spiflash_read'))
         flash_write = sum(frame(*parts) for parts in [
@@ -150,8 +160,8 @@ def audit(frames, stack):
             'boot_partition': main + initialize + load + frame('has_settings_partition') + frame('read_partition_table') + frame('spiflash_read'),
             'boot_cache_partition': main + frame('has_cache_partition') + frame('read_partition_table') + frame('spiflash_read'),
             'runtime_settings_copy': worker + frame('copy_query') + frame('config', 'Config', '10clone_from'),
-            'runtime_mirror_record': base + http + table_worker + coverage + frame('gtfs', 'zip', '6record', 'closure'),
-            'runtime_http_headers': base + http + table_worker + coverage + frame('response', 'Response', '7headers'),
+            'runtime_mirror_record': base + http + table_worker + scan_context + frame('gtfs', 'zip', '6record', 'closure'),
+            'runtime_http_headers': base + http + table_worker + scan_context + frame('response', 'Response', '7headers'),
             'runtime_official_inflate': worker + http + frame('gtfs', 'next_entry'),
             'runtime_tls': base + transport + request + max(outlined_open, default=0) + lower_tls,
             'runtime_cache_flash': base + http + max(cached) + stages + writer + max(flash_read, flash_write, flash_erase),

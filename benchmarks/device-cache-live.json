@@ -190,5 +190,72 @@
     "flash_programs": 337,
     "flash_programmed_bytes": 86040,
     "flash_read_bytes": 172893
-  }
+  },
+  "paired_rounds_scope": "Before review fixes; identical unchanged/replay path. Post-review exact-query preflight adds scans only to changed/first fills; all four modes confirmed again below.",
+  "post_review_confirmation": [
+    {
+      "requests": 41,
+      "tls_connections": 2,
+      "network_body_bytes": 49740526,
+      "wall_ms": 12349,
+      "cpu_ms": 2100,
+      "heap_peak_bytes": 56648,
+      "retained_bytes": 0,
+      "mode": "fill",
+      "fallback": false,
+      "events": 18,
+      "checksum": "043c5d4a37aade22",
+      "flash_erases": 22,
+      "flash_programs": 337,
+      "flash_programmed_bytes": 86040,
+      "flash_read_bytes": 172893
+    },
+    {
+      "requests": 19,
+      "tls_connections": 2,
+      "network_body_bytes": 16958205,
+      "wall_ms": 6023,
+      "cpu_ms": 593,
+      "heap_peak_bytes": 56648,
+      "retained_bytes": 0,
+      "mode": "streaming",
+      "fallback": false,
+      "events": 18,
+      "checksum": "043c5d4a37aade22"
+    },
+    {
+      "requests": 7,
+      "tls_connections": 2,
+      "network_body_bytes": 466338,
+      "wall_ms": 2352,
+      "cpu_ms": 23,
+      "heap_peak_bytes": 56648,
+      "retained_bytes": 0,
+      "mode": "unchanged",
+      "fallback": false,
+      "events": 18,
+      "checksum": "043c5d4a37aade22",
+      "flash_erases": 0,
+      "flash_programs": 0,
+      "flash_programmed_bytes": 0,
+      "flash_read_bytes": 172663
+    },
+    {
+      "requests": 0,
+      "tls_connections": 0,
+      "network_body_bytes": 0,
+      "wall_ms": 7,
+      "cpu_ms": 1,
+      "heap_peak_bytes": 34320,
+      "retained_bytes": 0,
+      "mode": "cold",
+      "fallback": false,
+      "events": 18,
+      "checksum": "043c5d4a37aade22",
+      "flash_erases": 0,
+      "flash_programs": 0,
+      "flash_programmed_bytes": 0,
+      "flash_read_bytes": 172170
+    }
+  ]
 }

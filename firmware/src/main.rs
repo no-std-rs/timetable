@@ -924,7 +924,7 @@ async fn update_once(
         revision,
     };
     if cache.enabled
-        && let Some(bank) = cache::load(&storage).await
+        && let Ok(Some(bank)) = cache::load(&storage).await
     {
         match cache::restore(
             &storage,

@@ -625,10 +625,15 @@ The unchanged check transfers **97.25% fewer body bytes**. Its remaining discove
 HTML and coverage requests are visible in the logs. Both network modes peak at
 56,648 B bounded heap including the radio reservation; replay peaks at the
 reservation alone, with no query allocation. All runs retained zero allocations.
-A separate initial fill took 10,559 ms, 37 requests and 33,452,379 body bytes,
-with 22 erases and 337 program calls (86,040 bytes). It performs comparison and
-write passes deliberately; subsequent identical checks perform neither write.
-This initial fill is one observation, not a paired median.
+The paired rounds preceded the review fixes. A post-review confirmation produced
+the same checksum in all four modes: streaming 6,023 ms, unchanged check 2,352 ms,
+replay 7 ms, and first fill 12,349 ms. The first fill made 41 requests and read
+49,740,526 body bytes, with 22 erases and 337 program calls (86,040 bytes). Its
+read-only preflight now checks the exact active query before writing, adding a
+trip/stop-times scan to the comparison and write passes. A too-large active query
+therefore retries with zero flash writes. Subsequent identical checks still
+transfer 466,338 bytes and cause zero erases/programs. These post-review timings
+are single observations, not paired medians; both sets are in the raw report.
 
 These are **host measurements**, excluding host OS socket buffers and stack.
 The file model does not emulate ESP32 flash latency; 6 ms replay excludes boot,

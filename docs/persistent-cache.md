@@ -11,9 +11,11 @@ An unchanged source is checked using snapshot directories and coverage only.
 When source fingerprints change, a read-only streaming comparison filters the
 selected tables. Unrelated routes, repacking and timestamp-only changes cause
 zero erases and zero programs. A changed selection first completes this same
-capacity/validation preflight, then streams into the inactive bank. First fill
-and changed selected content therefore need two table passes. This extra initial
-work avoids repeated flash wear from oversized or invalid data.
+capacity/validation preflight, including the exact active-trip/departure query,
+then streams into the inactive bank. First fill and changed selected content
+need comparison and write passes plus an exact active-query scan during
+preflight. This extra initial work avoids repeated flash wear from oversized
+or invalid data.
 
 Two 480 KiB banks occupy the dedicated 960 KiB `ttcache` partition at `0x300000`
 (custom partition type `0x40`, subtype zero). Each reserves a 4 KiB header sector;
@@ -34,6 +36,7 @@ writes and the previous bank retained.
 A bank becomes visible only after HTTP/ZIP completion, selected-query validation,
 header/payload CRCs and a final commit word. Cancellation, obsolete settings,
 interrupted writes and corrupt newer banks preserve the previous valid bank.
+A storage read error prevents choosing any write target, preserving unknown banks.
 Flash and settings share one serialized storage owner. Replay and validation
 yield to the Embassy executor; physical flash program/erase calls are synchronous.
 

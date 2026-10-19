@@ -14,9 +14,9 @@
     "runtime_http_headers": 24528,
     "runtime_official_inflate": 20192,
     "runtime_tls": 43056,
-    "runtime_cache_flash": 22752,
-    "runtime_cache_replay": 13776,
-    "runtime_cache_validation": 12880
+    "runtime_cache_flash": 27024,
+    "runtime_cache_replay": 18048,
+    "runtime_cache_validation": 12896
   },
   "headroom_bytes": 4096,
   "boot_limit_bytes": 24576,

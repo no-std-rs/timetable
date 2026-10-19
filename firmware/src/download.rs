@@ -115,15 +115,25 @@ pub struct MirrorQuery<'a> {
 impl SessionOperation for MirrorQuery<'_> {
     type Output = Freshness;
     async fn run(&mut self, http: &impl Http) -> Result<Freshness, Error> {
-        mirror_tables(
+        let mut query = core::pin::pin!(mirror_tables(
             http,
             self.snapshots,
             self.builder,
             self.workspace,
             self.config,
-        )
-        .await
+        ));
+        core::future::poll_fn(|cx| poll_mirror(query.as_mut(), cx)).await
     }
+}
+
+// Poll the large query only after TLS.open has returned. Unlike annotating an
+// async constructor, this creates a real call boundary around the query frame.
+#[inline(never)]
+fn poll_mirror<F: core::future::Future>(
+    query: core::pin::Pin<&mut F>,
+    cx: &mut core::task::Context<'_>,
+) -> core::task::Poll<F::Output> {
+    query.poll(cx)
 }
 
 pub struct Fill<'a>(pub &'a mut [u8]);
