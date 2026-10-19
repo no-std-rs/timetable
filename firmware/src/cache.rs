@@ -17,6 +17,7 @@ use timetable_display::{
 pub const OFFSET: u32 = 0x300000;
 pub const SIZE: u32 = 0xf0000;
 pub const BANK_SIZE: u32 = SIZE / 2;
+pub const FILTER_BYTES: usize = 16 * 1024;
 const SECTOR: u32 = 4096;
 const HEADER: usize = 528;
 const SOURCES: usize = 3;
@@ -30,6 +31,12 @@ pub trait Storage {
     fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), Error>;
     fn write(&self, offset: u32, bytes: &[u8]) -> Result<(), Error>;
     fn erase(&self, start: u32, end: u32) -> Result<(), Error>;
+    /// Temporary caller-owned filter. The device acquires this inside its
+    /// verified session, after certificate-verification allocations are freed.
+    /// Returning an error disables cache writes and uses the ordinary query.
+    fn scratch(&self) -> Result<impl AsMut<[u8]>, Error> {
+        Err::<[u8; 0], _>(Error::BufferTooSmall)
+    }
     async fn current(&self) -> bool {
         true
     }
@@ -755,8 +762,9 @@ async fn build<H: crate::download::Http, F: Storage>(
     builder: &mut Builder,
     workspace: &mut zip::Workspace,
     config: &Config,
-    writer: &mut Writer<'_, F>,
+    recording: (&mut Writer<'_, F>, &mut [u8]),
 ) -> Result<(), crate::download::Error> {
+    let (writer, bits) = recording;
     builder.begin(writer.now)?;
     key(config, |b| writer.append(b))?;
     let mut remaining = builder.day_mask();
@@ -804,22 +812,13 @@ async fn build<H: crate::download::Http, F: Storage>(
                 workspace,
             )
             .await?;
-        // Validate the exact active query while its ID arena is still intact.
-        // Only the read-only pass does this; it precedes every flash erase.
-        if writer.compare {
-            builder.trips_from(&mut source, config, workspace).await?;
-            builder
-                .departures_from(&mut source, config, workspace)
-                .await?;
-        }
-        let manifest = source.manifest();
-        let (selection, bits) = builder.cache_scratch();
+        bits.fill(0);
         writer.start(Table::Trips)?;
-        source
-            .scan(&[Table::Trips], Some(&manifest), workspace, |row| {
-                let t = row.trip()?;
-                if selection.route(t.route_id) {
-                    bloom(bits, t.id, true);
+        builder
+            .trips_from_recording(&mut source, config, workspace, |row, selection| {
+                let trip = row.trip()?;
+                if selection.route(trip.route_id) {
+                    bloom(bits, trip.id, true);
                     writer.row(row)?;
                 }
                 Ok(())
@@ -827,13 +826,13 @@ async fn build<H: crate::download::Http, F: Storage>(
             .await?;
         writer.end(Table::Trips);
         writer.start(Table::StopTimes)?;
-        source
-            .scan(&[Table::StopTimes], Some(&manifest), workspace, |row| {
-                if selection.stop(row.required(C::StopId)?)
-                    && bloom(bits, row.required(C::TripId)?, false)
+        builder
+            .departures_from_recording(&mut source, config, workspace, |row, selection| {
+                if selection.stop(row.get(C::StopId).unwrap_or(""))
+                    && bloom(bits, row.get(C::TripId).unwrap_or(""), false)
                 {
-                    // Bloom hits may be unrelated trips. Typed validation belongs
-                    // to the exact query join, before commit and on replay.
+                    // Bloom hits can be unrelated. The exact join validates
+                    // real selected rows during this same read-only pass.
                     writer.row(row)?;
                 }
                 Ok(())
@@ -917,9 +916,25 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
         }
         Writer::new(flash, active, true, builder.now)
     };
+    // This operation is scoped inside the already verified TLS session. The
+    // caller can reuse heap space freed by certificate verification here.
+    let mut scratch = flash.scratch()?;
+    let bits = scratch.as_mut();
+    if bits.len() < FILTER_BYTES {
+        return Err(Error::BufferTooSmall.into());
+    }
+    let bits = &mut bits[..FILTER_BYTES];
     {
-        http.stage("cache: comparing selected all-period tables without writing flash");
-        build(http, snapshots, builder, workspace, config, &mut writer).await?;
+        http.stage("cache: validating and comparing selected tables; one scan per table");
+        build(
+            http,
+            snapshots,
+            builder,
+            workspace,
+            config,
+            (&mut writer, bits),
+        )
+        .await?;
         if writer.unchanged()? {
             http.stage("cache: selected contents unchanged; no flash writes");
             let mut fresh = restore(
@@ -937,7 +952,15 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
     }
     http.stage("cache: selected contents changed; streaming inactive bank");
     writer = Writer::new(flash, writer.active, false, writer.now);
-    build(http, snapshots, builder, workspace, config, &mut writer).await?;
+    build(
+        http,
+        snapshots,
+        builder,
+        workspace,
+        config,
+        (&mut writer, bits),
+    )
+    .await?;
     // Verify the complete selected query before committing the new generation.
     query_sources(
         flash,

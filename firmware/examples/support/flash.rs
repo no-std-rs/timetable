@@ -54,6 +54,14 @@ impl Flash {
     }
 }
 impl Storage for Flash {
+    fn scratch(&self) -> Result<impl AsMut<[u8]>, Error> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(cache::FILTER_BYTES)
+            .map_err(|_| Error::BufferTooSmall)?;
+        bytes.resize(cache::FILTER_BYTES, 0);
+        Ok(bytes)
+    }
     fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), Error> {
         let at = Self::offset(offset, out.len())?;
         let mut f = self.file.borrow_mut();

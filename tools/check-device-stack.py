@@ -92,14 +92,20 @@ def audit(frames, stack):
     # The mirror pipeline adds outlined coroutine callers above the transport.
     # A fetch monomorphization inlines request and calls TLS.open directly;
     # the official branch retains request. They are alternatives, not nested.
-    # network_service/network_session are inlined into Select::poll in this
-    # build. Select is still a real caller above update_once, not task storage.
-    session = frame('embassy_futures', 'select', 'Select', '4poll')
-    for parts in [('__network_service_task_inner_function', 'closure'),
+    # The compiler can retain Select::poll, network_session, or both as the
+    # actual network caller above update_once. Count all surviving families.
+    session_frames = []
+    for parts in [('embassy_futures', 'select', 'Select', '4poll'),
+                  ('__network_service_task_inner_function', 'closure'),
                   ('timetable_display15network_session', 'closure')]:
         outlined = [size for name, size in frames if all(part in name for part in parts)]
         if outlined:
-            session += max(outlined)
+            session_frames.append(max(outlined))
+    if not session_frames:
+        raise ValueError('missing audited function frame: network session/select')
+    # Select can be wholly inlined into network_session. If several families
+    # survive, they remain real callers and all must be counted.
+    session = sum(session_frames)
     lower_tls = sum(frame(*parts) for parts in [
         ('process_server_verify',), ('pki', 'verify_signature'),
         ('der', 'from_der'), ('ContextSpecific', 'decode_explicit'),

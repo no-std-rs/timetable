@@ -651,3 +651,54 @@ includes cache replay, validation and synchronous flash frames: TLS 43,056 B plu
 4,096 B headroom fits. These remain compiler/linker estimates and audited paths,
 not physical stack high-water or a complete call-graph proof. No buffer, heap,
 stack reserve, active trip capacity or departure capacity was reduced.
+
+
+## Fused cache validation and recording
+
+The first cache fill previously scanned the large trip/stop-times tables three
+times: exact active-query validation, all-period comparison, then writing. The
+query now records all-period rows while building its exact active index, leaving
+**two scans per table**. Capacity, complete query validation and read-only
+comparison still finish before the first erase. An unchanged source still skips
+the large tables entirely; replay and flash wear semantics are unchanged.
+
+Three paired fresh fills against main `7de44a7`, using the same pinned compiler,
+locks, release profile, UTC/line/stop, verified TLS, 65,536 B bounded heap with
+34,320 B radio reservation, and 20% host CPU duty produced these medians:
+
+| Mode | Wall ms | CPU ms | HTTP requests | Body bytes | Flash erase/program calls |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Previous first fill | 11,867 | 1,244 | 41 | 49,740,483 | 22 / 337 |
+| Fused first fill | 10,658 | 1,048 | 37 | 33,452,421 | 22 / 337 |
+| Fused unchanged check + replay | 1,655 | 11 | 7 | 466,295 | 0 / 0 |
+| Fused replay only | 4 | 0 | 0 | 0 | 0 / 0 |
+
+First fill transfers **32.75% fewer body bytes**, with **10.19% less wall time**
+and **15.76% less CPU time** in these host rounds. All 12 observations returned
+18 departures with checksum `043c5d4a37aade22`, without fallback or retained
+allocations. Each fill programmed the same 86,040 bytes. Both first-fill variants
+and the unchanged check peaked at **56,648 B heap**, including the radio reserve;
+replay needed only that reserve. [Raw rounds](benchmarks/device-fused-cache-live.json).
+The probe commands are documented in [the device README](firmware/README.md).
+
+The 16 KiB filter is caller-owned and independent of the exact active trip
+index. The device obtains it fallibly from its existing heap **inside the
+verified TLS session**, after certificate allocations have been freed. It is
+released before any fallback handshake. The core remains allocation-free, the
+heap capacity remains 64 KiB, and allocation failure falls back without writing
+flash. Fixtures cover filter release after completion, error and cancellation,
+zero extra scans on unchanged checks, and rejection before any erase.
+
+[The linked C3 report](benchmarks/device-fused-cache-ram.json) counts **275,316 B
+static**, including the unchanged heap. With the unchanged 24 KiB minimum stack
+reserve, the regression account is **299,892 B**, below 300,000 B. Static RAM
+plus all **49,288 B available stack** is **324,604 B**, below 400,000 B.
+[The scoped audit](benchmarks/device-fused-cache-stack.json) includes the
+compiler-outlined network-session caller: TLS **43,088 B + 4,096 B headroom**
+fits the available stack. No buffer, query capacity or memory limit was reduced.
+
+These are host timings and linked/audited RAM bounds, not physical ESP32-C3
+throughput, energy or stack high-water measurements. File-backed NOR excludes
+physical flash latency; replay excludes boot, DHCP and NTP. Fewer downloaded
+bytes reduce work but do not establish a higher radio transfer rate. Association
+logs now include RSSI to help diagnose the next physical-device run.
