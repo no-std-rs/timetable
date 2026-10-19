@@ -125,11 +125,15 @@ def audit(frames, stack):
         outlined_open = [size for name, size in frames
                          if all(part in name for part in ('embedded_tls', 'TlsConnection', '4open'))]
         base = task + session + max(scoped) + max(outlined_update, default=0)
+        # Timed awaits Connection, which awaits either headers or the body
+        # operation. Both frames stay live throughout each transfer path.
+        http = (frame('transport', 'Timed', '5fetch', 'closure')
+                + frame('http_session', 'Connection', '5fetch', 'closure'))
         paths.update({
             'runtime_settings_copy': task + session + frame('copy_query') + frame('config', 'Config', '10clone_from'),
-            'runtime_mirror_record': base + frame('download13mirror_tables', 'closure') + frame('gtfs', 'zip', '6record', 'closure'),
-            'runtime_official_inflate': base + frame('http_session', 'Connection', '5fetch', 'closure') + frame('gtfs', 'next_entry'),
-            'runtime_http_headers': base + frame('download13mirror_tables', 'closure') + frame('transport', 'Timed', '5fetch', 'closure') + frame('response', 'Response', '7headers'),
+            'runtime_mirror_record': base + http + frame('download13mirror_tables', 'closure') + frame('gtfs', 'zip', '6record', 'closure'),
+            'runtime_official_inflate': base + http + frame('gtfs', 'next_entry'),
+            'runtime_http_headers': base + http + frame('download13mirror_tables', 'closure') + frame('response', 'Response', '7headers'),
             'runtime_tls': base + request + max(outlined_open, default=0) + lower_tls,
         })
     else:

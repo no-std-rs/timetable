@@ -594,6 +594,6 @@ static RAM**, including the unchanged 64 KiB heap, and **298,612 B** with the
 unchanged minimum 24 KiB stack reserve, below the 300,000-byte ratchet. Static
 RAM plus all 50,568 linker-available stack bytes is **324,604 B**, below 400,000.
 The [scoped DWARF audit](benchmarks/device-throughput-stack.json) accounts for
-the new session callers: TLS **40,560 B**, mirror record inflation **25,888 B**,
-official inflation **18,544 B**, each separately with 4,096 B headroom. This is
+the new session callers: TLS **40,560 B**, mirror record inflation **29,136 B**,
+official inflation **19,872 B**, each separately with 4,096 B headroom. This is
 not a complete call-graph proof or a physical stack high-water measurement.

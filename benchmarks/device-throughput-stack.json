@@ -9,9 +9,9 @@
     "save_validation": 21584,
     "runtime_network_setup": 6560,
     "runtime_settings_copy": 6880,
-    "runtime_mirror_record": 25888,
-    "runtime_official_inflate": 18544,
-    "runtime_http_headers": 16160,
+    "runtime_mirror_record": 29136,
+    "runtime_official_inflate": 19872,
+    "runtime_http_headers": 18080,
     "runtime_tls": 40560
   },
   "headroom_bytes": 4096,

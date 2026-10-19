@@ -80,8 +80,9 @@ class StackAuditTest(unittest.TestCase):
     def test_scoped_handshake_is_separate_from_member_inflation(self):
         result = device_stack.audit(self.scoped_frames(), 44656)
         self.assertEqual(result['paths_bytes']['runtime_tls'], 40560)
-        self.assertEqual(result['paths_bytes']['runtime_mirror_record'], 25888)
-        self.assertEqual(result['paths_bytes']['runtime_official_inflate'], 18544)
+        self.assertEqual(result['paths_bytes']['runtime_mirror_record'], 29136)
+        self.assertEqual(result['paths_bytes']['runtime_official_inflate'], 19872)
+        self.assertEqual(result['paths_bytes']['runtime_http_headers'], 18080)
         with self.assertRaisesRegex(ValueError, 'runtime_tls'):
             device_stack.audit(self.scoped_frames(), 44655)
 
@@ -89,3 +90,13 @@ class StackAuditTest(unittest.TestCase):
         for name in ('timetable_display11update_once closure', 'embedded_tls TlsConnection 4open'):
             with self.assertRaisesRegex(ValueError, 'runtime_tls'):
                 device_stack.audit(self.scoped_frames() + [(name, 1024)], 44656)
+
+    def test_each_http_wrapper_remains_live_in_all_transfer_paths(self):
+        baseline = device_stack.audit(self.scoped_frames(), 50568)['paths_bytes']
+        for wrapper in ('http_session Connection', 'transport Timed'):
+            frames = [(name, size + 1024 if wrapper in name else size)
+                      for name, size in self.scoped_frames()]
+            grown = device_stack.audit(frames, 50568)['paths_bytes']
+            for path in ('runtime_mirror_record', 'runtime_official_inflate', 'runtime_http_headers'):
+                self.assertEqual(grown[path], baseline[path] + 1024)
+            self.assertEqual(grown['runtime_tls'], baseline['runtime_tls'])
