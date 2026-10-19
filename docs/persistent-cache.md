@@ -13,9 +13,10 @@ selected tables. Unrelated routes, repacking and timestamp-only changes cause
 zero erases and zero programs. A changed selection first completes this same
 capacity/validation preflight, including the exact active-trip/departure query,
 then streams into the inactive bank. First fill and changed selected content
-need comparison and write passes plus an exact active-query scan during
-preflight. This extra initial work avoids repeated flash wear from oversized
-or invalid data.
+need two scans of each required table: comparison/preflight and writing. The
+exact active query runs alongside recording in each scan, so it needs no extra
+trip/stop-times download. The complete read-only preflight still rejects
+oversized or invalid data before erasing flash.
 
 Two 480 KiB banks occupy the dedicated 960 KiB `ttcache` partition at `0x300000`
 (custom partition type `0x40`, subtype zero). Each reserves a 4 KiB header sector;
@@ -26,10 +27,15 @@ still overlaps the cache area, the device disables flash caching and streams
 normally. It never erases that area based on firmware assumptions alone.
 
 Canonical CSV preserves calendars, exceptions, after-midnight times, headsigns
-and all-period selected-route trips. A Bloom filter borrows the existing 16 KiB
-trip-ID scratch; false positives can retain extra rows, while the exact query
-join removes them. No new large RAM buffer or allocator is added. Existing active
-trip, service, heading and departure limits still fail explicitly. If selected
+and all-period selected-route trips. A caller supplies a 16 KiB Bloom filter
+while the exact query retains its active trip index; false positives can retain
+extra rows, while the exact query join removes them. The core remains `no_std`
+and allocation-free. The device fallibly borrows this space from its existing
+64 KiB heap after TLS certificate verification has released its allocations. It
+releases the filter on completion, error or cancellation, before opening any
+fallback connection. An unavailable filter uses the normal streaming query
+without flash writes. Existing active trip, service, heading and departure limits
+still fail explicitly. If selected
 data exceed a bank, the normal streaming query remains available with no flash
 writes and the previous bank retained.
 
@@ -48,7 +54,7 @@ the current window. True power loss still needs NTP before accurate countdowns;
 flash replay does not manufacture a clock. Deep-sleep retention keeps its
 existing clock and departure fast path.
 
-See [performance evidence](../PERFORMANCE.md#persistent-selected-timetable-cache)
+See [performance evidence](../PERFORMANCE.md#fused-cache-validation-and-recording)
 and [the constrained example](../firmware/examples/probe_device.rs). Host replay
 time excludes boot, DHCP and NTP; physical cold-boot latency and flash endurance
 have not been measured on a board.

@@ -31,6 +31,9 @@ struct Memory {
     writes: Cell<usize>,
     read_bytes: Cell<usize>,
     read_fault: Cell<Option<u32>>,
+    scratch_calls: Cell<usize>,
+    scratch_fails: Cell<bool>,
+    scratch_active: Cell<usize>,
     fault: Cell<Option<usize>>,
     operations: Cell<usize>,
     current: Cell<bool>,
@@ -46,6 +49,9 @@ impl Memory {
             writes: Cell::new(0),
             read_bytes: Cell::new(0),
             read_fault: Cell::new(None),
+            scratch_calls: Cell::new(0),
+            scratch_fails: Cell::new(false),
+            scratch_active: Cell::new(0),
             fault: Cell::new(None),
             operations: Cell::new(0),
             current: Cell::new(true),
@@ -68,7 +74,37 @@ impl Memory {
         (self.erases.get(), self.writes.get())
     }
 }
+struct Scratch<'a> {
+    bytes: Vec<u8>,
+    active: &'a Cell<usize>,
+}
+impl AsMut<[u8]> for Scratch<'_> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.bytes
+    }
+}
+impl Drop for Scratch<'_> {
+    fn drop(&mut self) {
+        self.active.set(self.active.get() - 1);
+    }
+}
 impl Storage for Memory {
+    fn scratch(&self) -> Result<impl AsMut<[u8]>, Error> {
+        self.scratch_calls.set(self.scratch_calls.get() + 1);
+        if self.scratch_fails.get() {
+            return Err(Error::BufferTooSmall);
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(cache::FILTER_BYTES)
+            .map_err(|_| Error::BufferTooSmall)?;
+        bytes.resize(cache::FILTER_BYTES, 0);
+        self.scratch_active.set(self.scratch_active.get() + 1);
+        Ok(Scratch {
+            bytes,
+            active: &self.scratch_active,
+        })
+    }
     fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), Error> {
         if self.read_fault.get() == Some(offset) {
             self.read_fault.set(None);
@@ -256,6 +292,11 @@ fn update(
         c,
         now,
     ));
+    assert_eq!(
+        flash.scratch_active.get(),
+        0,
+        "scratch released on completion/error"
+    );
     (builder, result)
 }
 fn restore(flash: &Memory, c: &Config, now: i64) -> Builder {
@@ -631,11 +672,11 @@ fn error_or_cancel_after_writing_the_final_range_keeps_the_old_bank() {
     let saved = initial.bytes.borrow().clone();
     let flash = Memory::from(&saved);
     let mut client = Client::new(CHANGED);
-    client.fail_stop_request = Some(3);
+    client.fail_stop_request = Some(2);
     // The cache backend may safely retry through the normal streaming mirror;
     // the failed provisional bank must still remain uncommitted.
     update(&flash, &client, &c, NOW + 1).1.unwrap();
-    assert!(client.stop_requests.get() >= 4);
+    assert!(client.stop_requests.get() >= 3);
     assert!(flash.writes.get() > 0);
     assert!(!restore(&flash, &c, NOW).events.is_empty());
     assert_eq!(
@@ -644,7 +685,7 @@ fn error_or_cancel_after_writing_the_final_range_keeps_the_old_bank() {
     );
     let flash = Memory::from(&saved);
     let mut client = Client::new(CHANGED);
-    client.cancel_stop_request = Some(3);
+    client.cancel_stop_request = Some(2);
     let http = cache::Http {
         inner: &client,
         flash: &flash,
@@ -654,7 +695,7 @@ fn error_or_cancel_after_writing_the_final_range_keeps_the_old_bank() {
     let mut ws = zip::Workspace::new();
     {
         let mut future = pin!(download::refresh(&http, &mut b, &mut ws, &c, NOW + 1));
-        while client.stop_requests.get() < 3 {
+        while client.stop_requests.get() < 2 {
             assert!(
                 future
                     .as_mut()
@@ -664,6 +705,11 @@ fn error_or_cancel_after_writing_the_final_range_keeps_the_old_bank() {
         }
     }
     assert!(flash.writes.get() > 0);
+    assert_eq!(
+        flash.scratch_active.get(),
+        0,
+        "scratch released on cancellation"
+    );
     let old = restore(&flash, &c, NOW);
     assert!(
         !old.events
@@ -729,4 +775,41 @@ fn bloom_false_positive_keeps_unselected_malformed_rows_out_of_typed_join() {
     let before = flash.counters();
     update(&flash, &Client::new(data), &c, NOW + 1).1.unwrap();
     assert_eq!(flash.counters(), before);
+}
+
+#[test]
+fn first_fill_scans_stop_times_twice_and_unchanged_checks_need_no_scratch() {
+    let flash = Memory::new();
+    let c = settings();
+    let first = Client::new(ORIGINAL);
+    update(&flash, &first, &c, NOW).1.unwrap();
+    assert_eq!(
+        first.stop_requests.get(),
+        2,
+        "preflight+write, no extra validation scan"
+    );
+    assert_eq!(flash.scratch_calls.get(), 1);
+    let before = flash.counters();
+    flash.scratch_fails.set(true);
+    let repeated = Client::new(ORIGINAL);
+    update(&flash, &repeated, &c, NOW + 1).1.unwrap();
+    assert_eq!(repeated.stop_requests.get(), 0);
+    assert_eq!(flash.scratch_calls.get(), 1);
+    assert_eq!(flash.counters(), before);
+}
+
+#[test]
+fn scratch_allocation_failure_falls_back_without_flash_writes() {
+    let flash = Memory::new();
+    let c = settings();
+    update(&flash, &Client::new(ORIGINAL), &c, NOW).1.unwrap();
+    let saved = flash.bytes.borrow().clone();
+    let before = flash.counters();
+    flash.scratch_fails.set(true);
+    let (mut cached, result) = update(&flash, &Client::new(CHANGED), &c, NOW + 1);
+    result.unwrap();
+    let mut direct = online(&Client::new(CHANGED), &c, NOW + 1);
+    assert_eq!(events(&mut cached), events(&mut direct));
+    assert_eq!(flash.counters(), before);
+    assert_eq!(*flash.bytes.borrow(), saved);
 }

@@ -162,15 +162,6 @@ fn stop_label(name: &str) -> heapless::String<64> {
 }
 
 impl Builder {
-    /// Invalidate the active-trip index and lend its existing ID arena to a
-    /// streaming all-period cache filter. Run the normal query passes again
-    /// before publishing departures. No second scratch arena is allocated.
-    pub fn cache_scratch(&mut self) -> (Selection<'_>, &mut [u8]) {
-        self.trips.clear();
-        self.trip_ids.resize(TRIP_ID_BYTES, 0).unwrap();
-        self.trip_ids.fill(0);
-        (Selection(&self.resolved), self.trip_ids.as_mut_slice())
-    }
     pub fn new(today: Date) -> Self {
         Self {
             services: Vec::new(),
@@ -372,6 +363,19 @@ impl Builder {
         config: &Config,
         workspace: &mut zip::Workspace,
     ) -> Result<(), Error> {
+        self.trips_from_recording(source, config, workspace, |_, _| Ok(()))
+            .await
+    }
+
+    /// Observe raw rows and resolved identities while running the exact query.
+    /// Recording is provisional until the entire source and query succeed.
+    pub async fn trips_from_recording<S: Tables>(
+        &mut self,
+        source: &mut S,
+        config: &Config,
+        workspace: &mut zip::Workspace,
+        mut record: impl FnMut(gtfs::csv::Record<'_>, Selection<'_>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         let expected = self
             .manifest
             .as_ref()
@@ -388,6 +392,7 @@ impl Builder {
         source
             .scan(&[Table::Trips], Some(expected), workspace, |row| {
                 let t = row.trip()?;
+                record(row, Selection(&self.resolved))?;
                 let days = self
                     .services
                     .iter()
@@ -462,6 +467,19 @@ impl Builder {
         config: &Config,
         workspace: &mut zip::Workspace,
     ) -> Result<(), Error> {
+        self.departures_from_recording(source, config, workspace, |_, _| Ok(()))
+            .await
+    }
+
+    /// Observe raw rows and resolved identities while running the exact query.
+    /// Recording is provisional until the entire source and query succeed.
+    pub async fn departures_from_recording<S: Tables>(
+        &mut self,
+        source: &mut S,
+        config: &Config,
+        workspace: &mut zip::Workspace,
+        mut record: impl FnMut(gtfs::csv::Record<'_>, Selection<'_>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         let expected = self
             .manifest
             .as_ref()
@@ -485,6 +503,7 @@ impl Builder {
         let mut last_trip: Option<(Id<32>, Option<usize>)> = None;
         let result = source
             .scan(&[Table::StopTimes], Some(expected), workspace, |row| {
+                record(row, Selection(&self.resolved))?;
                 let id = row.required(Column::TripId)?;
                 let found = if let Some((key, found)) = &last_trip
                     && key.as_str() == id

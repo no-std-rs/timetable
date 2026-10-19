@@ -83,6 +83,14 @@ impl CacheFlash {
     }
 }
 impl cache::Storage for CacheFlash {
+    fn scratch(&self) -> Result<impl AsMut<[u8]>, gtfs::Error> {
+        let mut bytes = alloc::vec::Vec::new();
+        bytes
+            .try_reserve_exact(cache::FILTER_BYTES)
+            .map_err(|_| gtfs::Error::BufferTooSmall)?;
+        bytes.resize(cache::FILTER_BYTES, 0);
+        Ok(bytes)
+    }
     fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), gtfs::Error> {
         Self::bounds(offset, out.len())?;
         self.flash
@@ -850,7 +858,10 @@ async fn wifi_connection(
         info!("Wi-Fi: requesting association");
         match controller.connect_async().await {
             Ok(_) => {
-                info!("Wi-Fi associated");
+                match controller.rssi() {
+                    Ok(rssi) => info!("Wi-Fi associated; RSSI {} dBm", rssi),
+                    Err(_) => info!("Wi-Fi associated; RSSI unavailable"),
+                }
                 match controller.wait_for_disconnect_async().await {
                     Ok(info) => warn!(
                         "Wi-Fi disconnected: reason {:?}, signal {} dBm",

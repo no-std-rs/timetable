@@ -172,3 +172,14 @@ class CacheStackAuditTest(StackAuditTest):
         grown = device_stack.audit(frames + [('download13mirror_tables closure', 1024)], 49192)['paths_bytes']
         baseline = device_stack.audit(frames, 49192)['paths_bytes']
         self.assertEqual(grown['runtime_mirror_record'], baseline['runtime_mirror_record'] + 1024)
+
+
+    def test_select_inlined_into_network_session_keeps_the_caller_frame(self):
+        frames = [(n, s) for n, s in self.cached_frames() if 'select Select' not in n]
+        frames.append(('timetable_display15network_session closure', 2592))
+        result = device_stack.audit(frames, 49192)
+        self.assertEqual(result['paths_bytes']['runtime_tls'], 43088)
+        with self.assertRaisesRegex(ValueError, 'runtime_tls'):
+            device_stack.audit(frames, 47183)
+        with self.assertRaisesRegex(ValueError, 'missing audited function'):
+            device_stack.audit([(n, s) for n, s in frames if 'network_session' not in n], 49192)

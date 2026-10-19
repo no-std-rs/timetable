@@ -163,7 +163,11 @@ an obsolete query; failure retains the previously validated board. The generic
 The dedicated flash cache retains selected all-period GTFS tables, with no
 writes on unchanged selected data. After valid UTC is available, a cold boot
 can show its board before checking the mirror. See [persistent cache](../docs/persistent-cache.md)
-for partition migration, transactional recovery and capacity fallback.
+for partition migration, transactional recovery and capacity fallback. A first
+fill or changed selection scans each required table twice: read-only comparison
+and validation, then writing. The active query and all-period recording share
+each scan. An unchanged snapshot needs only directory/coverage checks and
+replay, with no flash writes.
 A successful refresh builds six hours of departures in RAM and waits three hours.
 Always-on failures retry after 30 seconds (clock) or a minute (other errors);
 battery mode uses five minutes. Between sessions the controller, sockets and
@@ -181,8 +185,10 @@ tasks after each 2 KiB of HTTP stream reads. This is a scheduling point rather
 than a measured physical touch-latency bound; TLS handshakes and decompression
 also contribute work. A manual retry interrupts the failed clock-sync wait too.
 
-Both application crates are `no_std` and use no allocator. Radio and RSA TLS use
-a fixed **64 KiB heap**. The panel's **7.5 KiB tile** borrows the idle 8 KiB
+Both application crates are `no_std` and use no allocator. Radio, RSA TLS and the cache filter use
+a fixed **64 KiB heap**. The 16 KiB cache filter is allocated fallibly after
+certificate verification releases its temporary allocations; failure uses the
+ordinary streaming path without flash writes. The panel's **7.5 KiB tile** borrows the idle 8 KiB
 settings scratch buffer, with no framebuffer or pixel conversion buffer.
 The tile reports its actual drawing bounds, so off-tile text and primitives are
 skipped before rasterization. Full-frame and tiled rendering are pixel-equivalent.
@@ -196,16 +202,16 @@ time and signature verification. See [the reproducible comparison](../PERFORMANC
 The ZIP dictionary supplies directory scratch while no inflater is active.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **299,996 B**,
+excluded. The static-plus-minimum-stack regression account is **299,892 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 49,184 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 49,288 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
 available stack, with 4 KiB headroom. The original binary fails this check.
 `STACK.json` records the scoped audit, including the network selection, update,
-mirror and transport callers. Its TLS bound is 43,056 B plus 4,096 B headroom; it is not a complete call-graph proof or
+mirror and transport callers. Its TLS bound is 43,088 B plus 4,096 B headroom; it is not a complete call-graph proof or
 physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
 Physical screen/radio/touch behaviour still requires the board. No hardware test has been
 performed as part of this implementation. Serial logs report allocator current,
