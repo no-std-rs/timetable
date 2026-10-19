@@ -90,6 +90,27 @@ impl download::Http for Http<'_> {
         )
         .await
     }
+    async fn mirror_cached_tables(
+        &self,
+        snapshots: &download::Snapshots,
+        builder: &mut timetable_display::feed::Builder,
+        workspace: &mut gtfs::zip::Workspace,
+        config: &timetable_display::Config,
+        flash: &impl timetable_firmware::cache::Storage,
+    ) -> Result<timetable_display::freshness::Freshness, Error> {
+        self.session(
+            "https://files.mobilitydatabase.org/",
+            &mut timetable_firmware::cache::Query {
+                snapshots,
+                builder,
+                workspace,
+                config,
+                flash,
+            },
+            true,
+        )
+        .await
+    }
     async fn fetch(
         &self,
         url: &str,

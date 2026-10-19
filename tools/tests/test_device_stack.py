@@ -100,3 +100,56 @@ class StackAuditTest(unittest.TestCase):
             for path in ('runtime_mirror_record', 'runtime_official_inflate', 'runtime_http_headers'):
                 self.assertEqual(grown[path], baseline[path] + 1024)
             self.assertEqual(grown['runtime_tls'], baseline['runtime_tls'])
+
+
+class CacheStackAuditTest(StackAuditTest):
+    def cached_frames(self):
+        frames = [(n, s) for n, s in self.frames() if not any(part in n for part in
+                  ('TaskStorage', 'Select', 'update_once', 'Http7request', 'TlsConnection', 'download6mirror', 'transport download'))]
+        return frames + [
+            ('TaskStorage 4poll', 80), ('embassy_futures select Select 4poll', 2544),
+            ('timetable_display11update_once closure', 3616),
+            ('timetable_firmware download6mirror closure', 1920),
+            ('transport mirror_tables closure', 256), ('download13mirror_tables closure', 5824),
+            ('cache5build closure', 5840), ('download coverage_dates closure', 4928),
+            ('gtfs zip 6record closure', 13152), ('TimeoutFuture 4poll', 1904),
+            ('transport Timed 5fetch closure', 1328), ('http_session Connection 5fetch closure', 1920),
+            ('response Response 7headers', 2096), ('config Config 10clone_from', 2576),
+            ('CacheFlash 4read', 32), ('esp_storage ReadNorFlash 4read', 4144), ('spiflash_read', 16),
+            ('CacheFlash 5write', 32), ('esp_storage NorFlash 5write', 4144), ('internal_write', 32), ('spiflash_write', 16),
+            ('CacheFlash 5erase', 32), ('esp_storage NorFlash 5erase', 32), ('internal_erase_sector', 16), ('spiflash_erase_sector', 16),
+            ('cache Writer 3row', 96), ('cache Writer 6append', 80), ('cache Writer 5flush', 336),
+            ('feed Builder calendars_from', 752), ('feed Builder trips_from', 304), ('feed Builder departures_from', 400),
+            ('cache7restore closure', 512), ('cache4load closure', 160), ('cache8validate closure', 352),
+            ('csv 4next closure', 80), ('csv 8raw_next closure', 64),
+            ('has_cache_partition', 3136), ('read_partition_table', 4240),
+        ]
+
+    def test_cache_profile_covers_flash_replay_and_exact_tls_headroom(self):
+        paths = device_stack.audit(self.cached_frames(), 47136)['paths_bytes']
+        self.assertEqual(paths['runtime_tls'], 43040)
+        self.assertEqual(paths['runtime_mirror_record'], 35568)
+        self.assertEqual(paths['runtime_cache_flash'], 22736)
+        self.assertEqual(paths['runtime_cache_replay'], 13760)
+        self.assertEqual(paths['runtime_cache_validation'], 12864)
+        with self.assertRaisesRegex(ValueError, 'runtime_tls'):
+            device_stack.audit(self.cached_frames(), 47135)
+
+    def test_flash_frames_cannot_grow_without_being_counted(self):
+        frames = [(n, 12000 if n in ('CacheFlash 5write', 'esp_storage NorFlash 5write', 'cache Writer 3row') else s)
+                  for n, s in self.cached_frames()]
+        with self.assertRaisesRegex(ValueError, 'runtime_cache_flash'):
+            device_stack.audit(frames, 49192)
+
+    def test_cached_read_growth_reaches_replay_and_validation(self):
+        baseline = device_stack.audit(self.cached_frames(), 49192)['paths_bytes']
+        grown = device_stack.audit([(n, s+1024 if n == 'CacheFlash 4read' else s)
+                                  for n, s in self.cached_frames()], 49192)['paths_bytes']
+        for path in ('runtime_cache_replay', 'runtime_cache_validation'):
+            self.assertEqual(grown[path], baseline[path]+1024)
+        self.assertEqual(grown['runtime_tls'], baseline['runtime_tls'])
+
+    def test_cached_profile_counts_optional_outlined_refresh_and_tls_open(self):
+        for name in ('download7refresh closure', 'embedded_tls TlsConnection 4open'):
+            with self.assertRaisesRegex(ValueError, 'runtime_tls'):
+                device_stack.audit(self.cached_frames() + [(name, 1024)], 47136)

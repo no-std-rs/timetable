@@ -33,6 +33,7 @@ gtfs = { path = "../gtfs" }
 heapless = "0.9.3"
 embedded-io-async = "0.7"
 embedded-graphics = "0.8.2"
+crc32fast = { version = "1", default-features = false }
 embedded-hal = "1"
 chacha20poly1305 = { version = "=0.10.1", default-features = false, optional = true }
 
@@ -53,7 +54,7 @@ reqwless = { version = "0.14", default-features = false, optional = true }
 log = { version = "0.4", default-features = false, optional = true }
 # The board is single core and has no atomic compare-and-swap instruction.
 portable-atomic = { version = "1", features = ["unsafe-assume-single-core"], optional = true }
-esp-storage = { version = "0.9", features = ["esp32c3"], optional = true }
+esp-storage = { version = "0.9", features = ["esp32c3", "bytewise-read"], optional = true }
 embedded-storage = { version = "0.3", optional = true }
 
 embedded-tls = { version = "0.19", default-features = false, features = ["rustpki", "p384", "rsa"], optional = true }

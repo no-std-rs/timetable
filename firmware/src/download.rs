@@ -69,6 +69,19 @@ pub trait Http {
     {
         mirror_tables(self, snapshots, builder, workspace, config).await
     }
+    async fn mirror_cached_tables(
+        &self,
+        snapshots: &Snapshots,
+        builder: &mut Builder,
+        workspace: &mut zip::Workspace,
+        config: &Config,
+        flash: &impl crate::cache::Storage,
+    ) -> Result<Freshness, Error>
+    where
+        Self: Sized,
+    {
+        crate::cache::mirror_tables(self, snapshots, builder, workspace, config, flash).await
+    }
     fn stage(&self, _message: &str) {}
     fn fallback(&self, _error: &Error) {
         self.stage("MobilityDatabase failed; using official ZTM fallback");
@@ -250,20 +263,30 @@ impl<'a, H: Http> Mirror<'a, H> {
         dates: [Date; 3],
         workspace: &mut zip::Workspace,
     ) -> Result<u8, Error> {
-        let mut mask = None;
+        let (start, end) = self.coverage_dates(workspace).await?;
+        Ok(dates.iter().enumerate().fold(0, |m, (i, d)| {
+            m | if start <= *d && *d <= end { 1 << i } else { 0 }
+        }))
+    }
+    pub fn manifest(&self) -> zip::Manifest {
+        zip::Manifest::from_directory(&self.directory)
+    }
+    pub async fn coverage_dates(
+        &mut self,
+        workspace: &mut zip::Workspace,
+    ) -> Result<(Date, Date), Error> {
+        let mut coverage = None;
         self.table(Table::FeedInfo, workspace, |row| {
             let start: Date = row.required(csv::Column::FeedStartDate)?.parse()?;
             let end: Date = row.required(csv::Column::FeedEndDate)?.parse()?;
-            if start > end || mask.is_some() {
+            if start > end || coverage.is_some() {
                 return Err(gtfs::Error::InvalidDate);
             }
-            mask = Some(dates.iter().enumerate().fold(0, |m, (i, d)| {
-                m | if start <= *d && *d <= end { 1 << i } else { 0 }
-            }));
+            coverage = Some((start, end));
             Ok(())
         })
         .await?;
-        mask.ok_or(Error::MissingArchive)
+        coverage.ok_or(Error::MissingArchive)
     }
 }
 impl<H: Http> Tables for Mirror<'_, H> {

@@ -92,6 +92,17 @@ struct Resolved {
     stop_ambiguous: bool,
 }
 
+/// Borrowed identities established by a successful metadata pass.
+pub struct Selection<'a>(&'a [Resolved]);
+impl Selection<'_> {
+    pub fn route(&self, id: &str) -> bool {
+        !id.is_empty() && self.0.iter().any(|pick| pick.route.as_str() == id)
+    }
+    pub fn stop(&self, id: &str) -> bool {
+        !id.is_empty() && self.0.iter().any(|pick| pick.stop.as_str() == id)
+    }
+}
+
 struct Service {
     id: Id<32>,
     active: u8,
@@ -151,6 +162,15 @@ fn stop_label(name: &str) -> heapless::String<64> {
 }
 
 impl Builder {
+    /// Invalidate the active-trip index and lend its existing ID arena to a
+    /// streaming all-period cache filter. Run the normal query passes again
+    /// before publishing departures. No second scratch arena is allocated.
+    pub fn cache_scratch(&mut self) -> (Selection<'_>, &mut [u8]) {
+        self.trips.clear();
+        self.trip_ids.resize(TRIP_ID_BYTES, 0).unwrap();
+        self.trip_ids.fill(0);
+        (Selection(&self.resolved), self.trip_ids.as_mut_slice())
+    }
     pub fn new(today: Date) -> Self {
         Self {
             services: Vec::new(),

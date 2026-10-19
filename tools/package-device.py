@@ -8,13 +8,14 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_OFFSET = 0x3F0000
+CACHE_OFFSET = 0x300000
 
 
 def package(directory):
     directory = Path(directory)
     binary = directory.joinpath('timetable-display.bin').read_bytes()
-    if not 0x10000 <= len(binary) < CONFIG_OFFSET or binary[0] != 0xE9:
-        raise ValueError('expected an ESP32-C3 merged factory image below the settings partition')
+    if not 0x10000 <= len(binary) < CACHE_OFFSET or binary[0] != 0xE9:
+        raise ValueError('expected an ESP32-C3 merged factory image below the timetable cache partition')
     # The first image is the C3 bootloader: DIO, 4 MB, 80 MHz, C3 chip id.
     if binary[2] != 2 or binary[3] != 0x2F or int.from_bytes(binary[12:14], 'little') != 5:
         raise ValueError('unexpected chip, flash mode, size, or frequency')
@@ -25,7 +26,9 @@ def package(directory):
             break
         name = row[12:28].split(b'\0', 1)[0].decode('ascii')
         partitions[name] = (row[2], row[3], int.from_bytes(row[4:8], 'little'), int.from_bytes(row[8:12], 'little'))
-    if partitions.get('factory') != (0, 0, 0x10000, 0x3E0000) or partitions.get('timetable') != (1, 6, CONFIG_OFFSET, 0x10000):
+    if partitions.get('ttcache') != (0x40, 0, CACHE_OFFSET, 0xF0000):
+        raise ValueError('missing dedicated timetable cache partition')
+    if partitions.get('factory') != (0, 0, 0x10000, 0x2F0000) or partitions.get('timetable') != (1, 6, CONFIG_OFFSET, 0x10000):
         raise ValueError('the settings partition does not match the browser and firmware layout')
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=normal'], cwd=ROOT, text=True))

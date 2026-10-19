@@ -116,7 +116,49 @@ def audit(frames, stack):
         'runtime_network_setup': task + session + frame('open_network'),
     }
     scoped = [size for name, size in frames if 'download7refresh' in name and 'closure' in name]
-    if scoped:
+    cached = [size for name, size in frames if 'cache5build' in name and 'closure' in name]
+    if cached:
+        # Cache profile: refresh/session are inlined into update_once and
+        # download::mirror. These are real retained callers in the pinned ELF.
+        update = frame('timetable_display11update_once', 'closure')
+        worker = task + session + update + max(scoped, default=0)
+        base = worker + frame('download6mirror', 'closure')
+        transport = frame('transport', 'mirror_tables', 'closure')
+        normal = frame('download13mirror_tables', 'closure')
+        coverage = frame('download', 'coverage_dates', 'closure')
+        http = (frame('transport', 'Timed', '5fetch', 'closure')
+                + frame('http_session', 'Connection', '5fetch', 'closure'))
+        table_worker = max(max(cached), transport + normal)
+        outlined_open = [size for name, size in frames
+                         if all(part in name for part in ('embedded_tls', 'TlsConnection', '4open'))]
+        stages = max(frame('feed', 'Builder', stage) for stage in
+                     ('calendars_from', 'trips_from', 'departures_from'))
+        flash_read = (frame('CacheFlash', '4read') + nor_read
+                      + frame('spiflash_read'))
+        flash_write = sum(frame(*parts) for parts in [
+            ('CacheFlash', '5write'), ('esp_storage', 'NorFlash', '5write'),
+            ('internal_write',), ('spiflash_write',),
+        ])
+        flash_erase = sum(frame(*parts) for parts in [
+            ('CacheFlash', '5erase'), ('esp_storage', 'NorFlash', '5erase'),
+            ('internal_erase_sector',), ('spiflash_erase_sector',),
+        ])
+        writer = sum(frame('cache', 'Writer', method) for method in ('3row', '6append', '5flush'))
+        # ZIP constructor and row callback/flash programming are alternatives:
+        # Reader::record has returned before the CSV visitor writes a row.
+        paths.update({
+            'boot_partition': main + initialize + load + frame('has_settings_partition') + frame('read_partition_table') + frame('spiflash_read'),
+            'boot_cache_partition': main + frame('has_cache_partition') + frame('read_partition_table') + frame('spiflash_read'),
+            'runtime_settings_copy': worker + frame('copy_query') + frame('config', 'Config', '10clone_from'),
+            'runtime_mirror_record': base + http + table_worker + coverage + frame('gtfs', 'zip', '6record', 'closure'),
+            'runtime_http_headers': base + http + table_worker + coverage + frame('response', 'Response', '7headers'),
+            'runtime_official_inflate': worker + http + frame('gtfs', 'next_entry'),
+            'runtime_tls': base + transport + request + max(outlined_open, default=0) + lower_tls,
+            'runtime_cache_flash': base + http + max(cached) + stages + writer + max(flash_read, flash_write, flash_erase),
+            'runtime_cache_replay': base + frame('cache7restore', 'closure') + stages + frame('csv', '4next', 'closure') + frame('csv', '8raw_next', 'closure') + flash_read,
+            'runtime_cache_validation': base + frame('cache4load', 'closure') + frame('cache8validate', 'closure') + flash_read,
+        })
+    elif scoped:
         # Pinned scoped-session ELF: update_once and session are inlined into
         # Select/refresh. TLS.open is in TimeoutFuture::poll, BEFORE the
         # SessionOperation starts reading tables. These paths are alternatives.

@@ -25,6 +25,8 @@ use timetable_firmware::{
 use tls_cipher::CipherSuite;
 #[path = "support/budget.rs"]
 mod budget;
+#[path = "support/flash.rs"]
+mod flash;
 #[path = "../src/http_request.rs"]
 mod http_request;
 #[path = "../src/http_session.rs"]
@@ -134,6 +136,27 @@ impl Http for Client {
                 operation: op,
             },
             false,
+        )
+        .await
+    }
+    async fn mirror_cached_tables(
+        &self,
+        snapshots: &download::Snapshots,
+        builder: &mut Builder,
+        workspace: &mut gtfs::zip::Workspace,
+        config: &Config,
+        flash: &impl timetable_firmware::cache::Storage,
+    ) -> Result<timetable_display::freshness::Freshness, Error> {
+        self.session(
+            "https://files.mobilitydatabase.org/",
+            &mut timetable_firmware::cache::Query {
+                snapshots,
+                builder,
+                workspace,
+                config,
+                flash,
+            },
+            true,
         )
         .await
     }
@@ -283,7 +306,44 @@ fn main() {
     println!(
         "profile: heap65536B, radio baseline34320B, host CPU duty{duty}%; line {line}, stop {stop}"
     );
-    let future = download::refresh(&client, &mut builder, &mut workspace, &config, now);
+    let flash = args
+        .iter()
+        .position(|s| s == "--cache")
+        .map(|i| flash::Flash::open(std::path::Path::new(args.get(i + 1).expect("--cache PATH"))));
+    let cold_only = args.iter().any(|s| s == "--cache-only");
+    let future = async {
+        if cold_only {
+            let flash = flash.as_ref().expect("--cache-only requires --cache PATH");
+            let bank = timetable_firmware::cache::load(flash)
+                .await
+                .ok_or(Error::Feed(gtfs::Error::InvalidZip))?;
+            timetable_firmware::cache::restore(
+                flash,
+                bank,
+                &mut builder,
+                &mut workspace,
+                &config,
+                now,
+            )
+            .await
+            .map_err(Error::from)
+        } else if let Some(flash) = &flash {
+            download::refresh(
+                &timetable_firmware::cache::Http {
+                    inner: &client,
+                    flash,
+                    enabled: true,
+                },
+                &mut builder,
+                &mut workspace,
+                &config,
+                now,
+            )
+            .await
+        } else {
+            download::refresh(&client, &mut builder, &mut workspace, &config, now).await
+        }
+    };
     println!(
         "host update future: {}B; Builder {}B; Workspace {}B; Config {}B",
         core::mem::size_of_val(&future),
@@ -305,6 +365,20 @@ fn main() {
         (cpu_time() - cpu).as_millis(),
         client.fallback.get()
     );
+    if let Some(flash) = &flash {
+        println!(
+            "flash: erases{}; programs{}; programmed{}B; read{}B; cold_only{}",
+            flash.erases.get(),
+            flash.writes.get(),
+            flash.programmed.get(),
+            flash.read.get(),
+            cold_only
+        );
+        if cold_only {
+            assert_eq!(client.requests.get(), 0);
+            assert_eq!((flash.erases.get(), flash.writes.get()), (0, 0));
+        }
+    }
     assert_eq!(retained, 0, "unexpected retained allocation");
     let freshness = result.expect("validated device update");
     app.publish(

@@ -1,0 +1,29 @@
+{
+  "target": "riscv32imc-unknown-none-elf",
+  "method": "linked DWARF CFI; conservative sums on audited paths",
+  "paths_bytes": {
+    "boot_state": 6656,
+    "boot_settings": 14512,
+    "boot_partition": 13904,
+    "boot_network": 3600,
+    "save_validation": 21584,
+    "runtime_network_setup": 4912,
+    "boot_cache_partition": 8400,
+    "runtime_settings_copy": 8848,
+    "runtime_mirror_record": 35584,
+    "runtime_http_headers": 24528,
+    "runtime_official_inflate": 20192,
+    "runtime_tls": 43056,
+    "runtime_cache_flash": 22752,
+    "runtime_cache_replay": 13776,
+    "runtime_cache_validation": 12880
+  },
+  "headroom_bytes": 4096,
+  "boot_limit_bytes": 24576,
+  "stack_available_bytes": 49184,
+  "largest_frame_bytes": 14560,
+  "single_frame_limit_bytes": 16384,
+  "complete_call_graph": false,
+  "hardware_high_water_measured": false,
+  "fits_audited_paths": true
+}
