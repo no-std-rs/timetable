@@ -197,7 +197,12 @@ impl<V: FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>> Operation for Payload
     async fn read<R: Read>(&mut self, mut body: R) -> Result<(), Error> {
         {
             let zip = zip::Reader::record(&mut body, self.workspace, self.member).await?;
-            let mut rows = csv::Reader::<_>::new(zip, self.member.table());
+            // Bound decoded CSV work too: a small compressed input can expand
+            // to many rows without another network read.
+            let mut rows = csv::Reader::<_>::new(
+                crate::cooperative::Cooperative::new(zip),
+                self.member.table(),
+            );
             while let Some(row) = rows.next().await? {
                 (self.visit)(row)?;
             }

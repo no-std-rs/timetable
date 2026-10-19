@@ -32,7 +32,15 @@ def measure(directory):
         if len(rounds) != 4:
             raise ValueError(f'missing {name} rounds')
         ciphers[name] = [{'encrypt': enc, 'decrypt': dec} for enc, dec in rounds]
-    return {'csv': [{'rows': r, 'checksum': c, 'instructions': n} for r, c, n in csv],
+    zip_rounds = [dict(fixture=fixture, decoded=mode == 'true', rows=int(rows), checksum=int(checksum),
+                       instructions=int(total), max_poll_instructions=int(longest), polls=int(polls))
+                  for fixture, mode, rows, checksum, total, longest, polls in re.findall(
+                      r'ZIP fixture=(normal|repeated) decoded=(false|true) rows=(\d+) sum=(\d+) total_inst=(\d+) max_poll_inst=(\d+) polls=(\d+)', output)]
+    expected = {'normal': (512, 6130), 'repeated': (8192, 98080)}
+    if (len(zip_rounds) != 4 or len({(r['fixture'], r['decoded']) for r in zip_rounds}) != 4
+            or any((r['rows'], r['checksum']) != expected[r['fixture']] for r in zip_rounds)):
+        raise ValueError('unexpected compressed scheduling output')
+    return {'zip_scheduling': zip_rounds, 'csv': [{'rows': r, 'checksum': c, 'instructions': n} for r, c, n in csv],
             'ciphers': ciphers, 'raw': output}
 
 
@@ -61,10 +69,12 @@ def main():
               'record_bytes': 16384, 'aad_bytes': 5}
     with tempfile.TemporaryDirectory(prefix='timetable-device-cpu-') as temp:
         root = Path(temp)
-        archive = subprocess.check_output(['git', 'archive', baseline, 'gtfs'], cwd=ROOT)
+        archive = subprocess.check_output(['git', 'archive', baseline, 'gtfs', 'firmware/src/cooperative.rs'], cwd=ROOT)
         (root / 'baseline').mkdir()
         with tarfile.open(fileobj=io.BytesIO(archive)) as source:
             source.extractall(root / 'baseline', filter='data')
+        (root / 'candidate/firmware/src').mkdir(parents=True)
+        shutil.copy2(ROOT / 'firmware/src/cooperative.rs', root / 'candidate/firmware/src/cooperative.rs')
         shutil.copytree(ROOT / 'gtfs', root / 'candidate/gtfs',
                         ignore=shutil.ignore_patterns('target', '__pycache__'))
         for name in ('baseline', 'candidate'):

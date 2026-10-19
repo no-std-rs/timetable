@@ -199,9 +199,11 @@ impl Http<'_> {
         crate::log_heap();
         log::info!("HTTP: opened persistent session for {}", host);
         let stream = crate::http_request::Stream(Cooperative::new(&mut tls));
-        operation
-            .run(&Timed(Connection::new(stream, host, &Device, persistent)))
-            .await
+        let connection = Timed(Connection::new(stream, host, &Device, persistent));
+        let mut query = core::pin::pin!(operation.run(&connection));
+        let result = crate::scheduler::application(query.as_mut()).await;
+        crate::scheduler::report();
+        result
     }
 }
 struct Timed<H>(H);
@@ -245,6 +247,7 @@ impl Observe for Device {
         log::info!("HTTP: response status {}", status);
     }
     fn progress(&self, bytes: u64, total: Option<u64>, elapsed: u64) {
+        crate::scheduler::report();
         let seconds = (elapsed / 1000).max(1);
         if let Some(total) = total.filter(|n| *n != 0) {
             log::info!(
@@ -266,6 +269,9 @@ impl Observe for Device {
     }
     fn complete(&self, bytes: u64, elapsed: u64) {
         log::info!("HTTP: body complete; {} bytes in {} ms", bytes, elapsed);
+        if elapsed >= 1000 {
+            crate::scheduler::report();
+        }
     }
 }
 

@@ -4,6 +4,7 @@ extern crate alloc;
 mod http_request;
 mod http_session;
 mod rtc;
+mod scheduler;
 mod tls_cipher;
 mod tls_memory;
 mod transport;
@@ -438,6 +439,7 @@ async fn main(spawner: Spawner) -> ! {
                 app.tick(c, utc);
             }
             for y in (0..240).step_by(panel::TILE_ROWS) {
+                let tile_started = Instant::now();
                 render::draw_animated(
                     &mut panel::Tile { y, pixels },
                     &s.app,
@@ -447,6 +449,7 @@ async fn main(spawner: Spawner) -> ! {
                 )
                 .unwrap();
                 panel.write_tile(y, pixels).unwrap();
+                scheduler::tile(tile_started);
                 embassy_futures::yield_now().await;
             }
             backlight.set_high();
@@ -805,8 +808,10 @@ async fn network_session(
     };
     // The driver stays alive only while a query is in progress. An intentional
     // idle shutdown does not turn a successfully cached board into Offline.
+    scheduler::reset();
+    let mut network = core::pin::pin!(runner.run());
     match select(
-        runner.run(),
+        scheduler::runner(network.as_mut()),
         select(
             wifi_connection(controller, shared),
             update_once(stack, shared, query_config, builder, workspace, cache),

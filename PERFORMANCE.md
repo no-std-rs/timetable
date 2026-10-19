@@ -702,3 +702,66 @@ throughput, energy or stack high-water measurements. File-backed NOR excludes
 physical flash latency; replay excludes boot, DHCP and NTP. Fewer downloaded
 bytes reduce work but do not establish a higher radio transfer rate. Association
 logs now include RSSI to help diagnose the next physical-device run.
+
+
+## Embassy scheduling and decoded-work budgets
+
+The radio runner and query are sibling futures in a cooperative `select`.
+Previously, the HTTP reader yielded only after 2,048 **compressed** bytes; a
+high-expansion ZIP member could decode and parse many rows before returning
+Pending. The configured Wi-Fi receive queue contains two packets. The pinned
+driver's full-queue path rejects incoming packets, but no physical packet loss
+has been measured here. Long query polls are a demonstrated scheduling risk,
+not proof that they explain the reported 64–69 KiB/s.
+
+The TLS-plaintext budget is now **512 bytes**, and mirror members have a second
+**512-byte decoded CSV budget**. Both wake the parent before returning Pending,
+allowing the network runner to be polled again. The original fallback also gets
+the smaller plaintext budget. No network buffer, Wi-Fi queue, CPU clock, query
+capacity, TLS verification or heap allowance changed.
+
+The same pinned compiler/profile and allocation-free QEMU RV32 probe run the
+real inflater/parser against fixed normal and high-expansion CSV fixtures.
+Compare baseline `decoded=false` with candidate `decoded=true` in
+[the raw instruction report](benchmarks/device-embassy-scheduling-rv32.json):
+
+| Fixture | Previous max poll instructions | New max poll instructions | Previous total | New total |
+| --- | ---: | ---: | ---: | ---: |
+| 512 public sample rows | 978,217 | 390,587 | 1,837,486 | 1,851,718 |
+| Same rows repeated 16 times | 11,973,272 | 491,830 | 21,420,795 | 21,715,515 |
+
+Worst uninterrupted work falls **60.1%** and **95.9%** on these inputs, while
+total instructions rise **0.77%** and **1.38%**. This is retired software work,
+not C3 cycles, wall time or a universal latency bound: individual TLS record
+decryption, inflater calls, flash operations and callbacks remain synchronous.
+[Probe reproduction and fixture provenance](checks/device-cpu/README.md).
+The actual host mirror-range regression checks repeated decoded yields even
+when every HTTP read is immediately ready, and verifies all 8,192 rows.
+
+Three paired fresh-cache host rounds against main `1fd98a2`, with a 65,536 B
+bounded heap (34,320 B reserved radio) and 20% CPU duty, retain 18 departures and
+checksum `043c5d4a37aade22`, 37 requests, 22 erases and 337 programs (86,040 B).
+Discovery HTML varied by 43 B; selected-table transfer work is unchanged.
+Median first-fill wall time is **11,308 → 10,973 ms**, while host CPU time rises
+**994 → 1,315 ms**. The host's per-poll `clock_gettime`/duty limiter also runs
+more often; this is not an isolated Embassy/decoder CPU measurement. These
+rounds establish bounded heap and output/wear consistency, not improved C3
+throughput. Unchanged checks and replay still make zero flash writes.
+[All raw observations](benchmarks/device-embassy-scheduling-live.json).
+
+The device now logs cumulative **elapsed poll work**, longest completed poll,
+and rendering/SPI tile work for each radio session. Verified HTTP/query timing
+starts after TLS certificate verification; Pending waits are excluded. Interrupt
+and RTOS preemption time and in-query logging are included, so these are not
+pure CPU utilization percentages. Counter updates occur after completed polls;
+progress lines can lag the currently executing poll. No per-packet logging or
+allocation is added. This instrumentation is needed to distinguish long polls
+from waiting for remote TCP data on the physical device.
+
+[The linked RAM report](benchmarks/device-embassy-scheduling-ram.json) includes
+the unchanged 64 KiB heap and 24 KiB minimum stack reserve: **299,972 B**, below
+the unchanged 300,000 B ratchet. The full account is **324,604 B** including all
+**49,208 B available stack**. [The scoped stack audit](benchmarks/device-embassy-scheduling-stack.json)
+counts TLS **43,168 B + 4,096 B headroom**, which fits. Poll instrumentation
+borrows pinned futures instead of copying their large async state. These are
+linked/audited bounds, not physical high-water measurements.

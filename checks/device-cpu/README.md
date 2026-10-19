@@ -6,7 +6,10 @@ ChaCha20-Poly1305 on 16,384-byte records with five bytes of TLS additional data,
 including the per-record key setup performed by embedded-tls. Every decrypted
 record is checked byte for byte. It also parses a fixed 512-row GTFS CSV sample
 through the actual `gtfs::csv::Reader`, checking row count and selected-field
-checksum. QEMU-only UART, entry stack and exit addresses never enter firmware.
+checksum. It also runs the real ZIP inflater and CSV parser with an always-ready
+compressed source, measuring total instructions and the longest future poll
+with and without a decoded-byte cooperative reader. Normal and repeated-row
+fixtures expose compression amplification independently of network waits. QEMU-only UART, entry stack and exit addresses never enter firmware.
 
 From the repository root (requires `qemu-system-riscv32`, e.g. Ubuntu's
 `qemu-system-misc` package):
@@ -17,10 +20,12 @@ python3 tools/bench-device-cpu.py --baseline c7d40e7de9fbae640351d2cd08a9ac064ad
 
 The runner builds the **same probe source, lockfile, compiler, profile and input**
 in isolated temporary baseline/candidate trees and runs deterministic QEMU
-instruction counting. The baseline comes from the requested git commit; the
-candidate uses current sources. Both cipher implementations run in both builds.
+instruction counting. The baseline GTFS and cooperative-reader sources come from the requested git
+commit; the candidate uses current sources. For production scheduling compare
+baseline `decoded=false` with candidate `decoded=true`; the other combinations
+isolate the quantum and decoded-reader effects. Both cipher implementations run in both builds.
 The script rejects differing firmware/probe crypto versions and incorrect CSV
-outputs. CI compiles/formats the probe but does not need QEMU or live feeds.
+outputs and fixture identities. CI compiles/formats the probe but does not need QEMU or live feeds.
 
 Retired instructions are reproducible software work, **not C3 cycles, physical
 throughput, power, peak memory, or hardware acceleration measurements**. In
@@ -42,3 +47,21 @@ To reproduce the fixture, decode UTF-8 preserving the BOM, read with Python
 `csv.reader(newline="")`, take the header and first 512 records, then serialize
 with `csv.writer(lineterminator="\n")` and default Excel minimal quoting.
 This normalizes CSV quoting and newlines; it is not a verbatim byte prefix.
+
+The compressed fixtures use Python's `zipfile`, raw DEFLATE level 9, one
+`stop_times.txt` member and fixed 2026-10-17 01:28 metadata. Regenerate them with
+`python3 checks/device-cpu/make_fixtures.py`. `stop_times.zip` contains the exact
+CSV above; `stop_times-repeated.zip` repeats its 512 data rows 16 times under one
+header (8,192 rows, selected-field checksum 98,080). These are synthetic
+compression stress inputs, not extra current timetable data. The host mirror
+regression reads the repeated fixture through the actual HTTP range operation.
+
+For the scheduling baseline:
+
+```sh
+python3 tools/bench-device-cpu.py --baseline 1fd98a2a88cb0aaf64c8c11ed0cf500ecb9d1e02 --output /tmp/device-scheduling.json
+```
+
+TLS record decryption and one inflater invocation remain synchronous. Smaller
+polls here do not establish physical TCP throughput or an upper bound on every
+possible GTFS/DEFLATE input. Device poll logs are needed to diagnose the board.

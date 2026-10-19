@@ -1,0 +1,199 @@
+{
+  "baseline_commit": "1fd98a2a88cb0aaf64c8c11ed0cf500ecb9d1e02",
+  "method": "QEMU virt RV32IMC retired instructions, deterministic icount; not C3 cycles/power/throughput",
+  "profile": "pinned firmware compiler, opt-level=s, fat LTO, codegen-units=1; no allocator",
+  "record_bytes": 16384,
+  "aad_bytes": 5,
+  "baseline": {
+    "zip_scheduling": [
+      {
+        "fixture": "normal",
+        "decoded": false,
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1837486,
+        "max_poll_instructions": 978217,
+        "polls": 2
+      },
+      {
+        "fixture": "normal",
+        "decoded": true,
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1820692,
+        "max_poll_instructions": 673543,
+        "polls": 16
+      },
+      {
+        "fixture": "repeated",
+        "decoded": false,
+        "rows": 8192,
+        "checksum": 98080,
+        "instructions": 21420795,
+        "max_poll_instructions": 11973272,
+        "polls": 4
+      },
+      {
+        "fixture": "repeated",
+        "decoded": true,
+        "rows": 8192,
+        "checksum": 98080,
+        "instructions": 21440369,
+        "max_poll_instructions": 639137,
+        "polls": 233
+      }
+    ],
+    "csv": [
+      {
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1123204
+      },
+      {
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1123204
+      },
+      {
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1123204
+      }
+    ],
+    "ciphers": {
+      "AES128GCM": [
+        {
+          "encrypt": 4538757,
+          "decrypt": 4538949
+        },
+        {
+          "encrypt": 4538757,
+          "decrypt": 4538949
+        },
+        {
+          "encrypt": 4538757,
+          "decrypt": 4538949
+        },
+        {
+          "encrypt": 4538757,
+          "decrypt": 4538949
+        }
+      ],
+      "CHACHA20POLY1305": [
+        {
+          "encrypt": 1204579,
+          "decrypt": 1204870
+        },
+        {
+          "encrypt": 1204579,
+          "decrypt": 1204870
+        },
+        {
+          "encrypt": 1204579,
+          "decrypt": 1204870
+        },
+        {
+          "encrypt": 1204579,
+          "decrypt": 1204870
+        }
+      ]
+    },
+    "raw": "RV32IMC AEAD 16384B,5B AAD; opt=s; instructions not ESP32 timing\nAES128GCM record0 encrypt_inst=4538757 decrypt_inst=4538949\nAES128GCM record1 encrypt_inst=4538757 decrypt_inst=4538949\nAES128GCM record2 encrypt_inst=4538757 decrypt_inst=4538949\nAES128GCM record3 encrypt_inst=4538757 decrypt_inst=4538949\nCHACHA20POLY1305 record0 encrypt_inst=1204579 decrypt_inst=1204870\nCHACHA20POLY1305 record1 encrypt_inst=1204579 decrypt_inst=1204870\nCHACHA20POLY1305 record2 encrypt_inst=1204579 decrypt_inst=1204870\nCHACHA20POLY1305 record3 encrypt_inst=1204579 decrypt_inst=1204870\nCSV current rows=512 sum=6130 retired_inst=1123204\nCSV current rows=512 sum=6130 retired_inst=1123204\nCSV current rows=512 sum=6130 retired_inst=1123204\nZIP fixture=normal decoded=false rows=512 sum=6130 total_inst=1837486 max_poll_inst=978217 polls=2\nZIP fixture=normal decoded=true rows=512 sum=6130 total_inst=1820692 max_poll_inst=673543 polls=16\nZIP fixture=repeated decoded=false rows=8192 sum=98080 total_inst=21420795 max_poll_inst=11973272 polls=4\nZIP fixture=repeated decoded=true rows=8192 sum=98080 total_inst=21440369 max_poll_inst=639137 polls=233\n"
+  },
+  "candidate": {
+    "zip_scheduling": [
+      {
+        "fixture": "normal",
+        "decoded": false,
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1864740,
+        "max_poll_instructions": 418205,
+        "polls": 8
+      },
+      {
+        "fixture": "normal",
+        "decoded": true,
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1851718,
+        "max_poll_instructions": 390587,
+        "polls": 65
+      },
+      {
+        "fixture": "repeated",
+        "decoded": false,
+        "rows": 8192,
+        "checksum": 98080,
+        "instructions": 21538634,
+        "max_poll_instructions": 3173767,
+        "polls": 15
+      },
+      {
+        "fixture": "repeated",
+        "decoded": true,
+        "rows": 8192,
+        "checksum": 98080,
+        "instructions": 21715515,
+        "max_poll_instructions": 491830,
+        "polls": 931
+      }
+    ],
+    "csv": [
+      {
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1123204
+      },
+      {
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1123204
+      },
+      {
+        "rows": 512,
+        "checksum": 6130,
+        "instructions": 1123204
+      }
+    ],
+    "ciphers": {
+      "AES128GCM": [
+        {
+          "encrypt": 4538757,
+          "decrypt": 4538949
+        },
+        {
+          "encrypt": 4538757,
+          "decrypt": 4538949
+        },
+        {
+          "encrypt": 4538757,
+          "decrypt": 4538949
+        },
+        {
+          "encrypt": 4538757,
+          "decrypt": 4538949
+        }
+      ],
+      "CHACHA20POLY1305": [
+        {
+          "encrypt": 1204579,
+          "decrypt": 1204870
+        },
+        {
+          "encrypt": 1204579,
+          "decrypt": 1204870
+        },
+        {
+          "encrypt": 1204579,
+          "decrypt": 1204870
+        },
+        {
+          "encrypt": 1204579,
+          "decrypt": 1204870
+        }
+      ]
+    },
+    "raw": "RV32IMC AEAD 16384B,5B AAD; opt=s; instructions not ESP32 timing\nAES128GCM record0 encrypt_inst=4538757 decrypt_inst=4538949\nAES128GCM record1 encrypt_inst=4538757 decrypt_inst=4538949\nAES128GCM record2 encrypt_inst=4538757 decrypt_inst=4538949\nAES128GCM record3 encrypt_inst=4538757 decrypt_inst=4538949\nCHACHA20POLY1305 record0 encrypt_inst=1204579 decrypt_inst=1204870\nCHACHA20POLY1305 record1 encrypt_inst=1204579 decrypt_inst=1204870\nCHACHA20POLY1305 record2 encrypt_inst=1204579 decrypt_inst=1204870\nCHACHA20POLY1305 record3 encrypt_inst=1204579 decrypt_inst=1204870\nCSV current rows=512 sum=6130 retired_inst=1123204\nCSV current rows=512 sum=6130 retired_inst=1123204\nCSV current rows=512 sum=6130 retired_inst=1123204\nZIP fixture=normal decoded=false rows=512 sum=6130 total_inst=1864740 max_poll_inst=418205 polls=8\nZIP fixture=normal decoded=true rows=512 sum=6130 total_inst=1851718 max_poll_inst=390587 polls=65\nZIP fixture=repeated decoded=false rows=8192 sum=98080 total_inst=21538634 max_poll_inst=3173767 polls=15\nZIP fixture=repeated decoded=true rows=8192 sum=98080 total_inst=21715515 max_poll_inst=491830 polls=931\n"
+  }
+}
