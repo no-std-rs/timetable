@@ -44,11 +44,11 @@ function forgetInstall() {
   $("install-area").hidden = true;
   for (const u of state.urls.splice(0)) URL.revokeObjectURL(u);
 }
-function changed() {
+function changed(refreshPreview = true) {
   state.undo = null;
   $("undo-area").hidden = true;
   forgetInstall();
-  preview();
+  if (refreshPreview) preview();
   persistSettings();
   if (state.release) message("Changes applied. Prepare when you’re ready.");
 }
@@ -87,7 +87,7 @@ const devicePreview = new DevicePreview($("device-canvas"), {
     $("preview-leave").textContent = !next ? t("Add a line and stop below.") : next.left === null ? t("Saved times / waiting for NTP") : next.chance === 0 ? t("Not enough walk time") : next.left > 0 ? t("Leave in {minutes} min", { minutes: Math.ceil(next.left / 60) }) : t("Leave now");
     $("preview-walk").textContent = next?.chance != null ? t("{minutes}m walk · {chance}% walk est.", { minutes: p.walk, chance: next.chance }) : "";
     $("preview-freshness").textContent = snapshot.loaded ? t("Sample timetable / source date unknown") : "";
-    $("device-canvas").setAttribute("aria-label", `${t("Interactive device demo")}: ${["Board", "Groups", "Choices", "Lines", "Stops", "Walking time", "Timetable age"][snapshot.screen]}`);
+    $("device-canvas").setAttribute("aria-label", `${t("Interactive device demo")}: ${t(["Board", "Groups", "Choices", "Lines", "Stops", "Walking time", "Timetable age"][snapshot.screen])}`);
     if (!demoSaved) copy("preview-state", "Wi-Fi and NTP simulated. Sample departures.");
     $("preview-retry").hidden = true;
     $("preview-scenario").value = String(snapshot.mode);
@@ -248,7 +248,8 @@ $("show-password").addEventListener("click", () => {
   $("show-password").setAttribute("aria-label", show ? t("Hide password") : t("Show password"));
   $("show-password").setAttribute("aria-pressed", String(show));
 });
-for (const id of ["wifi-ssid", "wifi-password", "battery-mode"]) $(id).addEventListener("input", changed);
+// These device-only preferences invalidate the USB payload, not the demo's edits.
+for (const id of ["wifi-ssid", "wifi-password", "battery-mode"]) $(id).addEventListener("input", () => changed(false));
 const picker = { group: null, stop: null, direction: -1, choice: "", choices: [], preferredStop: null, matches: [], active: -1, path: null };
 const stopLabel = (i) => state.index.groups[i].name;
 function closeStops() {

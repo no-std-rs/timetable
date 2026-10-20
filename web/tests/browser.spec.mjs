@@ -669,11 +669,17 @@ test("real WASM touch edits are provisional, apply preserves Wi-Fi, and reset re
   await deviceTap(page,180,200); // Save inside the demo.
   await expect(page.locator("#preview-apply")).toBeEnabled();
   await expect(page.locator(".pick-walk")).toHaveText("6m walk");
+  // Device-only settings must preserve the saved demo until explicitly applied.
+  await page.locator("#wifi-ssid").fill("new-private-demo-test");
+  await page.locator("#wifi-password").fill("new-private-demo-password");
+  await page.locator("#battery-mode").uncheck();
+  await expect(page.locator("#preview-apply")).toBeEnabled();
+  await expect(page.locator("#preview-walk")).toContainText("7m walk");
   await page.locator("#preview-apply").click();
   await expect(page.locator(".pick-walk")).toHaveText("7m walk");
-  await expect(page.locator("#wifi-ssid")).toHaveValue("private-demo-test");
-  await expect(page.locator("#wifi-password")).toHaveValue("private-demo-password");
-  await expect(page.locator("#battery-mode")).toBeChecked();
+  await expect(page.locator("#wifi-ssid")).toHaveValue("new-private-demo-test");
+  await expect(page.locator("#wifi-password")).toHaveValue("new-private-demo-password");
+  await expect(page.locator("#battery-mode")).not.toBeChecked();
   const mocked = await page.evaluate(() => {
     const api=window.previewProbe, length=api.preview_snapshot();
     return JSON.parse(new TextDecoder().decode(new Uint8Array(api.memory.buffer,api.preview_output(),length))).config;
@@ -701,8 +707,10 @@ test("real WASM touch edits are provisional, apply preserves Wi-Fi, and reset re
   await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "picks");
   await page.keyboard.press("1");
   await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "walk");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("aria-label", "Interactive device demo: Walking time");
   await page.locator(".masthead [data-language=pl]").click();
   await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "walk");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("aria-label", "Interaktywne demo urządzenia: Czas dojścia");
   await expect(page.locator("#preview-reset")).toHaveText("Zresetuj demo");
   await page.locator("#device-canvas").focus();
   await page.keyboard.press("+");
