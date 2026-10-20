@@ -11,9 +11,24 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import struct
+import unicodedata
 import zipfile
 import zlib
+
+
+def alphabetical_key(value):
+    """Deterministic Polish collation, independent of the build host's locale."""
+    accents = {'ą': ('a', 1), 'ć': ('c', 1), 'ę': ('e', 1), 'ł': ('l', 1),
+               'ń': ('n', 1), 'ó': ('o', 1), 'ś': ('s', 1), 'ź': ('z', 1), 'ż': ('z', 2)}
+    def weight(char):
+        base, extra = accents.get(char, (char, 0))
+        return ord(base) * 4 + extra
+    normalized = unicodedata.normalize('NFC', ' '.join(value.split()).casefold())
+    return tuple((0, int(part)) if part.isascii() and part.isdigit()
+                 else (1, tuple(map(weight, part)))
+                 for part in re.split(r'([0-9]+)', normalized) if part)
 
 
 def build(source, destination, date):
@@ -48,8 +63,9 @@ def build(source, destination, date):
                 continue
             route, bit, _ = trips[row['trip_id']]
             links[(route, row['stop_id'])] |= bit
-    route_ids = sorted(routes, key=lambda key: (routes[key].get('route_short_name', '').zfill(8), key))
-    stop_ids = sorted({s for _, s in links}, key=lambda key: (stops[key].get('stop_name', ''), stops[key].get('stop_code', ''), key))
+    # Physical order is also device browsing order: sort offline, never in RAM.
+    route_ids = sorted(routes, key=lambda key: (alphabetical_key(routes[key].get('route_short_name') or key), key))
+    stop_ids = sorted({s for _, s in links}, key=lambda key: (alphabetical_key(stops[key].get('stop_name', '')), alphabetical_key(stops[key].get('stop_code', '')), key))
     ri, si = {v: i for i, v in enumerate(route_ids)}, {v: i for i, v in enumerate(stop_ids)}
     if max(len(ri), len(si)) > 65535:
         raise ValueError('catalogue exceeds u16 index capacity')

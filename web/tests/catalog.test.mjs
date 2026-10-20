@@ -39,7 +39,7 @@ test("stop-first search finds platforms globally and restricts lines and directi
   const index = catalogIndex(catalog);
   assert.deepEqual(index.stops(-1, -1, "LAKOWA lak01"), [0]);
   assert.deepEqual(index.stops(-1, -1, "srodka"), [1]);
-  assert.deepEqual(index.routes("", 0), [0, 1]);
+  assert.deepEqual(index.routes("", 0), [1, 0]);
   assert.deepEqual(index.routes("4", 0), [1, 0]);
   assert.deepEqual(index.routes("", 1), [1]);
   assert.deepEqual(index.directions(1, 0), [0]);
@@ -47,7 +47,7 @@ test("stop-first search finds platforms globally and restricts lines and directi
   assert.deepEqual(index.directions(2, 2), []);
   const duplicate = catalogIndex({ ...catalog, links: [...catalog.links, [1, 0, 2]] });
   assert.deepEqual(duplicate.stops(1), [0, 1]);
-  assert.deepEqual(duplicate.routes("", 0), [0, 1]);
+  assert.deepEqual(duplicate.routes("", 0), [1, 0]);
   assert.deepEqual(duplicate.directions(1, 0), [0, 1]);
 });
 test("malformed catalogue links cannot become selectable choices", () => {
@@ -152,6 +152,23 @@ test("stop grouping keeps distinct accented names and unions routes across platf
   const index = catalogIndex(c);
   assert.equal(index.groupOf[0], index.groupOf[3]);
   assert.notEqual(index.groupOf[0], index.groupOf[4]);
-  assert.deepEqual(index.groupRoutes("", index.groupOf[0]), [0, 1, 2]);
+  assert.deepEqual(index.groupRoutes("", index.groupOf[0]), [1, 0, 2]);
   assert.deepEqual(index.boardingChoices(2, index.groupOf[0]).map(c => c.stop), [3]);
+});
+
+test("shuffled catalogues browse in Polish alphabetical and natural line order without changing IDs", () => {
+  const names = ["Żurawia", "Zwycięstwa", "Śródka", "Słowiańska", "Łąkowa", "Lubelska", "AWF", "Admiralska", "Źródlana", "Ćwikłowo", "Czarna", "Lasek"];
+  const c = {
+    routes: ["T10", "100", "10", "T2", "2"].map((line, i) => ({id:`R${i}`,line,headsigns:["East","West"]})),
+    stops: names.map((name, i) => ({id:`S${i}`,name,code:`P${i}`})),
+    links: names.map((_,i)=>[0,i,3]).concat([1,2,3,4].map(route=>[route,0,1])),
+  };
+  const before = structuredClone(c), index = catalogIndex(c);
+  const ordered = ["Admiralska", "AWF", "Czarna", "Ćwikłowo", "Lasek", "Lubelska", "Łąkowa", "Słowiańska", "Śródka", "Zwycięstwa", "Źródlana", "Żurawia"];
+  assert.deepEqual(index.stops(-1).map(i=>c.stops[i].name),ordered);
+  assert.deepEqual(index.stops(0,1).map(i=>c.stops[i].name),ordered);
+  assert.deepEqual(index.stopGroups().map(i=>index.groups[i].name),ordered);
+  assert.deepEqual(index.routes().map(i=>c.routes[i].line),["2","10","100","T2","T10"]);
+  assert.deepEqual(index.groupRoutes("",index.groupOf[0]).map(i=>c.routes[i].line),["2","10","100","T2","T10"]);
+  assert.deepEqual(c,before); // Stable catalogue identities still link routes, platforms and paths.
 });

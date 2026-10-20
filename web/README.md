@@ -21,6 +21,9 @@ destination to resolve the exact boarding platform; the hint shows its code,
 next stop and actual destinations. Multiple platforms in one direction remain
 separate choices. Polish accents are optional for search, while distinct accented
 names remain distinct groups. You can also start with a line number or destination.
+Stop lists and destination choices use Polish alphabetical order in either page
+language; line labels sort naturally (2, 10, 100, T2, T10). Filtering preserves
+that order. Route diagrams and their stop lists retain actual travel order.
 Arrow keys browse; Enter commits the highlighted stop; Escape closes the list.
 Results include actual destinations and the next stop, so same-name platforms
 can be distinguished by their route rather than a guessed odd/even platform

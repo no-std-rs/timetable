@@ -3,7 +3,7 @@ import { loadDraft, saveDraft, forgetDraft, REMEMBER_KEY } from "./settings-stor
 import { SerialLogs } from "./serial-logs.js";
 import { t, language, initLanguage, polish } from "./i18n.js";
 import { encodeSettingsPartition, manifestWithSettings, validateConfig } from "./config.js";
-import { catalogIndex } from "./catalog-search.js";
+import { catalogIndex, compareLabels } from "./catalog-search.js";
 import { pathGraph } from "./route-topology.js";
 initLanguage(document);
 const $ = (id) => document.getElementById(id);
@@ -276,6 +276,9 @@ function fillDirections() {
   // Preserve a saved broad query at its exact platform when editing old settings.
   if (picker.stop !== null && picker.direction < 0 && picker.choices.some(c => c.stop === picker.stop)
       && !picker.choices.some(c => c.key === picker.choice)) picker.choices.push({ stop: picker.stop, direction: -1, all: true, key: picker.choice });
+  picker.choices.sort((a, b) => compareLabels(choiceName(route, a), choiceName(route, b))
+    || compareLabels(state.catalog.stops[a.stop].code || state.catalog.stops[a.stop].id, state.catalog.stops[b.stop].code || state.catalog.stops[b.stop].id)
+    || a.stop - b.stop || a.direction - b.direction);
   const placeholder = route < 0 ? t("Choose a line first") : picker.group === null ? t("Choose a stop first") : t("Choose a destination and platform");
   $("direction-select").replaceChildren(new Option(placeholder, ""));
   for (const choice of picker.choices) {
