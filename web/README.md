@@ -85,6 +85,10 @@ npx playwright install chromium
 npm run test:browser
 ```
 
+The six-departure preview uses illustrative times. The installation note explains
+that saved device times appear before Wi-Fi, with countdowns and walking advice
+waiting for clock synchronization. Both messages are available in PL and EN.
+
 The dev server uses <http://127.0.0.1:4197/>. Tests cover desktop and mobile group
 editing, exact USB settings payloads, absence of credentials from network
 requests, invalidation after edits and refusal of corrupt firmware. They mock

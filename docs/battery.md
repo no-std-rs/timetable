@@ -17,7 +17,9 @@ release so it cannot accidentally change a group or selection.
 
 A fresh cached wake does not initialize the radio. The display restores saved
 departures, destination labels, selected group and the two-hour manual override.
-It filters departed events using the restored clock. A timer wakes the device
+It filters departed events using the restored clock. If the saved board has no
+known clock after an NTP failure, a tap wake preserves its labelled absolute
+times and remaining retry deadline; countdowns stay disabled. A timer wakes the device
 for a Wi-Fi refresh after three hours. Timer refreshes keep the backlight off
 unless touched. Retry and line/stop changes can start Wi-Fi on a cached wake;
 the refresh deadline is also honored if an editor remains open. Failed refreshes
@@ -40,12 +42,12 @@ absolute RTC microsecond readings across boots would be incorrect because HAL
 recalibrates on boot. Subsecond time survives repeated short sleeps. The RTC
 oscillator can drift between SNTP synchronizations.
 
-The minimum-reserve regression account is **299,972 bytes**, including RTC,
+The minimum-reserve regression account is **299,988 bytes**, including RTC,
 the unchanged 64 KiB heap and 24 KiB minimum stack reserve. It remains below
 300,000 bytes but is not a runtime peak. Static RAM plus the complete
-49,208-byte available stack is **324,604 bytes**, below 400,000. TLS uses more
+49,192-byte available stack is **324,604 bytes**, below 400,000. TLS uses more
 than the minimum reserve; a separate compiled-stack audit checks known paths
-with headroom. See [the linked report](../benchmarks/device-embassy-scheduling-ram.json),
+with headroom. See [the linked report](../benchmarks/device-compact-startup-ram.json),
 [boot-stack audit](boot-recovery.md) and [performance notes](../PERFORMANCE.md).
 
 ## Board support and verification

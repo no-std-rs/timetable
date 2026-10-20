@@ -145,7 +145,8 @@ class CacheStackAuditTest(StackAuditTest):
         baseline = device_stack.audit(self.cached_frames(), 49192)['paths_bytes']
         grown = device_stack.audit([(n, s+1024 if n == 'CacheFlash 4read' else s)
                                   for n, s in self.cached_frames()], 49192)['paths_bytes']
-        for path in ('runtime_cache_replay', 'runtime_cache_validation'):
+        for path in ('runtime_cache_replay', 'runtime_cache_validation',
+                     'runtime_cache_cold_replay', 'runtime_cache_cold_validation'):
             self.assertEqual(grown[path], baseline[path]+1024)
         self.assertEqual(grown['runtime_tls'], baseline['runtime_tls'])
 
@@ -183,3 +184,18 @@ class CacheStackAuditTest(StackAuditTest):
             device_stack.audit(frames, 47183)
         with self.assertRaisesRegex(ValueError, 'missing audited function'):
             device_stack.audit([(n, s) for n, s in frames if 'network_session' not in n], 49192)
+
+
+    def test_cold_cache_counts_its_own_callers_and_optional_outlines(self):
+        baseline = device_stack.audit(self.cached_frames(), 49192)['paths_bytes']
+        grown = device_stack.audit(self.cached_frames() + [
+            ('restore_saved_board closure', 1024), ('cache query_sources closure', 512),
+        ], 49192)['paths_bytes']
+        self.assertEqual(grown['runtime_cache_cold_validation'], baseline['runtime_cache_cold_validation'] + 1024)
+        self.assertEqual(grown['runtime_cache_cold_replay'], baseline['runtime_cache_cold_replay'] + 1536)
+        self.assertEqual(grown['runtime_cache_replay'], baseline['runtime_cache_replay'] + 512)
+        # update_once is not a parent of the early cold-cache branch.
+        frames = [(n, s + 512 if 'update_once' in n else s) for n, s in self.cached_frames()]
+        later = device_stack.audit(frames, 49192)['paths_bytes']
+        self.assertEqual(later['runtime_cache_cold_replay'], baseline['runtime_cache_cold_replay'])
+        self.assertEqual(later['runtime_cache_replay'], baseline['runtime_cache_replay'] + 512)

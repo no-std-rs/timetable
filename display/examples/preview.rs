@@ -30,7 +30,7 @@ impl DrawTarget for Frame {
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let c: Config = serde_json_core::from_slice(include_bytes!("../tests/settings.json"))?.0;
+    let mut c: Config = serde_json_core::from_slice(include_bytes!("../tests/settings.json"))?.0;
     let catalog =
         Catalog::new(include_bytes!("../../catalog/catalog.bin")).ok_or("Invalid catalogue")?;
     let now = 1_792_301_400;
@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..App::default()
     };
     app.departures.reset(now);
-    for minutes in [12, 21, 28, 35] {
+    for minutes in [12, 21, 28, 35, 42, 49] {
         app.departures
             .push(Departure {
                 at: now + minutes * 60,
@@ -72,6 +72,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => Screen::Stops,
         };
+    } else if mode == "saved" {
+        app.clock = None;
+        app.status = Status::Connecting;
+    } else if mode == "connecting" || mode == "restoring" || mode == "syncing" {
+        app.clock = None;
+        app.loaded_at = None;
+        app.departures.clear();
+        app.freshness = Default::default();
+        app.status = match mode.as_str() {
+            "restoring" => Status::Restoring,
+            "syncing" => Status::Syncing,
+            _ => Status::Connecting,
+        };
+    } else if mode == "setup" {
+        app.group = usize::MAX;
+    } else if mode == "empty" {
+        c.groups[0].picks.clear();
+        app.departures.clear();
     } else if mode == "offline" {
         app.status = Status::Offline;
     } else if mode == "loading" {

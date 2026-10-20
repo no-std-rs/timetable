@@ -87,6 +87,9 @@ function preview() {
   const next = g.picks[1] ?? p;
   $("preview-next-line").textContent = `${next.line} \xB7 ${next.headsign || t("Either direction")}`;
   $("preview-last-line").textContent = `${p.line} \xB7 ${p.headsign || t("Either direction")}`;
+  $("preview-third-line").textContent = `${next.line} \xB7 ${next.headsign || t("Either direction")}`;
+  $("preview-fourth-line").textContent = `${p.line} \xB7 ${p.headsign || t("Either direction")}`;
+  $("preview-fifth-line").textContent = `${next.line} \xB7 ${next.headsign || t("Either direction")}`;
 }
 function renderTabs() {
   const tabs = $("group-tabs");

@@ -277,3 +277,44 @@ fn cached_editor_wake_starts_radio_at_deadline_and_shutdown_touch_is_visible() {
     assert!(ui.visible && ui.suppress_touch);
     assert!(battery::wake_ui(None, true, false).visible);
 }
+
+#[test]
+fn clockless_saved_board_keeps_its_retry_deadline_across_tap_wakes() {
+    let (config, mut original) = board();
+    original.clock = None;
+    original.status = Status::Offline;
+    assert!(battery::can_sleep(&original, false, 30, false));
+    let mut bytes = [0; RETAINED_BYTES];
+    battery::save(&mut bytes, &original, 42, ANCHOR, PERIOD, None, 300_000_000).unwrap();
+    let mut app = App::default();
+    let wake = battery::restore(&mut bytes, &config, 42, ANCHOR + 50_000_000, &mut app).unwrap();
+    assert_eq!(wake.utc_micros, None);
+    assert_eq!(wake.refresh_in_us, 200_000_000);
+    assert_eq!(app.clock, None);
+    assert_eq!(app.loaded_at, original.loaded_at);
+    assert_eq!(app.freshness, original.freshness);
+    assert_eq!(app.group, original.group);
+    assert_eq!(app.manual_until, original.manual_until);
+    assert_eq!(app.status, Status::Offline);
+    assert_eq!(app.board_departures().count(), 512);
+    assert_eq!(app.upcoming().count(), 0);
+    assert_eq!(
+        app.departures.iter().collect::<Vec<_>>(),
+        original.departures.iter().collect::<Vec<_>>()
+    );
+    for i in 0..32 {
+        assert_eq!(app.headsigns.get(i), original.headsigns.get(i));
+    }
+    assert!(!battery::refresh_due(
+        true,
+        false,
+        199_999_999,
+        wake.refresh_in_us
+    ));
+    assert!(battery::refresh_due(
+        true,
+        false,
+        200_000_000,
+        wake.refresh_in_us
+    ));
+}

@@ -101,3 +101,42 @@ fn simultaneous_departures_remain_distinct_and_order_by_selection() {
     assert_eq!(cache.get(1), cache.get(2));
     assert_eq!(cache.get(3).unwrap().group, 3);
 }
+
+#[test]
+fn saved_times_are_visible_without_becoming_upcoming_until_the_clock_is_known() {
+    let mut app = timetable_display::App::default();
+    let mut events = Departures::new(100);
+    for (at, group) in [(110, 0), (120, 1), (130, 0)] {
+        events
+            .push(Departure {
+                at,
+                group,
+                pick: 0,
+                conditional: false,
+                headsign: 0,
+            })
+            .unwrap();
+    }
+    app.publish(events, Default::default(), 100);
+    assert_eq!(app.clock, None);
+    assert_eq!(
+        app.upcoming().count(),
+        0,
+        "a saved timestamp is not current UTC"
+    );
+    assert_eq!(
+        app.board_departures().map(|d| d.at).collect::<Vec<_>>(),
+        [110, 130]
+    );
+    app.clock = Some(115);
+    assert_eq!(
+        app.board_departures().map(|d| d.at).collect::<Vec<_>>(),
+        [130]
+    );
+    assert_eq!(app.upcoming().map(|d| d.at).collect::<Vec<_>>(), [130]);
+    app.group = 1;
+    assert_eq!(
+        app.board_departures().map(|d| d.at).collect::<Vec<_>>(),
+        [120]
+    );
+}
