@@ -39,6 +39,9 @@
             <div class="device-walk" id="preview-walk">6m walk · 100% walk est.</div>
             <div class="device-next"><span id="preview-next-line">12 · Starołęka PKM</span><b>21m</b></div>
             <div class="device-next"><span id="preview-last-line">4 · Górczyn PKM</span><b>28m</b></div>
+            <div class="device-next"><span id="preview-third-line">12 · Starołęka PKM</span><b>35m</b></div>
+            <div class="device-next"><span id="preview-fourth-line">4 · Górczyn PKM</span><b>42m</b></div>
+            <div class="device-next"><span id="preview-fifth-line">12 · Starołęka PKM</span><b>49m</b></div>
             </div>
             <div class="device-footer"><span id="preview-freshness" hidden>Chk09:39 Src --/--</span></div>
           </div>
@@ -101,6 +104,7 @@
             <p id="logs-status" class="fine-print" role="status">Not connected</p>
             <pre id="log-output" class="log-output" tabindex="0" aria-label="Device serial logs"></pre>
           </details>
+          <p class="startup-note">On power-up, a saved timetable appears before Wi-Fi connects. Saved times are labelled until the clock is synchronized; then countdowns and walking advice begin.</p>
           <div class="install-notes"><p>Desktop Chrome or Edge · GUITION ESP32-2424S012-V1.0 · 4 MB flash</p><p>Installation replaces the device’s firmware and saved settings. Wi-Fi settings are stored in its local flash.</p></div>
           <details class="download-details"><summary>Prefer to flash it yourself?</summary><p><a id="download" hidden download="timetable-display.bin">Download verified firmware</a><span id="no-download">A binary will be available after the first published build.</span></p><code id="digest"></code></details>
           <details class="download-details"><summary>Black screen or USB won’t connect?</summary><p>Hold the board’s BOOT button while reconnecting USB, then release it. Select the newly appeared port and install again. This starts the chip’s built-in flasher and bypasses the current app; installing different firmware first is unnecessary.</p></details>

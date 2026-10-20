@@ -310,7 +310,8 @@ fn main() {
         .iter()
         .position(|s| s == "--cache")
         .map(|i| flash::Flash::open(std::path::Path::new(args.get(i + 1).expect("--cache PATH"))));
-    let cold_only = args.iter().any(|s| s == "--cache-only");
+    let saved_only = args.iter().any(|s| s == "--saved");
+    let cold_only = saved_only || args.iter().any(|s| s == "--cache-only");
     let future = async {
         if cold_only {
             let flash = flash.as_ref().expect("--cache-only requires --cache PATH");
@@ -324,7 +325,7 @@ fn main() {
                 &mut builder,
                 &mut workspace,
                 &config,
-                now,
+                if saved_only { bank.checked_at() } else { now },
             )
             .await
             .map_err(Error::from)
@@ -388,6 +389,14 @@ fn main() {
         builder.now,
     );
     app.freshness = freshness;
+    if saved_only {
+        assert!(app.clock.is_none());
+        assert_eq!(app.upcoming().count(), 0);
+        println!(
+            "saved startup: {} absolute departures visible before clock/Wi-Fi",
+            app.board_departures().count()
+        );
+    }
     // Compare public values, not snapshot-dependent heading-pool indices.
     let mut checksum = 0xcbf29ce484222325_u64;
     for event in app.departures.iter() {

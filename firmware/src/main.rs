@@ -457,7 +457,7 @@ async fn main(spawner: Spawner) -> ! {
             redraw = Instant::now()
                 + if matches!(
                     s.app.status,
-                    Status::Connecting | Status::Syncing | Status::Loading
+                    Status::Restoring | Status::Connecting | Status::Syncing | Status::Loading
                 ) {
                     Duration::from_millis(500)
                 } else {
@@ -718,7 +718,7 @@ async fn network_service(
                 query_config,
                 builder,
                 workspace,
-                cache,
+                &cache,
             ),
             POWER_DOWN.wait(),
         )
@@ -789,6 +789,59 @@ fn open_network<'d>(
     Ok((controller, stack, runner))
 }
 
+// Replay before initializing Wi-Fi so a cold boot is useful while DHCP/NTP
+// are unavailable. Without a clock the renderer labels these as saved times.
+async fn restore_saved_board(
+    shared: &'static Shared,
+    query_config: &mut Config,
+    builder: &mut Builder,
+    workspace: &mut gtfs::zip::Workspace,
+    cache: &CachePartition,
+) {
+    if !cache.enabled {
+        return;
+    }
+    let revision = {
+        let mut state = shared.lock().await;
+        if state.app.loaded_at.is_some() || state.powering_down {
+            return;
+        }
+        state.app.status = Status::Restoring;
+        copy_query(&state, query_config)
+    };
+    let storage = CacheFlash {
+        flash: cache.flash,
+        shared,
+        revision,
+    };
+    if let Ok(Some(bank)) = cache::load(&storage).await {
+        let reference = transport::now().unwrap_or(bank.checked_at());
+        match cache::restore(&storage, bank, builder, workspace, query_config, reference).await {
+            Ok(freshness) => {
+                let mut state = shared.lock().await;
+                if state.revision != storage.revision || state.powering_down {
+                    return;
+                }
+                state.app.publish(
+                    core::mem::take(&mut builder.events),
+                    core::mem::take(&mut builder.headsigns),
+                    builder.now,
+                );
+                state.app.freshness = freshness;
+                info!(
+                    "Cache: saved board ready before Wi-Fi; clock known: {}",
+                    transport::now().is_some()
+                );
+            }
+            Err(error) => info!("Cache: saved board unavailable for this selection: {error:?}"),
+        }
+    }
+    let mut state = shared.lock().await;
+    if state.revision == storage.revision && !state.powering_down {
+        state.app.status = Status::Connecting;
+    }
+}
+
 async fn network_session(
     wifi: esp_hal::peripherals::WIFI<'_>,
     resources: &mut StackResources<4>,
@@ -796,8 +849,9 @@ async fn network_session(
     query_config: &mut Config,
     builder: &mut Builder,
     workspace: &mut gtfs::zip::Workspace,
-    cache: CachePartition,
+    cache: &CachePartition,
 ) -> u32 {
+    restore_saved_board(shared, query_config, builder, workspace, cache).await;
     let (controller, stack, mut runner) = match open_network(wifi, resources) {
         Ok(network) => network,
         Err(error) => {
@@ -895,7 +949,7 @@ async fn update_once(
     query_config: &mut Config,
     builder: &mut Builder,
     workspace: &mut gtfs::zip::Workspace,
-    cache: CachePartition,
+    cache: &CachePartition,
 ) -> u32 {
     {
         let mut s = shared.lock().await;

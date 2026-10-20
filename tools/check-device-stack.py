@@ -160,6 +160,14 @@ def audit(frames, stack):
             ('internal_erase_sector',), ('spiflash_erase_sector',),
         ])
         writer = sum(frame('cache', 'Writer', method) for method in ('3row', '6append', '5flush'))
+        # Cold replay runs before open_network, without update_once/mirror.
+        # Count optional coroutine outlines if compiler decisions change.
+        cold = task + session + max(
+            (size for name, size in frames if 'restore_saved_board' in name and 'closure' in name),
+            default=0)
+        query_sources = max(
+            (size for name, size in frames if 'query_sources' in name and 'closure' in name),
+            default=0)
         # ZIP constructor and row callback/flash programming are alternatives:
         # Reader::record has returned before the CSV visitor writes a row.
         paths.update({
@@ -171,8 +179,10 @@ def audit(frames, stack):
             'runtime_official_inflate': worker + http + frame('gtfs', 'next_entry'),
             'runtime_tls': base + transport + request + max(outlined_open, default=0) + lower_tls,
             'runtime_cache_flash': base + http + max(cached) + stages + writer + max(flash_read, flash_write, flash_erase),
-            'runtime_cache_replay': base + frame('cache7restore', 'closure') + stages + frame('csv', '4next', 'closure') + frame('csv', '8raw_next', 'closure') + flash_read,
+            'runtime_cache_replay': base + frame('cache7restore', 'closure') + query_sources + stages + frame('csv', '4next', 'closure') + frame('csv', '8raw_next', 'closure') + flash_read,
             'runtime_cache_validation': base + frame('cache4load', 'closure') + frame('cache8validate', 'closure') + flash_read,
+            'runtime_cache_cold_validation': cold + frame('cache4load', 'closure') + frame('cache8validate', 'closure') + flash_read,
+            'runtime_cache_cold_replay': cold + frame('cache7restore', 'closure') + query_sources + stages + frame('csv', '4next', 'closure') + frame('csv', '8raw_next', 'closure') + flash_read,
         })
     elif scoped:
         # Pinned scoped-session ELF: update_once and session are inlined into

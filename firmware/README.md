@@ -9,10 +9,19 @@ chilli red for the main action and departure urgency.
 
 ![Rust renderer preview](../docs/previews/device.png)
 
-[Animated update indicator](../docs/previews/device-live.gif). Four departures,
+[Animated update indicator](../docs/previews/device-live.gif). Six departures,
 second-by-second countdowns and the physical platform fit on the board. The
 spinner animates every half-second while connecting, synchronizing NTP or
 updating, including before UTC is known; idle boards redraw once per second.
+
+[Saved board before Wi-Fi](../docs/previews/device-saved.png) ·
+[First connection](../docs/previews/device-connecting.png) ·
+[First setup](../docs/previews/device-setup.png).
+A saved board appears before radio startup. Until NTP succeeds, it shows dated
+absolute times and **CLOCK PENDING**. Countdown and walking advice start only
+with a known clock. With no saved data, startup shows the configured stops,
+connection stage and first-download guidance. An unconfigured device shows the
+installer address and setup steps.
 
 [Desktop installer preview](../docs/previews/installer-desktop.png) ·
 [Mobile installer preview](../docs/previews/installer-mobile.png) ·
@@ -161,8 +170,8 @@ an obsolete query; failure retains the previously validated board. The generic
 `gtfs` crate's existing APIs remain available.
 
 The dedicated flash cache retains selected all-period GTFS tables, with no
-writes on unchanged selected data. After valid UTC is available, a cold boot
-can show its board before checking the mirror. See [persistent cache](../docs/persistent-cache.md)
+writes on unchanged selected data. A cold boot shows saved absolute times before
+Wi-Fi, then re-queries at synchronized UTC before checking the mirror. See [persistent cache](../docs/persistent-cache.md)
 for partition migration, transactional recovery and capacity fallback. A first
 fill or changed selection scans each required table twice: read-only comparison
 and validation, then writing. The active query and all-period recording share
@@ -204,16 +213,16 @@ time and signature verification. See [the reproducible comparison](../PERFORMANC
 The ZIP dictionary supplies directory scratch while no inflater is active.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **299,972 B**,
+excluded. The static-plus-minimum-stack regression account is **299,988 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 49,208 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 49,192 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
 available stack, with 4 KiB headroom. The original binary fails this check.
 `STACK.json` records the scoped audit, including the network selection, update,
-mirror and transport callers. Its TLS bound is 43,168 B plus 4,096 B headroom; it is not a complete call-graph proof or
+mirror and transport callers. Its TLS bound is 44,768 B plus 4,096 B headroom; it is not a complete call-graph proof or
 physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
 Physical screen/radio/touch behaviour still requires the board. No hardware test has been
 performed as part of this implementation. Serial logs report allocator current,
@@ -266,6 +275,8 @@ cargo run --locked --release --example probe_device --target x86_64-unknown-linu
 cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --cache /tmp/timetable.nor
 cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --cache /tmp/timetable.nor
 cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --cache /tmp/timetable.nor --cache-only
+# Clockless startup preview: absolute saved times, no network or flash writes:
+cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --cache /tmp/timetable.nor --saved
 # See PERFORMANCE.md: host OS buffers/stack and ESP32 instruction timing differ.
 # Optional LIVE host transport diagnostic; no USB device required:
 # Uses the same GET sender, stream adapter, TLS verifier and cooperative reader.

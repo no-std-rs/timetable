@@ -1,5 +1,6 @@
 // English message keys keep validation modules independent of browser state.
 export const polish = {
+  "On power-up, a saved timetable appears before Wi-Fi connects. Saved times are labelled until the clock is synchronized; then countdowns and walking advice begin.": "Po włączeniu zapisany rozkład pojawi się jeszcze przed połączeniem z Wi-Fi. Do synchronizacji zegara zobaczysz oznaczone zapisane godziny; potem ruszą odliczanie i wskazówki wyjścia.",
   "Changes applied. Prepare when you’re ready.": "Zmiany zastosowane. Gdy skończysz, przygotuj instalację.",
   "timetable — a little time to spare": "timetable — chwila na zapas",
   "Made in Rust": "Napisane w Rust",

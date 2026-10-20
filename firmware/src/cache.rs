@@ -148,6 +148,11 @@ pub struct Bank {
     checked: i64,
 }
 impl Bank {
+    /// Query reference for a clearly labelled saved-board preview. This is not
+    /// a current clock and must never be installed as the device's UTC.
+    pub fn checked_at(self) -> i64 {
+        self.checked
+    }
     fn source(&self, flash: &impl Storage, i: usize) -> Result<Source, Error> {
         if i >= self.count as usize {
             return Err(Error::InvalidZip);

@@ -252,7 +252,9 @@ pub fn restore(
     let mut events = Departures::new(epoch);
     let mut names = Headings::default();
     let mut end = HEADER;
-    if count > 0 && (loaded_at != Some(epoch) || now.is_none()) {
+    // Saved absolute times are useful before NTP too. Never promote the saved
+    // query reference to UTC; the renderer keeps countdowns disabled.
+    if count > 0 && loaded_at != Some(epoch) {
         return Err(Error::Invalid);
     }
     for _ in 0..count {

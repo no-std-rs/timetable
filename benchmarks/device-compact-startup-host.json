@@ -1,0 +1,76 @@
+{
+  "base": "e5bd02578228ada9649f62253f35a5ecdbe9dcf6",
+  "method": "Five paired offline host rounds, same compiler/release profile and file-backed public selected cache; replay at fixed UTC vs new saved-check reference (identical for this bank); 64 KiB hard heap, 34320 B radio reserve, 20% host CPU duty; renderer 512 frames \u00d7 15 tiles, 512 events, SPI excluded",
+  "cache_sha256": "52c059a31a10efe4f5456afd133d85c46b35798a1f4ebb41c8b0e497fe50c34c",
+  "cache_bytes": 983040,
+  "rounds": [
+    {
+      "round": 1,
+      "baseline": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39840B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall5ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,109666,92a4fdb4d6f5057a\nGroups,512,66101,797632645b0c4508\nPicks,512,67567,a8b602d3d22e2408\nRoutes,512,80999,9a08ce3bcb39f3b6\nStops,512,289618,3003dc5585112562\nWalk,512,81873,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39848B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall5ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\nsaved startup: 18 absolute departures visible before clock/Wi-Fi\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,125351,8ef7cbe12102c1da\nGroups,512,65773,797632645b0c4508\nPicks,512,67033,a8b602d3d22e2408\nRoutes,512,79616,9a08ce3bcb39f3b6\nStops,512,264797,3003dc5585112562\nWalk,512,82007,eef7e275cb19bce1\n"
+      }
+    },
+    {
+      "round": 2,
+      "baseline": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39840B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall5ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,108396,92a4fdb4d6f5057a\nGroups,512,72616,797632645b0c4508\nPicks,512,70248,a8b602d3d22e2408\nRoutes,512,81476,9a08ce3bcb39f3b6\nStops,512,297015,3003dc5585112562\nWalk,512,82096,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39848B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall5ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\nsaved startup: 18 absolute departures visible before clock/Wi-Fi\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,126412,8ef7cbe12102c1da\nGroups,512,72839,797632645b0c4508\nPicks,512,70539,a8b602d3d22e2408\nRoutes,512,81464,9a08ce3bcb39f3b6\nStops,512,273365,3003dc5585112562\nWalk,512,89506,eef7e275cb19bce1\n"
+      }
+    },
+    {
+      "round": 3,
+      "baseline": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39840B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall6ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,118248,92a4fdb4d6f5057a\nGroups,512,66432,797632645b0c4508\nPicks,512,66762,a8b602d3d22e2408\nRoutes,512,80861,9a08ce3bcb39f3b6\nStops,512,302301,3003dc5585112562\nWalk,512,83629,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39848B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall5ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\nsaved startup: 18 absolute departures visible before clock/Wi-Fi\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,121493,8ef7cbe12102c1da\nGroups,512,66660,797632645b0c4508\nPicks,512,68560,a8b602d3d22e2408\nRoutes,512,83145,9a08ce3bcb39f3b6\nStops,512,252439,3003dc5585112562\nWalk,512,89639,eef7e275cb19bce1\n"
+      }
+    },
+    {
+      "round": 4,
+      "baseline": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39840B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall7ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,106831,92a4fdb4d6f5057a\nGroups,512,68949,797632645b0c4508\nPicks,512,68276,a8b602d3d22e2408\nRoutes,512,84101,9a08ce3bcb39f3b6\nStops,512,284066,3003dc5585112562\nWalk,512,81074,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39848B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall5ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\nsaved startup: 18 absolute departures visible before clock/Wi-Fi\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,118587,8ef7cbe12102c1da\nGroups,512,65483,797632645b0c4508\nPicks,512,66315,a8b602d3d22e2408\nRoutes,512,81715,9a08ce3bcb39f3b6\nStops,512,245926,3003dc5585112562\nWalk,512,77889,eef7e275cb19bce1\n"
+      }
+    },
+    {
+      "round": 5,
+      "baseline": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39840B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall5ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,103527,92a4fdb4d6f5057a\nGroups,512,66646,797632645b0c4508\nPicks,512,66644,a8b602d3d22e2408\nRoutes,512,79580,9a08ce3bcb39f3b6\nStops,512,280361,3003dc5585112562\nWalk,512,76812,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "replay_stdout": "profile: heap65536B, radio baseline34320B, host CPU duty20%; line 4, stop MT44\nhost update future: 39848B; Builder 30392B; Workspace 43272B; Config 4672B\nresult: Ok(Freshness { checked_at: Some(1792367882), source_updated_at: Some(1791966267) }); requests0; connections0; bytes0; wall5ms; CPU1ms; heap peak34320/65536B; retained0B; fallbackfalse\nflash: erases0; programs0; programmed0B; read172170B; cold_onlytrue\nsaved startup: 18 absolute departures visible before clock/Wi-Fi\npublished 18 selected departures; checksum043c5d4a37aade22\n",
+        "render_stdout": "screen,frames,ns_per_frame,checksum\nBoard,512,122047,8ef7cbe12102c1da\nGroups,512,66410,797632645b0c4508\nPicks,512,67448,a8b602d3d22e2408\nRoutes,512,80040,9a08ce3bcb39f3b6\nStops,512,243495,3003dc5585112562\nWalk,512,81024,eef7e275cb19bce1\n"
+      }
+    }
+  ],
+  "limits": "Host timing, not physical ESP32 boot latency, throughput, energy or stack high-water. Replay excludes boot, flash SPI, Wi-Fi and NTP. UI output intentionally differs; other screens unchanged.",
+  "summary": {
+    "baseline": {
+      "wall_ms_median": 5,
+      "CPU_ms_median": 1,
+      "board_ns_per_frame_median": 108396
+    },
+    "candidate": {
+      "wall_ms_median": 5,
+      "CPU_ms_median": 1,
+      "board_ns_per_frame_median": 122047
+    }
+  }
+}

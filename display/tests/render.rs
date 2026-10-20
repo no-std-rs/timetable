@@ -74,6 +74,7 @@ fn clipped_board_skips_offscreen_glyphs_without_allocating() {
     app.screen = Screen::Board;
     app.clock = None;
     for status in [
+        timetable_display::model::Status::Restoring,
         timetable_display::model::Status::Connecting,
         timetable_display::model::Status::Syncing,
         timetable_display::model::Status::Loading,

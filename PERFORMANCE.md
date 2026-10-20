@@ -765,3 +765,41 @@ the unchanged 300,000 B ratchet. The full account is **324,604 B** including all
 counts TLS **43,168 B + 4,096 B headroom**, which fits. Poll instrumentation
 borrows pinned futures instead of copying their large async state. These are
 linked/audited bounds, not physical high-water measurements.
+
+
+## Compact board and cache before Wi-Fi
+
+The round board now shows six departures instead of four, while retaining the
+large next-departure countdown, stop/platform, walking advice and freshness footer.
+Lower rows move inward to fit the circle. Cold startup validates and queries the
+existing flash bank before initializing Wi-Fi. Without known UTC it displays the
+saved date and absolute departure times; it never uses the saved check time as
+current UTC. NTP enables countdowns and a fresh query. An offline saved board also
+survives battery tap wakes without losing its remaining retry deadline.
+
+Five paired host rounds compare main `e5bd025` with this layout and clockless
+replay, using the same persisted selection (line 4, MT44), pinned compiler and
+release profile. The probe has the same hard 65,536 B heap, 34,320 B radio reserve
+and 20% CPU duty limit. Both versions return 18 departures and checksum
+`043c5d4a37aade22`, read 172,170 B, make zero network requests, and perform
+**zero erases/programs**. Both need only the reserved radio heap, with no retained
+allocation. Median replay wall time is **5 ms** for each version; median reported
+CPU time is **1 ms**. File-backed reads exclude physical flash latency, boot,
+Wi-Fi and NTP; these figures are not physical cold-boot measurements.
+
+The actual 15-tile renderer, with 512 events and 512 frames per screen, takes
+median **108,396 → 122,047 ns per board frame** on this host, a **12.6%** increase
+for two extra visible departures. Other screen pixel checksums are unchanged;
+board pixels intentionally differ. SPI is excluded. This records the cost of the
+denser layout rather than claiming a throughput or power improvement.
+[Raw paired rounds](benchmarks/device-compact-startup-host.json).
+
+[Linked RAM](benchmarks/device-compact-startup-ram.json) is **275,412 B static**
+including the unchanged 64 KiB heap; adding the unchanged 24 KiB minimum stack
+reserve gives **299,988 B**, below the unchanged 300,000 B ratchet. All available
+stack gives **324,604 B** total, below 400,000 B. The
+[expanded stack audit](benchmarks/device-compact-startup-stack.json) counts cold
+cache validation/replay separately (**9,008 / 9,888 B**) and TLS at **44,768 B**,
+each with 4,096 B headroom within the 49,192 B available stack. Cache context is
+borrowed between futures; no buffer, query capacity or memory allowance changed.
+These are linked/audited bounds, not a complete call graph or hardware high-water.

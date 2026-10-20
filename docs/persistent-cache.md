@@ -1,8 +1,11 @@
 # Persistent selected timetable
 
 The device saves selected GTFS tables for the feed's full service period, rather
-than writing a moving six-hour departure list. After acquiring valid UTC, it
-replays that data before checking the mirror. Walking time, direction, group
+than writing a moving six-hour departure list. On cold boot it validates and
+replays saved data **before starting Wi-Fi**. Until NTP succeeds, the board shows
+absolute times with the saved date and **CLOCK PENDING**, never countdowns or
+walking advice. After clock synchronization it re-queries the cache at current
+UTC before checking the mirror. Walking time, direction, group
 order and schedules are applied when querying; changing these settings needs no
 cache write. A new physical platform or line requires matching cached identities
 or a download. Exact platform IDs remain distinct even when stop codes repeat.

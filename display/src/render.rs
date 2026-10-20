@@ -109,6 +109,16 @@ fn countdown(seconds: i64) -> String<12> {
     text
 }
 
+fn departure_time(at: i64) -> String<12> {
+    let mut text = String::new();
+    if let Some(local) = clock::warsaw(at) {
+        let _ = write!(text, "{:02}:{:02}", local.hour(), local.minute());
+    } else {
+        let _ = text.push_str("--:--");
+    }
+    text
+}
+
 fn timestamp(stamp: Option<i64>, unknown: &str) -> String<40> {
     let mut text = String::new();
     if let Some(local) = stamp.and_then(clock::warsaw) {
@@ -198,11 +208,16 @@ pub fn starting<D: DrawTarget<Color = Rgb565>>(d: &mut D) -> Result<(), D::Error
 
 pub fn setup<D: DrawTarget<Color = Rgb565>>(d: &mut D) -> Result<(), D::Error> {
     background(d)?;
-    label(d, "timetable", 120, 60, INK, true)?;
-    label(d, "A little time to spare.", 120, 89, MUTED, true)?;
-    pill(d, 45, 125, 150, 28, GOLD)?;
-    label(d, "Set up over USB", 120, 134, INK, true)?;
-    label(d, "Wi-Fi + your groups", 120, 170, MUTED, true)
+    label(d, "timetable", 120, 34, INK, true)?;
+    label(d, "Your stops, one glance.", 120, 57, MUTED, true)?;
+    label(d, "1  Open the installer", 120, 82, INK, true)?;
+    label(d, "no-std-rs.github.io", 120, 99, INK, true)?;
+    label(d, "/timetable", 120, 111, CHILLI, true)?;
+    label(d, "2  Choose stops + walk time", 120, 143, INK, true)?;
+    label(d, "3  Connect USB and install", 120, 163, INK, true)?;
+    pill(d, 51, 184, 138, 23, GOLD)?;
+    label(d, "Chrome / Edge", 120, 191, INK, true)?;
+    label(d, "USB data cable", 120, 216, MUTED, true)
 }
 
 fn background<D: DrawTarget<Color = Rgb565>>(d: &mut D) -> Result<(), D::Error> {
@@ -268,23 +283,23 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
         Screen::Board => {
             let now = app.clock.unwrap_or(0);
             let chosen = app
-                .upcoming()
+                .board_departures()
                 .enumerate()
                 .find(|(_, e)| {
                     config.groups[e.group as usize]
                         .picks
                         .get(e.pick as usize)
-                        .is_some_and(|p| walking_chance(e.at, now, p) >= 50)
+                        .is_some_and(|p| app.clock.is_some() && walking_chance(e.at, now, p) >= 50)
                 })
-                .or_else(|| app.upcoming().enumerate().next());
+                .or_else(|| app.board_departures().enumerate().next());
             if let Some((chosen_index, event)) = chosen {
                 let p = &group.picks[event.pick as usize];
-                pill(d, 32, 62, 47, 29, INK)?;
+                pill(d, 32, 56, 47, 29, INK)?;
                 draw_visible(
                     d,
                     &Text::with_text_style(
                         p.line.as_str(),
-                        Point::new(55, 66),
+                        Point::new(55, 60),
                         MonoTextStyle::new(
                             if p.line.chars().count() > 4 {
                                 &FONT_6X10
@@ -299,9 +314,20 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                             .build(),
                     ),
                 )?;
-                let value = countdown(event.at - now);
-                big(d, &value, 216 - value.len() as i32 * 20, 55)?;
-                label(d, "IN", 84, 76, MUTED, false)?;
+                let value = if app.clock.is_some() {
+                    countdown(event.at - now)
+                } else {
+                    departure_time(event.at)
+                };
+                big(d, &value, 216 - value.len() as i32 * 20, 51)?;
+                label(
+                    d,
+                    if app.clock.is_some() { "IN" } else { "AT" },
+                    84,
+                    70,
+                    MUTED,
+                    false,
+                )?;
                 label(
                     d,
                     &short(
@@ -312,7 +338,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                         27,
                     ),
                     120,
-                    96,
+                    92,
                     INK,
                     true,
                 )?;
@@ -321,59 +347,62 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 if !p.stop_code.is_empty() {
                     let _ = write!(platform, " / {}", p.stop_code);
                 }
-                label(d, &short(&platform, 31), 120, 108, MUTED, true)?;
-                let left = leave_in(event.at, now, p);
+                label(d, &short(&platform, 31), 120, 104, MUTED, true)?;
                 let mut text = String::<64>::new();
-                if walking_chance(event.at, now, p) == 0 {
+                let left = leave_in(event.at, now, p);
+                let urgent = app.clock.is_some() && left < 60;
+                if app.clock.is_none() {
+                    if let Some(saved) = app.loaded_at.and_then(clock::warsaw) {
+                        let _ = write!(
+                            text,
+                            "Saved {:02}/{:02} / clock pending",
+                            saved.day(),
+                            saved.month() as u8
+                        );
+                    } else {
+                        let _ = text.push_str("Saved times / clock pending");
+                    }
+                } else if walking_chance(event.at, now, p) == 0 {
                     let _ = text.push_str("Not enough walk time");
                 } else if left > 0 {
                     let _ = write!(text, "Leave in {}", countdown(left));
                 } else {
                     let _ = text.push_str("Leave now");
                 }
-                pill(d, 32, 123, 176, 25, if left < 60 { CHILLI } else { GOLD })?;
+                pill(d, 29, 118, 182, 21, if urgent { CHILLI } else { GOLD })?;
                 label(
                     d,
                     &text,
                     120,
-                    131,
-                    if left < 60 { PORCELAIN } else { INK },
+                    124,
+                    if urgent { PORCELAIN } else { INK },
                     true,
                 )?;
-                // Walking confidence is a visual estimate, never vehicle reliability.
-                let chance = walking_chance(event.at, now, p);
-                draw_visible(
-                    d,
-                    &Rectangle::new(
-                        Point::new(40, 145),
-                        Size::new(160 * u32::from(chance) / 100, 2),
-                    )
-                    .into_styled(PrimitiveStyle::with_fill(if left < 60 {
-                        PORCELAIN
-                    } else {
-                        INK
-                    })),
-                )?;
                 text.clear();
-                let _ = write!(
-                    text,
-                    "{}m walk / {}% walk est.{}",
-                    p.walk,
-                    walking_chance(event.at, now, p),
-                    if event.conditional { " *" } else { "" }
-                );
-                label(d, &text, 120, 151, MUTED, true)?;
+                if app.clock.is_some() {
+                    let _ = write!(
+                        text,
+                        "{}m walk / {}% walk est.{}",
+                        p.walk,
+                        walking_chance(event.at, now, p),
+                        if event.conditional { " *" } else { "" }
+                    );
+                } else {
+                    let _ = text.push_str("Countdowns after clock sync");
+                }
+                label(d, &text, 120, 141, MUTED, true)?;
                 for (i, next) in app
-                    .upcoming()
+                    .board_departures()
                     .enumerate()
-                    .filter(|(index, e)| e.at >= event.at && *index != chosen_index)
+                    .filter(|(index, _)| *index != chosen_index)
                     .map(|(_, event)| event)
-                    .take(3)
+                    .take(5)
                     .enumerate()
                 {
                     let Some(p) = group.picks.get(next.pick as usize) else {
                         continue;
                     };
+                    let y = 154 + i as i32 * 12;
                     text.clear();
                     let _ = write!(
                         text,
@@ -385,41 +414,88 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                             .unwrap_or(&p.headsign),
                         if next.conditional { " *" } else { "" }
                     );
-                    label(d, &short(&text, 20), 38, 166 + i as i32 * 14, INK, false)?;
+                    label(
+                        d,
+                        &short(&text, 20 - i.saturating_sub(2) * 2),
+                        35 + i.saturating_sub(2) as i32 * 6,
+                        y,
+                        if app.clock.is_some() && walking_chance(next.at, now, p) < 50 {
+                            CHILLI
+                        } else {
+                            INK
+                        },
+                        false,
+                    )?;
                     text.clear();
-                    let _ = write!(text, "{}m", (next.at - now + 59) / 60);
-                    label(d, &text, 182, 166 + i as i32 * 14, INK, false)?;
+                    if app.clock.is_some() {
+                        let _ = write!(text, "{}m", (next.at - now + 59) / 60);
+                    } else {
+                        let _ = text.push_str(&departure_time(next.at));
+                    }
+                    label(
+                        d,
+                        &text,
+                        (211 - i.saturating_sub(2) as i32 * 8) - text.len() as i32 * 6,
+                        y,
+                        INK,
+                        false,
+                    )?;
                 }
             } else {
                 let status = match app.status {
+                    Status::Restoring => "Opening saved timetable",
                     Status::Connecting => "Connecting to Wi-Fi",
                     Status::Syncing => "Setting the clock",
                     Status::Loading => "Reading the timetable",
-                    Status::Offline => "Offline",
-                    Status::Capacity => "Selection too large",
-                    Status::Failed => "Update failed",
-                    _ if group.picks.is_empty() => "Make this group yours",
-                    _ => "No upcoming departures",
+                    Status::Offline => "Offline / tap status to retry",
+                    Status::Capacity => "Selection too large / hold to edit",
+                    Status::Failed => "Update failed / tap status",
+                    _ if group.picks.is_empty() => "Hold to add lines + stops",
+                    _ => "No departures in next 6h",
                 };
-                label(d, status, 120, 86, INK, true)?;
                 label(
                     d,
                     if group.picks.is_empty() {
-                        "Hold to add lines + stops"
-                    } else if app.can_retry() {
-                        "Tap status above to retry"
+                        "Your next journey"
+                    } else if app.loaded_at.is_none() {
+                        "Your stops are saved"
                     } else {
-                        "Scheduled times from ZTM"
+                        "Your timetable"
                     },
                     120,
-                    114,
-                    MUTED,
+                    65,
+                    INK,
                     true,
                 )?;
-                label(d, "Swipe to change group", 120, 158, MUTED, true)?;
+                label(d, status, 120, 84, MUTED, true)?;
+                if group.picks.is_empty() {
+                    label(d, "Hold the screen to choose", 120, 118, INK, true)?;
+                    label(d, "a line, stop and walking time", 120, 133, MUTED, true)?;
+                    label(d, "Swipe to change group", 120, 170, MUTED, true)?;
+                } else {
+                    for (i, pick) in group.picks.iter().take(4).enumerate() {
+                        let y = 109 + i as i32 * 24;
+                        pill(d, 29, y + 1, 30, 18, INK)?;
+                        label(d, &short(&pick.line, 4), 44, y + 6, PORCELAIN, true)?;
+                        label(d, &short(&pick.stop_name, 23), 66, y, INK, false)?;
+                        label(d, &short(&pick.headsign, 23), 66, y + 11, MUTED, false)?;
+                    }
+                    if group.picks.len() <= 2
+                        && app.loaded_at.is_none()
+                        && matches!(
+                            app.status,
+                            Status::Connecting | Status::Syncing | Status::Loading
+                        )
+                    {
+                        let y = 124 + group.picks.len() as i32 * 24;
+                        label(d, "First download takes longer", 120, y, MUTED, true)?;
+                        label(d, "Later boots use saved times", 120, y + 14, MUTED, true)?;
+                    }
+                }
             }
             let mut foot = String::<40>::new();
             let fault = app.can_retry() || app.status == Status::Capacity;
+            let saved_without_clock = app.clock.is_none() && app.loaded_at.is_some();
             if !fault && let Some(local) = clock::warsaw(now).filter(|_| app.clock.is_some()) {
                 let _ = write!(
                     foot,
@@ -439,6 +515,10 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 "FAILED / TAP RETRY"
             } else if app.status == Status::Capacity {
                 "TOO MANY / HOLD EDIT"
+            } else if saved_without_clock {
+                "SAVED / CLOCK PENDING"
+            } else if app.status == Status::Restoring {
+                "OPENING SAVED DATA"
             } else if app.status == Status::Connecting {
                 "CONNECTING"
             } else if app.status == Status::Syncing {
@@ -460,7 +540,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
             label(
                 d,
                 &foot,
-                120,
+                if saved_without_clock { 126 } else { 120 },
                 42,
                 if app.save_failed || app.sleep_failed || fault {
                     CHILLI
@@ -471,7 +551,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
             )?;
             if matches!(
                 app.status,
-                Status::Connecting | Status::Syncing | Status::Loading
+                Status::Restoring | Status::Connecting | Status::Syncing | Status::Loading
             ) {
                 for (i, (x, y)) in [
                     (0, -4),

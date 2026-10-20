@@ -813,3 +813,36 @@ fn scratch_allocation_failure_falls_back_without_flash_writes() {
     assert_eq!(flash.counters(), before);
     assert_eq!(*flash.bytes.borrow(), saved);
 }
+
+#[test]
+fn saved_check_reference_replays_without_a_clock_or_flash_writes() {
+    let flash = Memory::new();
+    let c = settings();
+    let (mut original, result) = update(&flash, &Client::new(ORIGINAL), &c, NOW);
+    result.unwrap();
+    let before = flash.counters();
+    let bank = run(cache::load(&flash)).unwrap().unwrap();
+    assert_eq!(bank.checked_at(), NOW);
+    let mut builder = Builder::new("20261017".parse().unwrap());
+    let fresh = run(cache::restore(
+        &flash,
+        bank,
+        &mut builder,
+        &mut zip::Workspace::new(),
+        &c,
+        bank.checked_at(),
+    ))
+    .unwrap();
+    assert_eq!(events(&mut original), events(&mut builder));
+    let mut app = timetable_display::App::default();
+    app.publish(
+        core::mem::take(&mut builder.events),
+        core::mem::take(&mut builder.headsigns),
+        builder.now,
+    );
+    app.freshness = fresh;
+    assert_eq!(app.clock, None);
+    assert_eq!(app.upcoming().count(), 0);
+    assert!(app.board_departures().next().is_some());
+    assert_eq!(flash.counters(), before);
+}

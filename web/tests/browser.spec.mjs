@@ -37,6 +37,14 @@ test("groups, directions and walking times update a clean responsive preview", a
   await page.getByRole("button", { name: "Save choice" }).click();
   await expect(page.locator("#preview-line")).toHaveText("4");
   await expect(page.locator("#preview-leave")).toHaveText("Leave in 2 min");
+  const rows = page.locator(".device-next");
+  await expect(rows).toHaveCount(5);
+  for (const row of await rows.all()) {
+    await expect(row).toBeVisible();
+  }
+  for (const id of ["preview-next-line", "preview-last-line", "preview-third-line", "preview-fourth-line", "preview-fifth-line"]) {
+    await expect(page.locator(`#${id}`)).toHaveText(/^4 · /);
+  }
   await page.locator("#group-name").fill("Work / morning");
   await expect(page.locator("#preview-group")).toHaveText("Work / morning");
   await page.locator("#scheduled").check();

@@ -70,6 +70,7 @@ pub enum Screen {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     Setup,
+    Restoring,
     Connecting,
     Syncing,
     Loading,
@@ -172,6 +173,16 @@ impl App {
             source_updated_at: None,
         };
         self.status = Status::Ready;
+    }
+
+    /// A clockless cold boot can show the last saved schedule as absolute
+    /// times. It must not turn those entries into countdowns or walking advice.
+    pub fn board_departures(&self) -> impl Iterator<Item = Departure> {
+        let now = self.clock;
+        let saved = self.loaded_at.is_some();
+        self.departures
+            .iter()
+            .filter(move |d| d.group as usize == self.group && now.map_or(saved, |now| d.at > now))
     }
 
     pub fn upcoming(&self) -> impl Iterator<Item = Departure> {
