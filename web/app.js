@@ -71,7 +71,10 @@ $("undo-removal").addEventListener("click", () => {
 });
 let demoSaved = null;
 const devicePreview = new DevicePreview($("device-canvas"), {
-  error: () => { copy("preview-state", "Demo unavailable. Your installer settings are safe."); $("preview-retry").hidden = false; },
+  error: (reason) => {
+    copy("preview-state", reason === "settings" ? "Complete valid group settings to resume the demo." : "Demo unavailable. Your installer settings are safe.");
+    $("preview-retry").hidden = reason === "settings";
+  },
   saved: (snapshot) => { demoSaved = snapshot; $("preview-apply").disabled = false; copy("preview-state", "Demo saved. Apply it below to use these settings."); },
   snapshot: (snapshot) => {
     const g = snapshot.config.groups[snapshot.group], p = snapshot.next?.pick;

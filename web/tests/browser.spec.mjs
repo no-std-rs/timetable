@@ -723,3 +723,32 @@ test("a failed WASM download leaves installer usable and retries without losing 
   await expect(page.locator("#preview-group")).toHaveText("Keep my group");
   await expect(page.locator("#group-name")).toHaveValue("Keep my group");
 });
+
+test("invalid installer drafts suspend stale WASM interactions until valid settings return", async ({ page }) => {
+  await page.clock.install();
+  let moduleRequests = 0;
+  page.on("request", request => { if (request.url().endsWith("device-preview.wasm")) moduleRequests++; });
+  await prepare(page);
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "true");
+  await page.locator("#add-pick").click();
+  const route = catalog.routes.findIndex(r => r.line === "4");
+  await page.locator("#route-select").selectOption({value:String(route)});
+  await chooseStop(page, route);
+  await page.locator("#save-pick").click();
+  const invalid = "ą".repeat(13); // HTML character limit permits it; Rust's 24-byte name does not.
+  await page.locator("#group-name").fill(invalid);
+  await expect(page.locator("#device-canvas")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.locator("#preview-state")).toHaveText("Complete valid group settings to resume the demo.");
+  await page.clock.fastForward(2000); // Four refresh intervals must not republish the old snapshot.
+  for (const key of ["e", "1", "+", "Enter"]) await page.locator("#device-canvas").dispatchEvent("keydown", {key});
+  await expect(page.locator("#preview-apply")).toBeDisabled();
+  await expect(page.locator("#preview-state")).toHaveText("Complete valid group settings to resume the demo.");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "false");
+  await expect(page.locator("#group-name")).toHaveValue(invalid);
+  await page.locator("#group-name").fill("Valid new group");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "true");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("aria-disabled", "false");
+  await expect(page.locator("#preview-group")).toHaveText("Valid new group");
+  await expect(page.locator("#preview-line")).toHaveText("4");
+  expect(moduleRequests).toBe(1);
+});

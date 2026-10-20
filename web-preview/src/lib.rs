@@ -1,8 +1,5 @@
 #![no_std]
 //! Browser hardware adapter. UI, catalogue, settings and pixels are shared with firmware.
-// Native cdylib/tests use the host panic implementation. WASM has no allocator/imports.
-#[cfg(not(target_arch = "wasm32"))]
-extern crate std;
 
 use core::convert::Infallible;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};

@@ -46,6 +46,7 @@ git diff --exit-code -- display/tests/fixtures
 rustup target add riscv32imac-unknown-none-elf
 cargo check -p gtfs --lib --locked --target riscv32imac-unknown-none-elf
 cargo check -p timetable-display --lib --locked --target riscv32imac-unknown-none-elf
+cargo check -p timetable-web-preview --lib --locked --target riscv32imac-unknown-none-elf
 cargo fmt --manifest-path checks/ram/Cargo.toml --check
 python3 checks/check_ram.py
 cargo run -p gtfs --release --example bench_stream -- gtfs/tests/fixtures/gtfs.zip 4 20261017 S1 1

@@ -12,5 +12,6 @@
   ],
   "median_ns_per_frame": 134255.37304687506,
   "method": "Node V8, Rust1.95 wasm release,240x240RGBA,512frames/round after64warmup, fixed real renderer with sample group; excludes Canvas presentation/network download/JS snapshots",
-  "limits": "Host observations, not physical ESP32 performance or a browser latency guarantee"
+  "limits": "Host observations, not physical ESP32 performance or a browser latency guarantee",
+  "candidate_commit": "7acaa3fff9e8903bc6222519a6a4fb00d7c7049f"
 }

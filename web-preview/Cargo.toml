@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 timetable-display = { path = "../display" }

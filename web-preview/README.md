@@ -24,7 +24,9 @@ Demo saves update its own committed settings. **Use demo changes** explicitly
 copies groups and automatic mode to the installer; **Reset demo** loads the
 installer settings again. Drafts stay provisional. Actual Wi-Fi/password/power
 settings never enter WASM and are preserved when applying a demo save. A failed
-module load leaves the installer usable and has its own retry.
+module load leaves the installer usable and has its own retry. Invalid installer
+drafts suspend rendering and interaction until a valid configuration succeeds,
+so a stale demo can never overwrite the latest group edits.
 
 ## Build and test
 
@@ -39,6 +41,8 @@ npm --prefix web test
 UI reimplementation is needed. The small synchronous ABI has bounded 8 KiB
 input buffer and 16 KiB output buffer, scalar gestures and a fixed RGBA framebuffer. Settings are
 parsed and validated provisionally before replacing Config and App together.
+The ordinary library is an rlib and passes bare-metal no_std checks. The browser
+build explicitly requests a cdylib; no host std dependency is needed.
 The module has no host imports/callbacks, threads, shared memory or allocator.
 Its private UnsafeCell state is accessed only during non-reentrant synchronous
 exports; JS reads views between calls and reacquires them every time.

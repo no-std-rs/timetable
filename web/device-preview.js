@@ -10,6 +10,7 @@ export class DevicePreview {
     this.pending = null;
     this.generation = 0;
     this.visible = true;
+    this.suspend();
     this.bindInput();
     this.observer = new IntersectionObserver(([entry]) => { this.visible = entry.isIntersecting; });
     this.observer.observe(canvas);
@@ -17,6 +18,15 @@ export class DevicePreview {
       if (this.api && this.visible && !document.hidden) this.paint();
     }, 500);
   }
+  suspend() {
+    this.configured = false;
+    this.generation++;
+    this.press = null;
+    this.canvas.inert = true;
+    this.canvas.dataset.ready = "false";
+    this.canvas.setAttribute("aria-disabled", "true");
+  }
+  fail(reason) { this.suspend(); this.onError(reason); }
   now() { return BigInt(Math.floor(Date.now() / 1000)); }
   async load() {
     if (this.loading) return this.loading;
@@ -30,8 +40,7 @@ export class DevicePreview {
         return true;
       } catch {
         this.api = null;
-        this.canvas.dataset.ready = "false";
-        this.onError();
+        this.fail("download");
         return false;
       } finally { this.loading = null; }
     })();
@@ -40,12 +49,16 @@ export class DevicePreview {
   configure({ groups, automatic, active }) {
     // No SSID/password/battery data crosses into WASM, including in error paths.
     this.pending = structuredClone({ groups, automatic, active });
+    // Cancel queued refreshes and reject stale interaction before validation.
+    this.suspend();
     if (!this.api) return;
     const json = this.encoder.encode(JSON.stringify({ wifi_ssid: "Browser demo", wifi_password: "", automatic, groups }));
-    if (json.length > this.api.preview_capacity()) { this.onError(); return; }
+    if (json.length > this.api.preview_capacity()) { this.fail("settings"); return; }
     new Uint8Array(this.api.memory.buffer, this.api.preview_input(), json.length).set(json);
-    if (!this.api.preview_configure(json.length, this.now(), active)) { this.onError(); return; }
-    this.generation++;
+    if (!this.api.preview_configure(json.length, this.now(), active)) { this.fail("settings"); return; }
+    this.configured = true;
+    this.canvas.inert = false;
+    this.canvas.setAttribute("aria-disabled", "false");
     this.api.preview_mode(this.mode, this.now());
     this.paint();
   }
@@ -55,7 +68,7 @@ export class DevicePreview {
     return JSON.parse(this.decoder.decode(new Uint8Array(this.api.memory.buffer, this.api.preview_output(), length)));
   }
   paint() {
-    if (!this.api) return;
+    if (!this.api || !this.configured) return;
     try {
       if (!this.api.preview_render(this.now(), Math.floor(performance.now() / 500) % 8)) return;
       // Reacquire the view for every call; do not keep stale linear-memory views.
@@ -66,15 +79,15 @@ export class DevicePreview {
       this.canvas.dataset.screen = ["board", "groups", "picks", "routes", "stops", "walk", "freshness"][state.screen];
       this.canvas.dataset.clock = state.clock_known ? "known" : "pending";
       this.onSnapshot(state);
-    } catch { this.onError(); }
+    } catch { this.fail("render"); }
   }
   setMode(mode) {
     this.mode = Number(mode);
     this.generation++;
-    if (this.api) { this.api.preview_mode(this.mode, this.now()); this.paint(); }
+    if (this.api && this.configured) { this.api.preview_mode(this.mode, this.now()); this.paint(); }
   }
   gesture(x, y, dx = 0, dy = 0, held = false) {
-    if (!this.api) return;
+    if (!this.api || !this.configured) return;
     const action = this.api.preview_gesture(Math.round(x), Math.round(y), Math.round(dx), Math.round(dy), Number(held));
     this.paint();
     if (action >= 2) this.onSaved(this.snapshot());
@@ -96,7 +109,7 @@ export class DevicePreview {
       return [(event.clientX - box.left) * 240 / box.width, (event.clientY - box.top) * 240 / box.height];
     };
     this.canvas.addEventListener("pointerdown", event => {
-      if (event.button !== 0 || this.press) return;
+      if (!this.configured || event.button !== 0 || this.press) return;
       event.preventDefault();
       this.canvas.focus({ preventScroll: true });
       this.press = { id: event.pointerId, start: point(event), time: performance.now() };
@@ -112,6 +125,7 @@ export class DevicePreview {
     for (const name of ["pointercancel", "lostpointercapture"]) this.canvas.addEventListener(name, () => { this.press = null; });
     this.canvas.addEventListener("contextmenu", event => event.preventDefault());
     this.canvas.addEventListener("keydown", event => {
+      if (!this.configured) return;
       const screen = this.api ? this.snapshot().screen : 0;
       const commands = {
         ArrowLeft: [120, 120, -80, 0], ArrowRight: [120, 120, 80, 0],

@@ -33,5 +33,6 @@
     "candidate": 194911
   },
   "all_screen_checksums_equal": true,
-  "limits": "Host CPU only, not physical ESP32 throughput/current or browser performance."
+  "limits": "Host CPU only, not physical ESP32 throughput/current or browser performance.",
+  "candidate_commit": "7acaa3fff9e8903bc6222519a6a4fb00d7c7049f"
 }

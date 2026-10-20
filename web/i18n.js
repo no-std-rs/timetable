@@ -1,5 +1,6 @@
 // English message keys keep validation modules independent of browser state.
 export const polish = {
+  "Complete valid group settings to resume the demo.": "Popraw ustawienia grup, aby wznowić demo.",
   "Keyboard: 1–4 choose rows; in the walking editor, 1/2/3 choose walk/spread/margin, +/- adjust, Enter saves and Esc cancels.": "Klawiatura: 1–4 wybiera wiersz; w edytorze marszu 1/2/3 wybiera czas/rozrzut/zapas, +/- zmienia wartość, Enter zapisuje, Esc anuluje.",
   "Same Rust app as the device. Sample departures.": "Ta sama aplikacja Rust co na urządzeniu. Przykładowe odjazdy.",
   "Tap, hold to edit, swipe to change groups. Keyboard: arrows, E to edit, Esc to go back.": "Dotknij, przytrzymaj, aby edytować, przesuń, aby zmienić grupę. Klawiatura: strzałki, E — edycja, Esc — powrót.",
