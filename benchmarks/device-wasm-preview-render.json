@@ -1,0 +1,38 @@
+{
+  "base": "177587f6b9e78fb92170fd5e17ca0fafc850cd5b",
+  "method": "Five paired pinned Rust1.95 release host runs,512 frames/screen,512 events,15tiles; excludes SPI; baseline binary built before App::featured extraction, same source tree path and profile",
+  "rounds": [
+    {
+      "round": 1,
+      "baseline": "screen,frames,ns_per_frame,checksum\nBoard,512,208117,8ef7cbe12102c1da\nGroups,512,91056,797632645b0c4508\nPicks,512,121403,a8b602d3d22e2408\nRoutes,512,129648,9a08ce3bcb39f3b6\nStops,512,393697,3003dc5585112562\nWalk,512,108488,eef7e275cb19bce1\n",
+      "candidate": "screen,frames,ns_per_frame,checksum\nBoard,512,195368,8ef7cbe12102c1da\nGroups,512,94821,797632645b0c4508\nPicks,512,102779,a8b602d3d22e2408\nRoutes,512,137336,9a08ce3bcb39f3b6\nStops,512,393094,3003dc5585112562\nWalk,512,108459,eef7e275cb19bce1\n"
+    },
+    {
+      "round": 2,
+      "baseline": "screen,frames,ns_per_frame,checksum\nBoard,512,194216,8ef7cbe12102c1da\nGroups,512,106966,797632645b0c4508\nPicks,512,91171,a8b602d3d22e2408\nRoutes,512,105344,9a08ce3bcb39f3b6\nStops,512,489420,3003dc5585112562\nWalk,512,112700,eef7e275cb19bce1\n",
+      "candidate": "screen,frames,ns_per_frame,checksum\nBoard,512,182145,8ef7cbe12102c1da\nGroups,512,99348,797632645b0c4508\nPicks,512,96524,a8b602d3d22e2408\nRoutes,512,117502,9a08ce3bcb39f3b6\nStops,512,393538,3003dc5585112562\nWalk,512,124794,eef7e275cb19bce1\n"
+    },
+    {
+      "round": 3,
+      "baseline": "screen,frames,ns_per_frame,checksum\nBoard,512,192436,8ef7cbe12102c1da\nGroups,512,82672,797632645b0c4508\nPicks,512,98602,a8b602d3d22e2408\nRoutes,512,126319,9a08ce3bcb39f3b6\nStops,512,439450,3003dc5585112562\nWalk,512,108741,eef7e275cb19bce1\n",
+      "candidate": "screen,frames,ns_per_frame,checksum\nBoard,512,179800,8ef7cbe12102c1da\nGroups,512,101626,797632645b0c4508\nPicks,512,82385,a8b602d3d22e2408\nRoutes,512,98736,9a08ce3bcb39f3b6\nStops,512,385330,3003dc5585112562\nWalk,512,128371,eef7e275cb19bce1\n"
+    },
+    {
+      "round": 4,
+      "baseline": "screen,frames,ns_per_frame,checksum\nBoard,512,221129,8ef7cbe12102c1da\nGroups,512,105395,797632645b0c4508\nPicks,512,100937,a8b602d3d22e2408\nRoutes,512,126879,9a08ce3bcb39f3b6\nStops,512,439113,3003dc5585112562\nWalk,512,136677,eef7e275cb19bce1\n",
+      "candidate": "screen,frames,ns_per_frame,checksum\nBoard,512,194911,8ef7cbe12102c1da\nGroups,512,88472,797632645b0c4508\nPicks,512,103230,a8b602d3d22e2408\nRoutes,512,124003,9a08ce3bcb39f3b6\nStops,512,321013,3003dc5585112562\nWalk,512,98480,eef7e275cb19bce1\n"
+    },
+    {
+      "round": 5,
+      "baseline": "screen,frames,ns_per_frame,checksum\nBoard,512,232682,8ef7cbe12102c1da\nGroups,512,85440,797632645b0c4508\nPicks,512,107952,a8b602d3d22e2408\nRoutes,512,140791,9a08ce3bcb39f3b6\nStops,512,359953,3003dc5585112562\nWalk,512,99896,eef7e275cb19bce1\n",
+      "candidate": "screen,frames,ns_per_frame,checksum\nBoard,512,197041,8ef7cbe12102c1da\nGroups,512,89731,797632645b0c4508\nPicks,512,101338,a8b602d3d22e2408\nRoutes,512,108350,9a08ce3bcb39f3b6\nStops,512,315666,3003dc5585112562\nWalk,512,99077,eef7e275cb19bce1\n"
+    }
+  ],
+  "board_ns_median": {
+    "baseline": 208117,
+    "candidate": 194911
+  },
+  "all_screen_checksums_equal": true,
+  "limits": "Host CPU only, not physical ESP32 throughput/current or browser performance.",
+  "candidate_commit": "7acaa3fff9e8903bc6222519a6a4fb00d7c7049f"
+}

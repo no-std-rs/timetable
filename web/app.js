@@ -1,7 +1,8 @@
+import { DevicePreview } from "./device-preview.js";
 import { loadDraft, saveDraft, forgetDraft, REMEMBER_KEY } from "./settings-store.js";
 import { SerialLogs } from "./serial-logs.js";
 import { t, language, initLanguage, polish } from "./i18n.js";
-import { encodeSettingsPartition, manifestWithSettings, validateConfig, walkingChance } from "./config.js";
+import { encodeSettingsPartition, manifestWithSettings, validateConfig } from "./config.js";
 import { catalogIndex } from "./catalog-search.js";
 import { pathGraph } from "./route-topology.js";
 initLanguage(document);
@@ -43,11 +44,11 @@ function forgetInstall() {
   $("install-area").hidden = true;
   for (const u of state.urls.splice(0)) URL.revokeObjectURL(u);
 }
-function changed() {
+function changed(refreshPreview = true) {
   state.undo = null;
   $("undo-area").hidden = true;
   forgetInstall();
-  preview();
+  if (refreshPreview) preview();
   persistSettings();
   if (state.release) message("Changes applied. Prepare when you’re ready.");
 }
@@ -68,29 +69,48 @@ $("undo-removal").addEventListener("click", () => {
   changed();
   $("group-name").focus();
 });
+let demoSaved = null;
+const devicePreview = new DevicePreview($("device-canvas"), {
+  error: (reason) => {
+    copy("preview-state", reason === "settings" ? "Complete valid group settings to resume the demo." : "Demo unavailable. Your installer settings are safe.");
+    $("preview-retry").hidden = reason === "settings";
+  },
+  saved: (snapshot) => { demoSaved = snapshot; $("preview-apply").disabled = false; copy("preview-state", "Demo saved. Apply it below to use these settings."); },
+  snapshot: (snapshot) => {
+    const g = snapshot.config.groups[snapshot.group], p = snapshot.next?.pick;
+    $("preview-group").textContent = g.name;
+    $("preview-mode").textContent = snapshot.mode === 0 ? (snapshot.manual ? t("MANUAL") : t("SCHEDULED")) : t(["Connected", "Cached startup / waiting for NTP", "First Wi-Fi connection", "NTP synchronization", "Timetable update", "Offline"][snapshot.mode]);
+    $("preview-line").textContent = p?.line ?? "";
+    $("preview-direction").textContent = p?.headsign || t("Either direction");
+    $("preview-stop").textContent = p?.stop_name ?? "";
+    const next = snapshot.next;
+    $("preview-leave").textContent = !next ? t("Add a line and stop below.") : next.left === null ? t("Saved times / waiting for NTP") : next.chance === 0 ? t("Not enough walk time") : next.left > 0 ? t("Leave in {minutes} min", { minutes: Math.ceil(next.left / 60) }) : t("Leave now");
+    $("preview-walk").textContent = next?.chance != null ? t("{minutes}m walk · {chance}% walk est.", { minutes: p.walk, chance: next.chance }) : "";
+    $("preview-freshness").textContent = snapshot.loaded ? t("Sample timetable / source date unknown") : "";
+    $("device-canvas").setAttribute("aria-label", `${t("Interactive device demo")}: ${t(["Board", "Groups", "Choices", "Lines", "Stops", "Walking time", "Timetable age"][snapshot.screen])}`);
+    if (!demoSaved) copy("preview-state", "Wi-Fi and NTP simulated. Sample departures.");
+    $("preview-retry").hidden = true;
+    $("preview-scenario").value = String(snapshot.mode);
+  },
+});
 function preview() {
-  const g = group(), p = g.picks[0];
-  $("preview-group").textContent = g.name || t("Your group");
-  $("preview-journey").hidden = !p;
-  $("preview-empty").hidden = !!p;
-  $("preview-freshness").hidden = !p;
-  $("preview-mode").textContent = p ? `09:41 / ${state.automatic && g.days ? t("SCHEDULED") : t("MANUAL")}` : t("YOUR GROUP / NO STOPS");
-  if (!p) return;
-  $("preview-line").textContent = p.line;
-  $("preview-direction").textContent = p.headsign || t("Either direction");
-  $("preview-stop").textContent = p.stop_name;
-  const left = 12 - p.walk - p.margin;
-  const chance = walkingChance(12, p.walk, p.spread, p.margin);
-  $("preview-leave").textContent = chance === 0 ? t("Not enough walk time") : left > 0 ? t("Leave in {minutes} min", { minutes: left }) : t("Leave now");
-  $("preview-leave").classList.toggle("urgent", left <= 0);
-  $("preview-walk").textContent = t("{minutes}m walk · {chance}% walk est.", { minutes: p.walk, chance });
-  const next = g.picks[1] ?? p;
-  $("preview-next-line").textContent = `${next.line} \xB7 ${next.headsign || t("Either direction")}`;
-  $("preview-last-line").textContent = `${p.line} \xB7 ${p.headsign || t("Either direction")}`;
-  $("preview-third-line").textContent = `${next.line} \xB7 ${next.headsign || t("Either direction")}`;
-  $("preview-fourth-line").textContent = `${p.line} \xB7 ${p.headsign || t("Either direction")}`;
-  $("preview-fifth-line").textContent = `${next.line} \xB7 ${next.headsign || t("Either direction")}`;
+  demoSaved = null;
+  $("preview-apply").disabled = true;
+  devicePreview.configure({ groups: state.groups, automatic: state.automatic, active: state.active });
 }
+$("preview-retry").addEventListener("click", () => devicePreview.load());
+$("preview-scenario").addEventListener("change", event => devicePreview.setMode(event.target.value));
+$("preview-reset").addEventListener("click", () => { devicePreview.mode = 0; preview(); });
+$("preview-apply").addEventListener("click", () => {
+  if (!demoSaved) return;
+  state.groups = structuredClone(demoSaved.config.groups);
+  state.automatic = demoSaved.config.automatic;
+  state.active = demoSaved.group;
+  renderGroup();
+  changed();
+});
+devicePreview.load();
+
 function renderTabs() {
   const tabs = $("group-tabs");
   tabs.replaceChildren();
@@ -183,7 +203,8 @@ function renderGroup(preserveInputs = false) {
   });
   $("add-pick").hidden = g.picks.length >= 4;
   $("add-pick").disabled = !state.catalog;
-  preview();
+  if (!preserveInputs) preview();
+  else devicePreview.paint();
   persistSettings();
 }
 $("group-name").addEventListener("input", () => {
@@ -217,10 +238,7 @@ for (const id of ["start-time", "end-time"]) $(id).addEventListener("input", () 
   if ($(id).value) group()[id === "start-time" ? "start" : "end"] = minute($(id).value);
   changed();
 });
-$("preview-group").addEventListener("click", () => {
-  state.active = (state.active + 1) % state.groups.length;
-  renderGroup();
-});
+
 $("add-pick").addEventListener("click", () => openPick(null));
 $("cancel-pick").addEventListener("click", () => $("pick-dialog").close());
 $("show-password").addEventListener("click", () => {
@@ -230,7 +248,8 @@ $("show-password").addEventListener("click", () => {
   $("show-password").setAttribute("aria-label", show ? t("Hide password") : t("Show password"));
   $("show-password").setAttribute("aria-pressed", String(show));
 });
-for (const id of ["wifi-ssid", "wifi-password", "battery-mode"]) $(id).addEventListener("input", changed);
+// These device-only preferences invalidate the USB payload, not the demo's edits.
+for (const id of ["wifi-ssid", "wifi-password", "battery-mode"]) $(id).addEventListener("input", () => changed(false));
 const picker = { group: null, stop: null, direction: -1, choice: "", choices: [], preferredStop: null, matches: [], active: -1, path: null };
 const stopLabel = (i) => state.index.groups[i].name;
 function closeStops() {

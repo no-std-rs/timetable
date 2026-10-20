@@ -4,12 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const web = path.join(root, "web");
-const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".bin": "application/octet-stream", ".svg": "image/svg+xml" };
+const mime = { ".wasm": "application/wasm", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".bin": "application/octet-stream", ".svg": "image/svg+xml" };
 http.createServer(async (req, res) => {
   try {
     const pathname = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
     const name = pathname === "/" ? "index.html" : pathname.slice(1);
-    const filename = name === "catalog.json" ? path.join(root, "catalog/catalog.json") : name === "installer.js" ? path.join(web, "dist/installer.js") : path.resolve(web, name);
+    const filename = name === "catalog.json" ? path.join(root, "catalog/catalog.json") : ["installer.js", "device-preview.wasm"].includes(name) ? path.join(web, "dist", name) : path.resolve(web, name);
     if (!filename.startsWith(root + path.sep)) throw new Error("Invalid path");
     let data;
     try {

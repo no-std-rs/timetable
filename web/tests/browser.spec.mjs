@@ -37,14 +37,8 @@ test("groups, directions and walking times update a clean responsive preview", a
   await page.getByRole("button", { name: "Save choice" }).click();
   await expect(page.locator("#preview-line")).toHaveText("4");
   await expect(page.locator("#preview-leave")).toHaveText("Leave in 2 min");
-  const rows = page.locator(".device-next");
-  await expect(rows).toHaveCount(5);
-  for (const row of await rows.all()) {
-    await expect(row).toBeVisible();
-  }
-  for (const id of ["preview-next-line", "preview-last-line", "preview-third-line", "preview-fourth-line", "preview-fifth-line"]) {
-    await expect(page.locator(`#${id}`)).toHaveText(/^4 · /);
-  }
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "true");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "board");
   await page.locator("#group-name").fill("Work / morning");
   await expect(page.locator("#preview-group")).toHaveText("Work / morning");
   await page.locator("#scheduled").check();
@@ -130,8 +124,8 @@ test("history restoration preserves group controls and USB settings while cleari
 });
 test("searches keep choices explicit, scoped to the line and direction", async ({ page }, info) => {
   await prepare(page);
-  await expect(page.locator("#preview-empty")).toBeVisible();
-  await expect(page.locator("#preview-journey")).toBeHidden();
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "true");
+  await expect(page.locator("#preview-line")).toHaveText("");
   await page.locator("#add-pick").click();
   await expect(page.locator("#save-pick")).toBeDisabled();
   await page.locator("#route-search").fill("4");
@@ -151,9 +145,7 @@ test("searches keep choices explicit, scoped to the line and direction", async (
   await page.locator("#direction-select").selectOption(`${stop}:0`);
   await page.screenshot({ path: `/tmp/timetable-picker-${info.project.name}.png` });
   await page.locator("#save-pick").click();
-  await expect(page.locator("#preview-empty")).toBeHidden();
   await expect(page.locator("#preview-line")).toHaveText("4");
-  await expect(page.locator("#preview-next-line")).toContainText("4 ·");
   await expect(page.locator("#preview-mode")).toContainText("MANUAL");
   await expect(page.locator(".pick-edit")).toBeFocused();
   await page.locator(".pick-edit").click();
@@ -272,7 +264,7 @@ test("keyboard groups and undo retain selections without overwriting later edits
   await expect(page.locator(".pick-edit")).toHaveCount(1);
   await page.locator(".pick-edit").click();
   await page.locator("#delete-pick").click();
-  await expect(page.locator("#preview-empty")).toBeVisible();
+  await expect(page.locator("#preview-line")).toHaveText("");
   await page.locator("#undo-removal").click();
   await expect(page.locator("#preview-line")).toHaveText("4");
   await page.locator("#remove-group").click();
@@ -309,7 +301,7 @@ test("a display name that is too long is shown at its group before installation"
   await expect(page.locator("#install-area")).toBeVisible();
 });
 
-test("walking preview distinguishes a possible rush from an impossible walk", async ({ page }) => {
+test("shared Rust preview prioritizes reachable departures and handles impossible walks", async ({ page }) => {
   await prepare(page);
   await page.locator("#add-pick").click();
   const route = catalog.routes.findIndex((r) => r.line === "4");
@@ -320,10 +312,11 @@ test("walking preview distinguishes a possible rush from an impossible walk", as
   await page.locator("#walk-spread").fill("2");
   await page.locator("#walk-margin").fill("1");
   await page.locator("#save-pick").click();
-  await expect(page.locator("#preview-leave")).toHaveText("Leave now");
-  await expect(page.locator("#preview-walk")).toContainText("25% walk est.");
+  await expect(page.locator("#preview-leave")).toHaveText("Leave in 8 min");
+  await expect(page.locator("#preview-walk")).toContainText("100% walk est.");
   await page.locator(".pick-edit").click();
   await page.locator("#walk-spread").fill("0");
+  await page.locator("#walk-minutes").fill("60");
   await page.locator("#save-pick").click();
   await expect(page.locator("#preview-leave")).toHaveText("Not enough walk time");
   await expect(page.locator("#preview-walk")).toContainText("0% walk est.");
@@ -399,11 +392,16 @@ test("imported manual mode can resume scheduling, roundtrip and undo", async ({ 
   await page.locator("#undo-removal").click();
   await expect(page.locator("#group-name")).toHaveValue("Before import");
   await expect(page.locator("#automatic")).toBeChecked();
-  await expect(page.locator("#preview-empty")).toBeVisible();
+  await expect(page.locator("#preview-line")).toHaveText("");
   // Import the same file again, then explicitly resume all saved schedules.
   await page.locator("#import-groups").setInputFiles({ name: "manual.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(exported)) });
   await expect(page.locator("#automatic")).not.toBeChecked();
   await page.locator("#automatic").check();
+  // The selected-group preview begins with the device's manual override.
+  await expect(page.locator("#preview-mode")).toContainText("MANUAL");
+  await deviceTap(page,120,24);
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "groups");
+  await deviceTap(page,120,212); // Resume automatic schedules in the real UI.
   await expect(page.locator("#preview-mode")).toContainText("SCHEDULED");
   await expect(page.locator("#undo-area")).toBeHidden();
   await page.locator("#prepare").click();
@@ -627,4 +625,138 @@ test("disconnect waits for a pending USB open before enabling installation", asy
   await expect(page.locator("#install-action")).toBeEnabled();
   await expect(page.locator("#logs-status")).toContainText("USB disconnected");
   expect(await page.evaluate(() => window.logCalls)).toEqual(["close"]);
+});
+
+async function deviceTap(page, x, y, held = false) {
+  const canvas = page.locator("#device-canvas");
+  await canvas.scrollIntoViewIfNeeded();
+  const box = await canvas.boundingBox();
+  await page.mouse.move(box.x + x * box.width / 240, box.y + y * box.height / 240);
+  await page.mouse.down();
+  if (held) await page.waitForTimeout(750);
+  await page.mouse.up();
+}
+test("real WASM touch edits are provisional, apply preserves Wi-Fi, and reset restores installer settings", async ({ page }, info) => {
+  await page.addInitScript(() => {
+    const instantiate = WebAssembly.instantiate;
+    WebAssembly.instantiate = async (...args) => {
+      const result = await instantiate(...args);
+      window.previewProbe = result.instance.exports;
+      return result;
+    };
+  });
+  await prepare(page);
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "true");
+  await page.locator("#wifi-ssid").fill("private-demo-test");
+  await page.locator("#wifi-password").fill("private-demo-password");
+  await page.locator("#battery-mode").check();
+  await page.locator("#add-pick").click();
+  const route = catalog.routes.findIndex(r => r.line === "4");
+  await page.locator("#route-select").selectOption({value:String(route)});
+  await chooseStop(page, route);
+  await page.locator("#walk-minutes").fill("6");
+  await page.locator("#save-pick").click();
+  await deviceTap(page,120,120,true);
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "picks");
+  await deviceTap(page,120,65);
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "walk");
+  await deviceTap(page,180,80);
+  await deviceTap(page,60,32); // Cancel, without Save.
+  await page.locator(".preview-controls summary").click();
+  await expect(page.locator("#preview-apply")).toBeDisabled();
+  await deviceTap(page,120,65);
+  await deviceTap(page,180,80);
+  await deviceTap(page,180,200); // Save inside the demo.
+  await expect(page.locator("#preview-apply")).toBeEnabled();
+  await expect(page.locator(".pick-walk")).toHaveText("6m walk");
+  // Device-only settings must preserve the saved demo until explicitly applied.
+  await page.locator("#wifi-ssid").fill("new-private-demo-test");
+  await page.locator("#wifi-password").fill("new-private-demo-password");
+  await page.locator("#battery-mode").uncheck();
+  await expect(page.locator("#preview-apply")).toBeEnabled();
+  await expect(page.locator("#preview-walk")).toContainText("7m walk");
+  await page.locator("#preview-apply").click();
+  await expect(page.locator(".pick-walk")).toHaveText("7m walk");
+  await expect(page.locator("#wifi-ssid")).toHaveValue("new-private-demo-test");
+  await expect(page.locator("#wifi-password")).toHaveValue("new-private-demo-password");
+  await expect(page.locator("#battery-mode")).not.toBeChecked();
+  const mocked = await page.evaluate(() => {
+    const api=window.previewProbe, length=api.preview_snapshot();
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(api.memory.buffer,api.preview_output(),length))).config;
+  });
+  expect(mocked.wifi_ssid).toBe("Browser demo");
+  expect(mocked.wifi_password).toBe("");
+  expect(mocked.battery).toBeUndefined();
+  await deviceTap(page,120,120,true);
+  await deviceTap(page,120,65);
+  await deviceTap(page,180,80);
+  await deviceTap(page,180,200);
+  await expect(page.locator("#preview-walk")).toContainText("8m walk");
+  await page.locator("#preview-reset").click();
+  await expect(page.locator("#preview-walk")).toContainText("7m walk");
+  await expect(page.locator("#preview-apply")).toBeDisabled();
+  await page.locator("#preview-scenario").selectOption("1");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-clock", "pending");
+  await expect(page.locator("#preview-leave")).toHaveText("Saved times / waiting for NTP");
+  await page.locator("#preview-scenario").selectOption("2");
+  await expect(page.locator("#preview-line")).toHaveText("");
+  await page.locator("#preview-scenario").selectOption("0");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-clock", "known");
+  await page.locator("#device-canvas").focus();
+  await page.keyboard.press("e");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "picks");
+  await page.keyboard.press("1");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "walk");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("aria-label", "Interactive device demo: Walking time");
+  await page.locator(".masthead [data-language=pl]").click();
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "walk");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("aria-label", "Interaktywne demo urządzenia: Czas dojścia");
+  await expect(page.locator("#preview-reset")).toHaveText("Zresetuj demo");
+  await page.locator("#device-canvas").focus();
+  await page.keyboard.press("+");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-screen", "board");
+  await expect(page.locator("#preview-apply")).toBeEnabled();
+  await page.screenshot({ path: `/tmp/timetable-wasm-${info.project.name}.png`, fullPage:true });
+});
+test("a failed WASM download leaves installer usable and retries without losing configuration", async ({ page }) => {
+  let failures = 1;
+  await page.route("**/device-preview.wasm", route => failures-- > 0 ? route.fulfill({status:503}) : route.continue());
+  await prepare(page);
+  await expect(page.locator("#prepare")).toBeEnabled();
+  await expect(page.locator("#preview-retry")).toBeVisible();
+  await page.locator("#group-name").fill("Keep my group");
+  await page.locator("#preview-retry").click();
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "true");
+  await expect(page.locator("#preview-group")).toHaveText("Keep my group");
+  await expect(page.locator("#group-name")).toHaveValue("Keep my group");
+});
+
+test("invalid installer drafts suspend stale WASM interactions until valid settings return", async ({ page }) => {
+  await page.clock.install();
+  let moduleRequests = 0;
+  page.on("request", request => { if (request.url().endsWith("device-preview.wasm")) moduleRequests++; });
+  await prepare(page);
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "true");
+  await page.locator("#add-pick").click();
+  const route = catalog.routes.findIndex(r => r.line === "4");
+  await page.locator("#route-select").selectOption({value:String(route)});
+  await chooseStop(page, route);
+  await page.locator("#save-pick").click();
+  const invalid = "ą".repeat(13); // HTML character limit permits it; Rust's 24-byte name does not.
+  await page.locator("#group-name").fill(invalid);
+  await expect(page.locator("#device-canvas")).toHaveAttribute("aria-disabled", "true");
+  await expect(page.locator("#preview-state")).toHaveText("Complete valid group settings to resume the demo.");
+  await page.clock.fastForward(2000); // Four refresh intervals must not republish the old snapshot.
+  for (const key of ["e", "1", "+", "Enter"]) await page.locator("#device-canvas").dispatchEvent("keydown", {key});
+  await expect(page.locator("#preview-apply")).toBeDisabled();
+  await expect(page.locator("#preview-state")).toHaveText("Complete valid group settings to resume the demo.");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "false");
+  await expect(page.locator("#group-name")).toHaveValue(invalid);
+  await page.locator("#group-name").fill("Valid new group");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("data-ready", "true");
+  await expect(page.locator("#device-canvas")).toHaveAttribute("aria-disabled", "false");
+  await expect(page.locator("#preview-group")).toHaveText("Valid new group");
+  await expect(page.locator("#preview-line")).toHaveText("4");
+  expect(moduleRequests).toBe(1);
 });

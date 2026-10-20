@@ -13,7 +13,9 @@ on every connection. It also offers [battery mode](docs/battery.md): sleep when 
 retained departures and reconnect Wi-Fi only for refreshes. The
 [`timetable-display`](display/) crate contains its allocation-free model,
 streaming query builder and tile renderer; [`web/`](web/) contains the matching
-porcelain, gold and chilli-red installer.
+porcelain, gold and chilli-red installer. Its interactive little screen runs
+the same Rust interface through [WebAssembly](web-preview/), with visibly mocked
+Wi-Fi/NTP and sample departures.
 
 The [`gtfs`](gtfs/) crate streams GTFS ZIP archives, lists routes and stops, and
 filters departures with caller-owned buffers. Poznań is the first verified
@@ -44,6 +46,7 @@ git diff --exit-code -- display/tests/fixtures
 rustup target add riscv32imac-unknown-none-elf
 cargo check -p gtfs --lib --locked --target riscv32imac-unknown-none-elf
 cargo check -p timetable-display --lib --locked --target riscv32imac-unknown-none-elf
+cargo check -p timetable-web-preview --lib --locked --target riscv32imac-unknown-none-elf
 cargo fmt --manifest-path checks/ram/Cargo.toml --check
 python3 checks/check_ram.py
 cargo run -p gtfs --release --example bench_stream -- gtfs/tests/fixtures/gtfs.zip 4 20261017 S1 1

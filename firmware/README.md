@@ -30,7 +30,9 @@ installer address and setup steps.
 [Offline board with retry](../docs/previews/device-offline.png) ·
 [Check and source timestamps](../docs/previews/device-freshness.png).
 These previews use illustrative departures; the device image comes from the
-actual Rust renderer, not a photo of hardware.
+actual Rust renderer, not a photo of hardware. The installer now runs this same
+interface interactively through [WASM](../web-preview/README.md), with labelled
+sample departures and simulated Wi-Fi/NTP.
 
 ## Install and use
 
@@ -249,6 +251,7 @@ From the repository root, with `espflash 4.4.0` installed:
 
 ```sh
 sh tools/build-device-artifact.sh
+rustup target add wasm32-unknown-unknown --toolchain 1.95.0
 npm --prefix web ci
 npm --prefix web run build
 npm --prefix web test

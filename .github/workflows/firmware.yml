@@ -52,6 +52,8 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Install the pinned WebAssembly target
+        run: rustup target add wasm32-unknown-unknown --toolchain 1.95.0
       - name: Build and test the installer
         working-directory: web
         run: |

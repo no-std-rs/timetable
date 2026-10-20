@@ -803,3 +803,41 @@ cache validation/replay separately (**9,008 / 9,888 B**) and TLS at **44,768 B**
 each with 4,096 B headroom within the 49,192 B available stack. Cache context is
 borrowed between futures; no buffer, query capacity or memory allowance changed.
 These are linked/audited bounds, not a complete call graph or hardware high-water.
+
+
+## Shared Rust UI in WebAssembly
+
+The installer uses the actual `timetable-display` App, touch state machine,
+catalogue and renderer via a separate allocation-free `no_std` browser adapter.
+It paints a 240×240 RGBA canvas, with browser UTC and visibly simulated
+Wi-Fi/NTP/update/offline states. This is an interactive device demo with sample
+departures, not a live feed client. Only groups and automatic switching enter
+WASM; actual Wi-Fi credentials and power preferences stay in the installer.
+
+The module has no host imports, threads or allocator. Its private linear memory
+is fixed at **2,097,152 B**, including stack, embedded catalogue, a **230,400 B**
+RGBA framebuffer, **8 KiB** input and **16 KiB** snapshot output. This is browser
+adapter memory, separate from the unchanged device limits and from total
+browser/JavaScript-engine memory. Rendering pauses outside the viewport or in
+hidden tabs. Active demos redraw at most twice per second.
+
+[Actual WASM observations](benchmarks/web-wasm-preview.json) record Node/V8
+compilation/instantiation and five warm render rounds, excluding Canvas
+presentation, JSON snapshots and network download. These host timings establish
+that the real module runs; they are not a physical ESP32 or browser latency
+bound. The byte size is recorded for the measured candidate.
+
+Extracting featured-departure selection into the shared model preserves every
+screen checksum. Five paired Rust 1.95 release host runs, 512 frames per screen,
+show median board rendering **208,117 → 194,911 ns**; timing varies with host load
+and is not evidence of a device speedup. [Raw paired rounds](benchmarks/device-wasm-preview-render.json).
+The actual C3 artifact retains **275,412 B static**, **299,988 B** with the minimum
+stack reserve and **324,604 B** including all available stack. All audited stack
+bounds are unchanged, including TLS **44,768 B + 4,096 B** headroom.
+
+Tests compare all pixels across 22 native/WASM scenario and gesture steps,
+covering all seven screens. They also check zero-allocation edits, clockless
+countdown exclusion, rejected configuration atomicity, exact escaped text,
+maximum settings plus a draft, fixed memory and absent imports. Browser tests
+cover scaled touch, keyboard Save/Cancel, explicit Apply/Reset, credential and
+power-preference isolation, PL/EN, and retry after a failed module load.

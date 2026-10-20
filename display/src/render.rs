@@ -282,16 +282,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
     match app.screen {
         Screen::Board => {
             let now = app.clock.unwrap_or(0);
-            let chosen = app
-                .board_departures()
-                .enumerate()
-                .find(|(_, e)| {
-                    config.groups[e.group as usize]
-                        .picks
-                        .get(e.pick as usize)
-                        .is_some_and(|p| app.clock.is_some() && walking_chance(e.at, now, p) >= 50)
-                })
-                .or_else(|| app.board_departures().enumerate().next());
+            let chosen = app.featured(config);
             if let Some((chosen_index, event)) = chosen {
                 let p = &group.picks[event.pick as usize];
                 pill(d, 32, 56, 47, 29, INK)?;

@@ -908,6 +908,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "timetable-web-preview"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "serde",
+ "serde-json-core",
+ "stats_alloc",
+ "timetable-display",
+]
+
+[[package]]
 name = "tokio"
 version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,19 @@
+[package]
+name = "timetable-web-preview"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+timetable-display = { path = "../display" }
+embedded-graphics = "0.8.2"
+serde-json-core = "0.6"
+serde = { version = "1", default-features = false, features = ["derive"] }
+
+[dev-dependencies]
+stats_alloc = "0.1.10"
