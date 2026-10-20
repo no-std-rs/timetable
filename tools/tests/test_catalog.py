@@ -14,13 +14,14 @@ spec.loader.exec_module(builder)
 
 
 class CatalogPaths(unittest.TestCase):
-    def generate(self, times):
+    def generate(self, times, overrides=None):
         files = {
             'routes.txt': 'route_id,route_short_name\nR,4\n',
             'stops.txt': 'stop_id,stop_name,stop_code\nA,Central,C01\nB,Central,C02\nX,Branch,X01\nZ,Terminal,Z01\n',
             'trips.txt': 'trip_id,route_id,direction_id,trip_headsign\nT1,R,0,East\nT2,R,0,East\nT3,R,1,West\nT4,R,,Loop\n',
             'stop_times.txt': 'trip_id,stop_sequence,stop_id,pickup_type,stop_headsign\n' + times,
         }
+        files.update(overrides or {})
         with tempfile.TemporaryDirectory() as temp:
             source, destination = Path(temp) / 'feed.zip', Path(temp) / 'catalog'
             with zipfile.ZipFile(source, 'w') as archive:
@@ -53,6 +54,30 @@ class CatalogPaths(unittest.TestCase):
     def test_duplicate_stop_sequence_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'duplicate trip stop_sequence'):
             self.generate('T1,1,A,0,\nT1,1,B,0,\n')
+
+    def test_polish_alphabetical_browsing_preserves_exact_links_and_travel_order(self):
+        names = ['Żurawia', 'Zwycięstwa', 'Śródka', 'Słowiańska', 'Łąkowa', 'Lubelska',
+                 'AWF', 'Admiralska', 'Źródlana', 'Ćwikłowo', 'Czarna', 'Lasek']
+        lines = ['T10', '100', '10', 'T2', '2']
+        catalog, binary = self.generate(
+            ''.join(f'T0,{i + 1},S{i},0,\n' for i in range(len(names)))
+            + ''.join(f'T{i},1,S0,0,\n' for i in range(1, len(lines))),
+            {'routes.txt': 'route_id,route_short_name\n' + ''.join(f'R{i},{line}\n' for i, line in enumerate(lines)),
+             'trips.txt': 'trip_id,route_id,direction_id,trip_headsign\n' + ''.join(f'T{i},R{i},0,East\n' for i in range(len(lines))),
+             'stops.txt': 'stop_id,stop_name,stop_code\n' + ''.join(f'S{i},{name},P{i}\n' for i, name in enumerate(names))})
+        self.assertEqual([r['line'] for r in catalog['routes']], ['2', '10', '100', 'T2', 'T10'])
+        self.assertEqual([s['name'] for s in catalog['stops']],
+                         ['Admiralska', 'AWF', 'Czarna', 'Ćwikłowo', 'Lasek', 'Lubelska',
+                          'Łąkowa', 'Słowiańska', 'Śródka', 'Zwycięstwa', 'Źródlana', 'Żurawia'])
+        # Flash records have exactly the same order, without a runtime sort/index.
+        offset = 32 + len(lines) * 168
+        self.assertEqual([binary[offset + i * 112:offset + i * 112 + 32].rstrip(b'\0').decode()
+                          for i in range(len(names))], [s['id'] for s in catalog['stops']])
+        route = next(i for i, r in enumerate(catalog['routes']) if r['id'] == 'R0')
+        pattern = next(p for p in catalog['patterns'] if p['route'] == route)
+        self.assertEqual([catalog['stops'][c[0]]['name'] for c in pattern['calls']], names)
+        self.assertEqual({catalog['stops'][s]['id'] for r, s, _ in catalog['links'] if r == route},
+                         {f'S{i}' for i in range(len(names))})
 
 
 if __name__ == '__main__':

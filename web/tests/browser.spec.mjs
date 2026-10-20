@@ -175,7 +175,10 @@ test("one stop box browses serving lines before a line is chosen", async ({ page
   await expect(page.locator("#save-pick")).toBeDisabled();
   await page.locator("#route-select").selectOption({ value: String(route) });
   const choices = index.boardingChoices(route, index.groupOf[stop]).map(c => c.key);
-  expect(await page.locator("#direction-select option").evaluateAll((options) => options.slice(1).map(o => o.value))).toEqual(choices);
+  const options = page.locator("#direction-select option:not([value=''])");
+  expect((await options.evaluateAll(options => options.map(o => o.value))).sort()).toEqual([...choices].sort());
+  const destinations = await options.allTextContents();
+  expect(destinations).toEqual([...destinations].sort(new Intl.Collator("pl", { numeric: true, sensitivity: "base" }).compare));
   await page.locator("#direction-select").selectOption(`${stop}:0`);
   await expect(page.locator("#save-pick")).toBeEnabled();
   await page.screenshot({ path: `/tmp/timetable-stop-first-${info.project.name}.png` });
@@ -636,6 +639,25 @@ async function deviceTap(page, x, y, held = false) {
   if (held) await page.waitForTimeout(750);
   await page.mouse.up();
 }
+test("line and stop pickers stay alphabetically ordered in both page languages", async ({ page }) => {
+  await prepare(page);
+  await page.locator("#add-pick").click();
+  const compare = new Intl.Collator("pl", { numeric: true, sensitivity: "base" }).compare;
+  const lines = await page.locator("#route-select option:not([value=''])").allTextContents();
+  expect(lines.length).toBeGreaterThan(100);
+  expect(lines).toEqual([...lines].sort(compare));
+  const route = catalog.routes.findIndex(r => r.line === "4");
+  await page.locator("#route-select").selectOption(String(route));
+  await page.locator("#stop-search").press("ArrowDown");
+  const labels = page.locator("#stop-options .stop-copy > span");
+  const stops = await labels.allTextContents();
+  expect(stops.length).toBeGreaterThan(20);
+  expect(stops).toEqual([...stops].sort(compare));
+  await page.locator("#pick-dialog [data-language=pl]").click();
+  await expect(labels).toHaveText(stops);
+  await page.locator("#pick-dialog [data-language=en]").click();
+  await expect(labels).toHaveText(stops);
+});
 test("real WASM touch edits are provisional, apply preserves Wi-Fi, and reset restores installer settings", async ({ page }, info) => {
   await page.addInitScript(() => {
     const instantiate = WebAssembly.instantiate;
