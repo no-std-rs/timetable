@@ -1,7 +1,7 @@
 # Timetable USB installer
 
 A static, responsive installer with a porcelain / ink / gold / chilli palette.
-Group changes update the illustrative round-screen preview. The route/stop
+Group changes update a WebAssembly instance of the actual round-screen Rust app. The route/stop
 picker uses the same checked-in official catalogue as firmware. It supports
 four named groups, four choices per group, direction filters, per-choice
 walking time and optional weekday/time windows. Export/import contains group
@@ -33,7 +33,7 @@ all paths serving that platform/direction. Paths describe the catalogue
 snapshot, not a claim of current service or a geographical street map.
 A line and boarding stop must be selected explicitly. Saved choices reopen
 intact; outdated identities ask for an updated choice. Forward and reverse
-catalogue indexes are built once. Empty groups have an empty preview.
+catalogue indexes are built once. Empty groups show the device’s real empty state.
 
 Group tabs support Left/Right, Home and End. Removing a group or choice offers
 Undo until the next settings edit.
@@ -43,9 +43,8 @@ Failed catalogue or firmware downloads have
 retry controls that retain group edits. Browser history restores those edits,
 restores saved settings and resets password visibility. Search Enter moves to
 the choices; it does not submit an unfinished edit.
-Weekday toggles retain keyboard focus after updating. The walking preview
-distinguishes a possible rush from insufficient walking time, matching the
-device's zero-percent message.
+Weekday toggles retain keyboard focus after updating. The Rust preview prioritizes catchable departures and shows the device’s
+zero-percent message when no displayed departure allows enough walking time.
 
 The browser downloads `latest.json` and `timetable-display.bin`, validates board,
 settings format, size and SHA-256, then creates local Blob URLs for the factory
@@ -74,7 +73,16 @@ latest 65,536 characters, supports Clear and Download, and releases the port on
 disconnect. Logs are not saved to browser storage or uploaded. Reconnect if a
 reset or USB removal changes the port.
 
+The little screen runs the same model, touch handlers, catalogue and renderer
+as firmware, with sample departures. Hold to edit, tap lists and swipe groups.
+**Demo hardware** exposes simulated Wi-Fi/NTP/update/offline states; browser time
+stands in for NTP. Use **Use demo changes** to copy committed demo edits to the
+installer, or **Reset demo** to discard them. Actual Wi-Fi credentials stay out
+of WASM. The device UI remains English; the page and demo controls support PL/EN.
+See [adapter details and tests](../web-preview/README.md).
+
 ```sh
+rustup target add wasm32-unknown-unknown --toolchain 1.95.0
 npm --prefix web ci
 npm --prefix web run build
 npm --prefix web test

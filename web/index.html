@@ -26,27 +26,30 @@
       </div>
       <figure class="device-figure">
         <div class="device-shell">
-          <div class="device-face" id="preview" aria-label="Illustration of your timetable display">
-            <svg class="gold-seam" viewBox="0 0 240 240" aria-hidden="true"><path d="m204 21-11 16 9 12 26 7"/></svg>
-            <button class="preview-group" id="preview-group" title="Preview the next group">Morning</button>
-            <div class="device-mode" id="preview-mode">YOUR GROUP / NO STOPS</div>
-            <div id="preview-empty" class="preview-empty"><strong>Make it yours.</strong><span>Add a line and stop below.</span></div>
-            <div id="preview-journey" class="preview-journey" hidden>
-            <div class="device-first"><span class="line-badge" id="preview-line">4</span><span class="device-arrival"><strong id="preview-minutes">12</strong><small>min</small></span></div>
-            <div class="device-direction" id="preview-direction">Górczyn PKM</div>
-            <div class="device-stop" id="preview-stop">Most Teatralny</div>
-            <div class="device-leave" id="preview-leave">Leave in 5 min</div>
-            <div class="device-walk" id="preview-walk">6m walk · 100% walk est.</div>
-            <div class="device-next"><span id="preview-next-line">12 · Starołęka PKM</span><b>21m</b></div>
-            <div class="device-next"><span id="preview-last-line">4 · Górczyn PKM</span><b>28m</b></div>
-            <div class="device-next"><span id="preview-third-line">12 · Starołęka PKM</span><b>35m</b></div>
-            <div class="device-next"><span id="preview-fourth-line">4 · Górczyn PKM</span><b>42m</b></div>
-            <div class="device-next"><span id="preview-fifth-line">12 · Starołęka PKM</span><b>49m</b></div>
-            </div>
-            <div class="device-footer"><span id="preview-freshness" hidden>Chk09:39 Src --/--</span></div>
+          <div class="device-face" id="preview">
+            <canvas id="device-canvas" width="240" height="240" tabindex="0" role="application" aria-label="Interactive device demo" aria-describedby="preview-help preview-description"></canvas>
           </div>
         </div>
-        <figcaption>Illustrative times. The device reads the official timetable.</figcaption>
+        <figcaption>Same Rust app as the device. Sample departures.</figcaption>
+        <p id="preview-help" class="preview-help">Tap, hold to edit, swipe to change groups. Keyboard: arrows, E to edit, Esc to go back.</p>
+        <p id="preview-state" class="preview-state" role="status">Loading the Rust demo…</p>
+        <button id="preview-retry" type="button" class="text-button" hidden>Retry demo</button>
+        <details class="preview-controls"><summary>Demo hardware</summary>
+          <p>Wi-Fi and NTP are simulated here. Browser time stands in for NTP. No device is connected.</p>
+          <label>Simulate<select id="preview-scenario">
+            <option value="0">Connected</option><option value="1">Cached startup / waiting for NTP</option>
+            <option value="2">First Wi-Fi connection</option><option value="3">NTP synchronization</option>
+            <option value="4">Timetable update</option><option value="5">Offline</option>
+          </select></label>
+          <div class="preview-actions"><button id="preview-reset" type="button" class="text-button">Reset demo</button><button id="preview-apply" type="button" class="text-button" disabled>Use demo changes</button></div>
+          <p>Keyboard: 1–4 choose rows; in the walking editor, 1/2/3 choose walk/spread/margin, +/- adjust, Enter saves and Esc cancels.</p>
+          <p>Edits on the little screen stay in the demo until you apply them. The device interface is in English.</p>
+        </details>
+        <div id="preview-description" class="sr-only">
+          <span id="preview-group"></span><span id="preview-mode"></span>
+          <span id="preview-line"></span><span id="preview-direction"></span><span id="preview-stop"></span>
+          <span id="preview-leave"></span><span id="preview-walk"></span><span id="preview-freshness"></span>
+        </div>
       </figure>
     </section>
 

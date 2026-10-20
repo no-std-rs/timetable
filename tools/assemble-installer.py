@@ -7,9 +7,10 @@ import sys
 root = Path(__file__).resolve().parents[1]
 firmware, site = map(Path, sys.argv[1:3])
 site.mkdir(parents=True, exist_ok=True)
-for name in ['index.html', 'style.css', 'app.js', 'config.js', 'catalog-search.js', 'route-topology.js', 'i18n.js', 'settings-store.js', 'serial-logs.js', 'favicon.svg']:
+for name in ['index.html', 'style.css', 'app.js', 'config.js', 'catalog-search.js', 'route-topology.js', 'i18n.js', 'settings-store.js', 'serial-logs.js', 'favicon.svg', 'device-preview.js']:
     shutil.copyfile(root / 'web' / name, site / name)
 shutil.copyfile(root / 'web/dist/installer.js', site / 'installer.js')
+shutil.copyfile(root / 'web/dist/device-preview.wasm', site / 'device-preview.wasm')
 shutil.copyfile(root / 'catalog/catalog.json', site / 'catalog.json')
 for name in ['timetable-display.bin', 'latest.json', 'manifest.json', 'SHA256SUMS', 'RAM.json', 'STACK.json']:
     shutil.copyfile(firmware / name, site / name)

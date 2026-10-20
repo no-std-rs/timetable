@@ -185,6 +185,23 @@ impl App {
             .filter(move |d| d.group as usize == self.group && now.map_or(saved, |now| d.at > now))
     }
 
+    /// Featured departure shared by device pixels and browser accessibility text.
+    pub fn featured(&self, config: &Config) -> Option<(usize, Departure)> {
+        self.board_departures()
+            .enumerate()
+            .find(|(_, event)| {
+                config
+                    .groups
+                    .get(event.group as usize)
+                    .and_then(|group| group.picks.get(event.pick as usize))
+                    .is_some_and(|pick| {
+                        self.clock
+                            .is_some_and(|now| walking_chance(event.at, now, pick) >= 50)
+                    })
+            })
+            .or_else(|| self.board_departures().enumerate().next())
+    }
+
     pub fn upcoming(&self) -> impl Iterator<Item = Departure> {
         let now = self.clock.unwrap_or(i64::MAX);
         self.departures

@@ -1,4 +1,4 @@
 [workspace]
-members = ["gtfs", "display"]
+members = ["gtfs", "display", "web-preview"]
 exclude = ["checks/ram", "firmware"]
 resolver = "3"
