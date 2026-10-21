@@ -15,8 +15,8 @@ settings can be inspected and switched back to automatic mode here.
 
 Open **Transport network**, choose a country and city/region, then search for an
 operator or feed name. One feed is installed per display. The bundled public
-MobilityDatabase directory contains 4,646 schedule feeds across 96 country codes
-(including unspecified locations), dated 2026-10-21. Regional feeds without a city
+MobilityDatabase directory contains 4,646 schedule feeds across 94 named
+countries/regions plus unspecified locations, dated 2026-10-21. Regional feeds without a city
 remain searchable. **Refresh network directory** reads the public CSV directly;
 no API account or token is needed. Real-time and bike-sharing feeds are not static
 timetables. Unavailable/inactive entries remain visible with a source link.
