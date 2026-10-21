@@ -82,12 +82,26 @@ for(const change of [{status:"inactive"},{status:"deprecated"},{mirror:"https://
   await prepare(page);await select(page,"demo-ny","US");await pick(page,"Broadway");
   const withdrawn=structuredClone(directory);Object.assign(withdrawn.feeds.find(f=>f.id==="demo-ny"),change);
   await page.route("**/feeds.json",r=>r.fulfill({json:withdrawn}));
+  await page.addInitScript(()=>{
+    window.timetableWorkerStarts=0;
+    const NativeWorker=window.Worker;
+    window.Worker=class extends NativeWorker{constructor(...args){super(...args);window.timetableWorkerStarts++;}};
+  });
   let downloads=0;await page.route("https://files.mobilitydatabase.org/demo-ny/latest.zip",r=>{downloads++;return r.abort();});
   await page.reload();
   await expect(page.locator("#network-progress")).toHaveText("Unavailable timetable");
   await expect(page.locator("#prepare")).toBeDisabled();await expect(page.locator("#add-pick")).toBeDisabled();
   expect(downloads).toBe(0);
   await page.locator("#network-panel summary").click();await expect(page.locator("#network-load")).toBeDisabled();
+  const workers=await page.evaluate(()=>{
+    window.dispatchEvent(new PageTransitionEvent("pagehide",{persisted:true}));
+    window.dispatchEvent(new PageTransitionEvent("pageshow",{persisted:true}));
+    return window.timetableWorkerStarts;
+  });
+  expect(workers).toBe(0);
+  await expect(page.locator("#release-state")).toHaveText("Firmware verified",{timeout:15000});
+  await expect(page.locator("#network-progress")).toHaveText("Unavailable timetable");
+  await expect(page.locator("#prepare")).toBeDisabled();
 });
 test("a cancelled network download cannot overwrite the next country’s catalogue or saved draft",async({page})=>{
   await prepare(page);

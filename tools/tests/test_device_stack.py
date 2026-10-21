@@ -135,6 +135,15 @@ class CacheStackAuditTest(StackAuditTest):
         with self.assertRaisesRegex(ValueError, 'runtime_tls'):
             device_stack.audit(self.cached_frames(), 47135)
 
+    def test_frequency_open_frame_is_included_and_growth_fails_the_guard(self):
+        frames = self.cached_frames() + [('download Mirror 4open closure', 9936)]
+        paths = device_stack.audit(frames, 49192)['paths_bytes']
+        baseline = device_stack.audit(self.cached_frames(), 49192)['paths_bytes']
+        for path in ('runtime_frequency_record', 'runtime_frequency_headers'):
+            self.assertEqual(paths[path], baseline[path] + 9936)
+        with self.assertRaisesRegex(ValueError, 'runtime_frequency_record'):
+            device_stack.audit(self.cached_frames() + [('download Mirror 4open closure', 16000)], 49192)
+
     def test_flash_frames_cannot_grow_without_being_counted(self):
         frames = [(n, 12000 if n in ('CacheFlash 5write', 'esp_storage NorFlash 5write', 'cache Writer 3row') else s)
                   for n, s in self.cached_frames()]

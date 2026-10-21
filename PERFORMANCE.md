@@ -857,7 +857,9 @@ including the 65,536 B heap, **299,604 B** with the minimum 24,576 B stack reser
 and **324,604 B** with all 49,576 B available stack. Both existing limits remain
 unchanged. [The scoped stack audit](benchmarks/device-worldwide-stack.json)
 passes: its largest audited path is 44,736 B plus 4,096 B headroom. This is linked
-accounting and a partial DWARF path audit, not physical stack high water.
+accounting and a partial DWARF path audit, not physical stack high water. The optional
+frequency-table record path is separately guarded at 42,336 B, including the
+outlined mirror-open frame and conservative HTTP caller frames.
 
 [Five paired Rust 1.95 release host runs](benchmarks/device-worldwide-host.json)
 compare the fetched base `7376f52` with this change. The same immutable Poznań

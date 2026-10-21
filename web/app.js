@@ -738,6 +738,17 @@ async function selectFeed(feed, initial = false) {
 }
 async function loadCatalog() {
   const generation = ++state.catalogGeneration, feed = state.feed;
+  if(feed.id!==DEFAULT_FEED){
+    const entry=networkPicker.index?.feeds.find(f=>f.id===feed.id);
+    if(!entry || !networkPicker.index.available(entry)){
+      state.feedClient?.close();state.feedClient=null;
+      state.catalog=state.index=state.bundle=state.profileBytes=null;
+      devicePreview.clear();forgetInstall();
+      $("add-pick").disabled=true;$("prepare").disabled=true;
+      copy("network-progress","Unavailable timetable");
+      return;
+    }
+  }
   $("retry-catalog").hidden = true; $("retry-catalog").disabled = true;
   $("catalog-feedback").hidden = false; copy("catalog-feedback", "Loading line and stop choices…");
   try {
@@ -951,9 +962,6 @@ renderLogs();
 if(state.feed.id === DEFAULT_FEED) loadCatalog();
 networkPicker.load(false,state.feed.id).then(()=>{
   const feed=networkPicker.index?.feeds.find(f=>f.id===state.feed.id);
-  if(feed){state.feed=feed;if(feed.id!==DEFAULT_FEED){
-    if(networkPicker.index.available(feed))void selectFeed(feed,true);
-    else copy("network-progress","Unavailable timetable");
-  }}
+  if(feed){state.feed=feed;if(feed.id!==DEFAULT_FEED)void selectFeed(feed,true);}
 });
 loadRelease();

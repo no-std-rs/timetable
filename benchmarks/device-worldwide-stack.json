@@ -12,6 +12,8 @@
     "runtime_settings_copy": 10480,
     "runtime_mirror_record": 37360,
     "runtime_http_headers": 26304,
+    "runtime_frequency_record": 42336,
+    "runtime_frequency_headers": 31280,
     "runtime_official_inflate": 21840,
     "runtime_tls": 44736,
     "runtime_cache_flash": 24464,
