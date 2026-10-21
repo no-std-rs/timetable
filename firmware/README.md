@@ -7,7 +7,8 @@ Rust firmware for two touch displays:
 | GUITION ESP32-2424S012-V1.0 | ESP32-C3 / 4 MB | 240×240 round | GC9A01 / CST816 |
 | Waveshare ESP32-C6-Touch-LCD-1.47 | ESP32-C6 / 8 MB | 172×320 portrait | JD9853 / AXS5106L |
 
-Select the exact model in the installer. The C6 **Touch** board differs from
+Select the exact model in the installer. For C6, choose portrait or landscape
+orientation; both have native interactive layouts and matching touch controls. The C6 **Touch** board differs from
 ESP32-C6-LCD-1.47 without touch; that other board is not supported. Both run the
 same allocation-free timetable model, Embassy async network/cache pipeline and
 Rust renderer. No companion server is required. See the

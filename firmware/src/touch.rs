@@ -26,3 +26,12 @@ pub fn axs5106(data: &[u8; 14]) -> Option<Sample> {
     }
     Some(Sample::Pressed { x: 171 - x, y })
 }
+
+/// Waveshare's 90-degree orientation swaps the native touch axes without
+/// mirrors. Reuse portrait packet validation, then undo its X mirror.
+pub fn axs5106_landscape(data: &[u8; 14]) -> Option<Sample> {
+    axs5106(data).map(|sample| match sample {
+        Sample::Pressed { x, y } => Sample::Pressed { x: y, y: 171 - x },
+        Sample::Released => Sample::Released,
+    })
+}

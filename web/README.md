@@ -183,3 +183,11 @@ compatible. Chip family, board identity, flash size and application header must
 agree, including when a catalogue is inserted into C6's unified ROM segment.
 Both builds keep the settings/cache partitions at the same addresses. C6 screen
 standby retains live touch polling and CPU idle sleep rather than deep sleep.
+
+The C6 Orientation selector offers portrait (172×320) and landscape (320×172).
+It changes the native shared Rust layout and downloads the corresponding release,
+without losing route choices. Saved model IDs from older installers still select
+portrait. Orientation is part of release validation and browser persistence; it
+is installed with the app, so changing a device's orientation requires reinstalling.
+Landscape uses two large route/stop rows per page, 2×2 group/choice cards and
+three wide walking controls. See the [rendered examples](../docs/waveshare-c6.md#landscape-alternative).

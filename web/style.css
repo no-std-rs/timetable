@@ -1146,3 +1146,11 @@
 .device-figure.portrait #device-canvas { border-radius:10px; }
 
 .device-figure.portrait .device-shell, .device-figure.portrait .device-face { transform:none; }
+
+.device-figure.landscape .device-shell { width:344px; height:196px; border-radius:22px; padding:12px; transform:none; }
+.device-figure.landscape .device-face { width:320px; height:172px; border-radius:10px; transform:none; }
+.device-figure.landscape #device-canvas { border-radius:10px; }
+@media (max-width:420px) {
+  .device-figure.landscape .device-shell { width:calc(100vw - 64px); height:auto; aspect-ratio:344/196; padding:10px; }
+  .device-figure.landscape .device-face { width:100%; height:auto; aspect-ratio:320/172; }
+}

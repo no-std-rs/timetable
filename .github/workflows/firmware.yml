@@ -41,6 +41,11 @@ jobs:
         run: |
           cargo test --locked --no-default-features --features board-waveshare-c6 --lib --test panel-c6 --test touch --target x86_64-unknown-linux-gnu
           cargo clippy --locked --release --no-default-features --features firmware,board-waveshare-c6 --target riscv32imac-unknown-none-elf -- -D warnings
+      - name: Check the C6 landscape alternative
+        working-directory: firmware
+        run: |
+          cargo test --locked --no-default-features --features c6-landscape --lib --test panel-c6 --test touch --target x86_64-unknown-linux-gnu
+          cargo clippy --locked --release --no-default-features --features firmware,c6-landscape --target riscv32imac-unknown-none-elf -- -D warnings
       - name: Compile the allocation-free RV32 performance probe
         working-directory: checks/device-cpu
         run: |
@@ -50,10 +55,13 @@ jobs:
         run: |
           sh tools/build-device-artifact.sh
           sh tools/build-device-artifact.sh dist/firmware/devices/waveshare-c6 waveshare-c6
+          sh tools/build-device-artifact.sh dist/firmware/devices/waveshare-c6-landscape waveshare-c6-landscape
           python3 -c 'import json; assert not json.load(open("dist/firmware/latest.json"))["dirty"]'
           python3 -c 'import json; assert not json.load(open("dist/firmware/devices/waveshare-c6/latest.json"))["dirty"]'
+          python3 -c 'import json; assert not json.load(open("dist/firmware/devices/waveshare-c6-landscape/latest.json"))["dirty"]'
           (cd dist/firmware && sha256sum --check SHA256SUMS)
           (cd dist/firmware/devices/waveshare-c6 && sha256sum --check SHA256SUMS)
+          (cd dist/firmware/devices/waveshare-c6-landscape && sha256sum --check SHA256SUMS)
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: '22'

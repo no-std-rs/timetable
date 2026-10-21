@@ -48,3 +48,12 @@ test("USB settings replace both banks so an old generation cannot take precedenc
   assert.deepEqual(Buffer.from(partition.subarray(0, 8192)), wireFixture);
   assert.ok(partition.subarray(8192).every((b) => b === 255));
 });
+
+
+test("C6 orientation must match the selected firmware; legacy portrait releases remain accepted",()=>{
+ const release={chip:"ESP32-C6",board:"Waveshare ESP32-C6-Touch-LCD-1.47",flash_size:8388608,config_offset:CONFIG_OFFSET,config_version:2,revision:"a".repeat(40),sha256:"b".repeat(64),size:100000};
+ assert.equal(manifestWithSettings(release,"a","b","waveshare-c6").builds[0].chipFamily,"ESP32-C6");
+ assert.throws(()=>manifestWithSettings(release,"a","b","waveshare-c6-landscape"),/selected display/);
+ assert.equal(manifestWithSettings({...release,orientation:"landscape"},"a","b","waveshare-c6-landscape").builds[0].chipFamily,"ESP32-C6");
+ assert.throws(()=>manifestWithSettings({...release,orientation:"landscape"},"a","b","waveshare-c6"),/selected display/);
+});

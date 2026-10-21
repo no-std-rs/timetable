@@ -5,16 +5,25 @@ use core::convert::Infallible;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*, primitives::Rectangle};
 use embedded_hal::{delay::DelayNs, digital::OutputPin, spi::SpiBus};
 
-#[cfg(not(feature = "board-waveshare-c6"))]
-pub const WIDTH: usize = 240;
-#[cfg(feature = "board-waveshare-c6")]
-pub const WIDTH: usize = 172;
-pub const HEIGHT: usize = if cfg!(feature = "board-waveshare-c6") {
+pub const WIDTH: usize = if cfg!(feature = "c6-landscape") {
+    320
+} else if cfg!(feature = "board-waveshare-c6") {
+    172
+} else {
+    240
+};
+pub const HEIGHT: usize = if cfg!(feature = "c6-landscape") {
+    172
+} else if cfg!(feature = "board-waveshare-c6") {
     320
 } else {
     240
 };
-pub const TILE_ROWS: usize = 16;
+pub const TILE_ROWS: usize = if cfg!(feature = "c6-landscape") {
+    8
+} else {
+    16
+};
 pub const TILE_BYTES: usize = WIDTH * TILE_ROWS * 2;
 
 pub struct Panel<SPI, DC> {
@@ -121,7 +130,14 @@ impl<SPI: SpiBus, DC: OutputPin<Error = Infallible>> Panel<SPI, DC> {
     pub fn init(&mut self, delay: &mut impl DelayNs) -> Result<(), SPI::Error> {
         self.command(0x01, &[])?;
         delay.delay_ms(150);
-        self.command(0x36, &[0x00])?;
+        self.command(
+            0x36,
+            &[if cfg!(feature = "c6-landscape") {
+                0x60
+            } else {
+                0x00
+            }],
+        )?;
         for (cmd, data, ms) in [
             (0x11, &[][..], 120),
             (0xDF, &[0x98, 0x53][..], 0),
@@ -167,8 +183,24 @@ impl<SPI: SpiBus, DC: OutputPin<Error = Infallible>> Panel<SPI, DC> {
             (0xDE, &[0x00][..], 0),
             (0x35, &[0x00][..], 0),
             (0x3A, &[0x05][..], 0),
-            (0x2A, &[0x00, 0x22, 0x00, 0xCD][..], 0),
-            (0x2B, &[0x00, 0x00, 0x01, 0x3F][..], 0),
+            (
+                0x2A,
+                if cfg!(feature = "c6-landscape") {
+                    &[0, 0, 1, 63][..]
+                } else {
+                    &[0, 34, 0, 205][..]
+                },
+                0,
+            ),
+            (
+                0x2B,
+                if cfg!(feature = "c6-landscape") {
+                    &[0, 34, 0, 205][..]
+                } else {
+                    &[0, 0, 1, 63][..]
+                },
+                0,
+            ),
             (0xDE, &[0x02][..], 0),
             (0xE5, &[0x00, 0x02, 0x00][..], 0),
             (0xDE, &[0x00][..], 0),
@@ -183,19 +215,34 @@ impl<SPI: SpiBus, DC: OutputPin<Error = Infallible>> Panel<SPI, DC> {
     }
 
     pub fn write_tile(&mut self, y: u16, pixels: &[u8; TILE_BYTES]) -> Result<(), SPI::Error> {
-        let x = if cfg!(feature = "board-waveshare-c6") {
+        assert!((y as usize) < HEIGHT);
+        let x: u16 = if cfg!(all(
+            feature = "board-waveshare-c6",
+            not(feature = "c6-landscape")
+        )) {
             34
         } else {
             0
         };
-        self.command(0x2A, &[0, x, 0, x + WIDTH as u8 - 1])?;
-        let end = y + TILE_ROWS as u16 - 1;
+        let y_offset = if cfg!(feature = "c6-landscape") {
+            34
+        } else {
+            0
+        };
+        let x_end = x + WIDTH as u16 - 1;
+        self.command(
+            0x2A,
+            &[(x >> 8) as u8, x as u8, (x_end >> 8) as u8, x_end as u8],
+        )?;
+        let rows = TILE_ROWS.min(HEIGHT - y as usize);
+        let start = y + y_offset;
+        let end = start + rows as u16 - 1;
         self.command(
             0x2B,
-            &[(y >> 8) as u8, y as u8, (end >> 8) as u8, end as u8],
+            &[(start >> 8) as u8, start as u8, (end >> 8) as u8, end as u8],
         )?;
         self.command(0x2C, &[])?;
-        self.spi.write(pixels)?;
+        self.spi.write(&pixels[..WIDTH * rows * 2])?;
         self.spi.flush()
     }
 
@@ -218,7 +265,10 @@ impl Dimensions for Tile<'_> {
     fn bounding_box(&self) -> Rectangle {
         Rectangle::new(
             Point::new(0, self.y.into()),
-            Size::new(WIDTH as u32, TILE_ROWS as u32),
+            Size::new(
+                WIDTH as u32,
+                TILE_ROWS.min(HEIGHT.saturating_sub(self.y as usize)) as u32,
+            ),
         )
     }
 }
@@ -233,7 +283,8 @@ impl DrawTarget for Tile<'_> {
     ) -> Result<(), Infallible> {
         for Pixel(p, color) in pixels {
             if (0..WIDTH as i32).contains(&p.x)
-                && (i32::from(self.y)..i32::from(self.y) + TILE_ROWS as i32).contains(&p.y)
+                && (i32::from(self.y)..(i32::from(self.y) + TILE_ROWS as i32).min(HEIGHT as i32))
+                    .contains(&p.y)
             {
                 let offset = ((p.y - i32::from(self.y)) as usize * WIDTH + p.x as usize) * 2;
                 self.pixels[offset..offset + 2]

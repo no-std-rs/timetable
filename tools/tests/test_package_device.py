@@ -39,6 +39,7 @@ class PackageTests(unittest.TestCase):
         for board, name, chip, flash, geometry in [
             ('guition-c3', 'GUITION ESP32-2424S012-V1.0', 5, 0x2F, 4194304),
             ('waveshare-c6', 'Waveshare ESP32-C6-Touch-LCD-1.47', 13, 0x30, 8388608),
+            ('waveshare-c6-landscape', 'Waveshare ESP32-C6-Touch-LCD-1.47', 13, 0x30, 8388608),
         ]:
             with self.subTest(board=board), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory)
@@ -51,6 +52,8 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(metadata['flash_size'], geometry)
                 self.assertEqual(manifest['builds'][0]['chipFamily'], metadata['chip'])
                 self.assertFalse(metadata['dirty'])
+                if chip == 13:
+                    self.assertEqual(metadata['orientation'], 'landscape' if board.endswith('-landscape') else 'portrait')
 
     def test_wrong_application_chip_or_frequency_never_publishes(self):
         for field in ['app', 'frequency']:
