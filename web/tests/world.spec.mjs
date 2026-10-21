@@ -41,6 +41,21 @@ test("switching countries changes real routes, stops and WASM timezone, preserve
   await page.locator("#forget-settings").click();await page.reload();await expect(page.locator("#wifi-ssid")).toHaveValue("");await expect(page.locator("#device-canvas")).toHaveAttribute("data-feed","mdb-982");
   expect(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith("timetable.settings.v1")))).toEqual([]);
 });
+test("reopening saved network choices loads their route paths after switching networks and reloading",async({page})=>{
+  await prepare(page);await select(page,"demo-ny","US");await pick(page,"Broadway");
+  const savedDirection=await page.locator("#direction-select").inputValue();
+  const reopen=async()=>{
+    await page.locator(".pick-edit").first().click();
+    await expect(page.locator("#route-select")).toHaveValue("0");
+    await expect(page.locator("#route-map")).toBeVisible();
+    await expect(page.locator("#path-select option")).toHaveCount(2);
+    await expect(page.locator("#platform-hint")).toContainText("Terminal");
+    await expect(page.locator("#direction-select")).toHaveValue(savedDirection);
+    await page.locator("#cancel-pick").click();
+  };
+  await select(page,"demo-kolkata","IN");await select(page,"demo-ny","US");await reopen();
+  await page.reload();await expect(page.locator("#device-canvas")).toHaveAttribute("data-feed","demo-ny");await reopen();
+});
 test("foreign-network USB installation contains that network’s checked ROM profile and keeps Wi-Fi solely in settings",async({page})=>{
   await prepare(page);await select(page,"demo-kolkata","IN");await pick(page,"Park Street");await page.locator("#wifi-ssid").fill("local-install-network");await page.locator("#wifi-password").fill("private-password");
   await page.locator("#prepare").click();await expect(page.locator("#install-area")).toBeVisible();

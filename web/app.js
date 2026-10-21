@@ -285,6 +285,7 @@ function fillRoutes(selected = $("route-select").value) {
   $("route-select").value = selected !== "" && matches.includes(Number(selected)) ? selected : "";
   $("route-results").textContent = matches.length ? t(matches.length === 1 ? "{count} line" : "{count} lines", { count: matches.length }) + (picker.group === null ? t(" · choose here to search its stops") : t(" serving {stop}", { stop: stopLabel(picker.group) })) : picker.group === null ? t("No lines match. Try another line number or destination.") : t("No lines match. Clear the line search to see all lines serving your stop.");
   fillDirections();
+  if ($("route-select").value !== "") void loadRoutePaths(Number($("route-select").value));
 }
 function choiceName(route, choice) {
   if (choice.all) return t("All departures");
