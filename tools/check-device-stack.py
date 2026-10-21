@@ -97,14 +97,16 @@ def audit(frames, stack):
     session_frames = []
     for parts in [('embassy_futures', 'select', 'Select', '4poll'),
                   ('__network_service_task_inner_function', 'closure'),
-                  ('timetable_display15network_session', 'closure')]:
+                  ('timetable_display15network_session', 'closure'),
+                  ('wake_gate', 'Gated', '4poll')]:
         outlined = [size for name, size in frames if all(part in name for part in parts)]
         if outlined:
             session_frames.append(max(outlined))
     if not session_frames:
         raise ValueError('missing audited function frame: network session/select')
-    # Select can be wholly inlined into network_session. If several families
-    # survive, they remain real callers and all must be counted.
+    # Select can be wholly inlined into network_session or Gated::poll. Gated
+    # runner/query polls are siblings: count the largest gate once. If other
+    # caller families survive too, retain them in this conservative envelope.
     session = sum(session_frames)
     lower_tls = sum(frame(*parts) for parts in [
         ('process_server_verify',), ('pki', 'verify_signature'),
@@ -227,6 +229,13 @@ def audit(frames, stack):
             'runtime_tls': runtime_callers + frame('embedded_tls', 'TlsConnection', '4open') + lower_tls,
         })
     margin = 4096
+    publish = max((size for name, size in frames if 'publish_departures' in name), default=0)
+    if publish:
+        # Cache publication happens before/after TLS, never inside verification.
+        paths['runtime_publish'] = task + session + max(
+            (size for name, size in frames if 'closure' in name and
+             any(caller in name for caller in ('update_once', 'restore_saved_board'))),
+            default=0) + publish
     for name, size in paths.items():
         limit = 24576 if name.startswith('boot_') else stack
         if size + margin > limit:

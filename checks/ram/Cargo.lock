@@ -110,6 +110,7 @@ dependencies = [
  "crc32fast",
  "csv-core",
  "embedded-io-async",
+ "memchr",
  "miniz_oxide",
 ]
 

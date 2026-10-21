@@ -406,6 +406,7 @@ dependencies = [
  "embedded-io-async",
  "embedded-nal-async",
  "futures",
+ "memchr",
  "miniz_oxide",
  "reqwless",
  "stats_alloc",

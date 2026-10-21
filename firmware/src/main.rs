@@ -2,6 +2,8 @@
 #![no_main]
 extern crate alloc;
 mod catalog_slot;
+#[cfg(feature = "http-probe")]
+mod http_probe;
 mod http_request;
 mod http_session;
 mod rtc;
@@ -9,6 +11,7 @@ mod scheduler;
 mod tls_cipher;
 mod tls_memory;
 mod transport;
+mod wake_gate;
 
 use core::cell::RefCell;
 use embassy_executor::Spawner;
@@ -174,6 +177,17 @@ fn log_heap() {
     );
 }
 
+// Publishing moves the complete departure/headsign caches. Keep those stack
+// temporaries out of the async radio caller while it later verifies TLS.
+#[inline(never)]
+fn publish_departures(app: &mut App, builder: &mut Builder) {
+    app.publish(
+        core::mem::take(&mut builder.events),
+        core::mem::take(&mut builder.headsigns),
+        builder.now,
+    );
+}
+
 #[inline(never)]
 fn has_settings_partition(flash: &mut FlashStorage<'_>) -> bool {
     use esp_bootloader_esp_idf::partitions::{PARTITION_TABLE_MAX_LEN, read_partition_table};
@@ -257,10 +271,13 @@ async fn main(spawner: Spawner) -> ! {
         timers.timer0,
         SoftwareInterruptControl::new(p.SW_INTERRUPT).software_interrupt0,
     );
+    spawner.spawn(wake_relay(&wake_gate::NETWORK).unwrap());
+    spawner.spawn(wake_relay(&wake_gate::WORK).unwrap());
     info!(
         "Boot: starting timetable; reset {:?}",
         esp_hal::system::reset_reason()
     );
+    info!("CPU: {} MHz", esp_hal::clock::cpu_clock().as_mhz());
     let mut delay = Delay::new();
     #[cfg(not(feature = "board-waveshare-c6"))]
     let (mut panel, mut touch, mut backlight, mut cs, _reset) = {
@@ -707,6 +724,11 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
+#[embassy_executor::task(pool_size = 2)]
+async fn wake_relay(gate: &'static wake_gate::Gate) {
+    gate.relay().await;
+}
+
 // Finish large State/App construction before loading or parsing any settings.
 #[inline(never)]
 fn create_state() -> &'static Shared {
@@ -926,11 +948,7 @@ async fn restore_saved_board(
                 if state.revision != storage.revision || state.powering_down {
                     return;
                 }
-                state.app.publish(
-                    core::mem::take(&mut builder.events),
-                    core::mem::take(&mut builder.headsigns),
-                    builder.now,
-                );
+                publish_departures(&mut state.app, builder);
                 state.app.freshness = freshness;
                 info!(
                     "Cache: saved board ready before Wi-Fi; clock known: {}",
@@ -969,11 +987,11 @@ async fn network_session(
     scheduler::reset();
     let mut network = core::pin::pin!(runner.run());
     match select(
-        scheduler::runner(network.as_mut()),
-        select(
+        wake_gate::NETWORK.run(scheduler::runner(network.as_mut())),
+        wake_gate::WORK.run(select(
             wifi_connection(controller, shared),
             update_once(stack, shared, query_config, builder, workspace, cache),
-        ),
+        )),
     )
     .await
     {
@@ -1087,6 +1105,8 @@ async fn update_once(
         return 30;
     }
     info!("Clock synchronized; starting timetable update");
+    #[cfg(feature = "http-probe")]
+    http_probe::run(stack, workspace).await;
     let revision = {
         let mut s = shared.lock().await;
         s.app.status = Status::Loading;
@@ -1115,11 +1135,7 @@ async fn update_once(
                 if state.revision != revision || state.powering_down {
                     return 0;
                 }
-                state.app.publish(
-                    core::mem::take(&mut builder.events),
-                    core::mem::take(&mut builder.headsigns),
-                    builder.now,
-                );
+                publish_departures(&mut state.app, builder);
                 state.app.freshness = freshness;
                 state.app.status = Status::Loading;
                 info!("Cache: cold-start departures ready; checking remote identity");
@@ -1160,11 +1176,7 @@ async fn update_once(
                 if freshness.checked_at.is_some() {
                     freshness.checked_at = transport::now();
                 }
-                s.app.publish(
-                    core::mem::take(&mut builder.events),
-                    core::mem::take(&mut builder.headsigns),
-                    builder.now,
-                );
+                publish_departures(&mut s.app, builder);
                 s.app.freshness = freshness;
             }
             Err(Error::Feed(gtfs::Error::IndexFull | gtfs::Error::IdTooLong)) => {

@@ -212,10 +212,37 @@ impl<H: Http> RangeFetch for Range<'_, H> {
         Ok(())
     }
 }
-struct Payload<'a, V> {
+struct Payload<'a, V, F> {
     member: zip::Member,
     workspace: &'a mut zip::Workspace,
     visit: V,
+    filter: F,
+}
+// Keep strict and matching futures separate so metadata operations retain
+// their small async state instead of storing both parser modes.
+trait RowFilter {
+    async fn next<'a, R: Read>(
+        &mut self,
+        rows: &'a mut csv::Reader<R>,
+    ) -> Result<Option<csv::Record<'a>>, gtfs::Error>;
+}
+struct AllRows;
+impl RowFilter for AllRows {
+    async fn next<'a, R: Read>(
+        &mut self,
+        rows: &'a mut csv::Reader<R>,
+    ) -> Result<Option<csv::Record<'a>>, gtfs::Error> {
+        rows.next().await
+    }
+}
+struct Matching<'a, F>(csv::Column, &'a mut F);
+impl<F: csv::Filter> RowFilter for Matching<'_, F> {
+    async fn next<'a, R: Read>(
+        &mut self,
+        rows: &'a mut csv::Reader<R>,
+    ) -> Result<Option<csv::Record<'a>>, gtfs::Error> {
+        rows.next_matching(self.0, &mut *self.1).await
+    }
 }
 struct Frequencies<'a> {
     directory: &'a zip::Directory,
@@ -231,7 +258,9 @@ impl Operation for Frequencies<'_> {
         Ok(())
     }
 }
-impl<V: FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>> Operation for Payload<'_, V> {
+impl<V: FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>, F: RowFilter> Operation
+    for Payload<'_, V, F>
+{
     async fn read<R: Read>(&mut self, mut body: R) -> Result<(), Error> {
         {
             let zip = zip::Reader::record(&mut body, self.workspace, self.member).await?;
@@ -241,7 +270,9 @@ impl<V: FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>> Operation for Payload
                 crate::cooperative::Cooperative::new(zip),
                 self.member.table(),
             );
-            while let Some(row) = rows.next().await? {
+            loop {
+                let row = self.filter.next(&mut rows).await?;
+                let Some(row) = row else { break };
                 (self.visit)(row)?;
             }
         }
@@ -302,6 +333,15 @@ impl<'a, H: Http> Mirror<'a, H> {
         workspace: &mut zip::Workspace,
         visit: impl FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>,
     ) -> Result<(), Error> {
+        self.table_matching(table, workspace, AllRows, visit).await
+    }
+    async fn table_matching<F: RowFilter>(
+        &mut self,
+        table: Table,
+        workspace: &mut zip::Workspace,
+        filter: F,
+        visit: impl FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>,
+    ) -> Result<(), Error> {
         let member = self
             .directory
             .member(table)
@@ -316,6 +356,7 @@ impl<'a, H: Http> Mirror<'a, H> {
                     member,
                     workspace,
                     visit,
+                    filter,
                 },
             )
             .await?;
@@ -404,6 +445,29 @@ impl<H: Http> Tables for Mirror<'_, H> {
         for table in tables {
             if self.directory.member(*table).is_some() {
                 self.table(*table, workspace, &mut visit)
+                    .await
+                    .map_err(Error::feed)?;
+            }
+        }
+        Ok(manifest)
+    }
+
+    async fn scan_matching(
+        &mut self,
+        tables: &[Table],
+        expected: Option<&zip::Manifest>,
+        workspace: &mut zip::Workspace,
+        column: csv::Column,
+        mut keep: impl csv::Filter,
+        mut visit: impl FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>,
+    ) -> Result<zip::Manifest, gtfs::Error> {
+        let manifest = zip::Manifest::from_directory(&self.directory);
+        if let Some(expected) = expected {
+            expected.check(&manifest)?;
+        }
+        for table in tables {
+            if self.directory.member(*table).is_some() {
+                self.table_matching(*table, workspace, Matching(column, &mut keep), &mut visit)
                     .await
                     .map_err(Error::feed)?;
             }

@@ -20,6 +20,29 @@ pub trait Tables {
         workspace: &mut zip::Workspace,
         visit: impl FnMut(gtfs::csv::Record<'_>) -> Result<(), Error>,
     ) -> Result<zip::Manifest, Error>;
+
+    /// Scan only rows matching an identity field. Sources may reject plain rows
+    /// before materializing them; returned rows and the ZIP remain validated.
+    async fn scan_matching(
+        &mut self,
+        tables: &[Table],
+        expected: Option<&zip::Manifest>,
+        workspace: &mut zip::Workspace,
+        column: Column,
+        mut keep: impl gtfs::csv::Filter,
+        mut visit: impl FnMut(gtfs::csv::Record<'_>) -> Result<(), Error>,
+    ) -> Result<zip::Manifest, Error> {
+        self.scan(tables, expected, workspace, |row| {
+            if row
+                .get(column)
+                .is_some_and(|value| keep.matches(value.as_bytes()))
+            {
+                visit(row)?;
+            }
+            Ok(())
+        })
+        .await
+    }
 }
 struct Forward<R>(Option<R>);
 impl<R: Read> Tables for Forward<R> {
@@ -521,73 +544,93 @@ impl Builder {
         // and misses; an interleaved ID still falls back to binary search.
         let mut last_trip: Option<(Id<32>, Option<usize>)> = None;
         let result = source
-            .scan(&[Table::StopTimes], Some(expected), workspace, |row| {
-                record(row, Selection(&self.resolved))?;
-                let id = row.required(Column::TripId)?;
-                let found = if let Some((key, found)) = &last_trip
-                    && found.map_or_else(
-                        || key.as_str() == id,
-                        |i| self.trips[i].id(&self.trip_ids) == id.as_bytes(),
-                    ) {
-                    *found
-                } else {
-                    let found = self
-                        .trips
-                        .binary_search_by(|t| t.id(&self.trip_ids).cmp(id.as_bytes()))
-                        .ok();
-                    // Long unselected IDs remain valid and are never shortened.
-                    last_trip = if found.is_some() {
-                        Some((Id::EMPTY, found))
+            .scan_matching(
+                &[Table::StopTimes],
+                Some(expected),
+                workspace,
+                Column::StopId,
+                gtfs::csv::Prefilter::new(
+                    |id| {
+                        !id.is_empty()
+                            && self
+                                .resolved
+                                .iter()
+                                .any(|pick| pick.stop.as_str().as_bytes() == id)
+                    },
+                    |block| {
+                        self.resolved.iter().any(|pick| {
+                            gtfs::csv::may_contain(block, pick.stop.as_str().as_bytes())
+                        })
+                    },
+                ),
+                |row| {
+                    record(row, Selection(&self.resolved))?;
+                    let id = row.required(Column::TripId)?;
+                    let found = if let Some((key, found)) = &last_trip
+                        && found.map_or_else(
+                            || key.as_str() == id,
+                            |i| self.trips[i].id(&self.trip_ids) == id.as_bytes(),
+                        ) {
+                        *found
                     } else {
-                        Id::new(id).ok().map(|key| (key, None))
+                        let found = self
+                            .trips
+                            .binary_search_by(|t| t.id(&self.trip_ids).cmp(id.as_bytes()))
+                            .ok();
+                        // Long unselected IDs remain valid and are never shortened.
+                        last_trip = if found.is_some() {
+                            Some((Id::EMPTY, found))
+                        } else {
+                            Id::new(id).ok().map(|key| (key, None))
+                        };
+                        found
                     };
-                    found
-                };
-                let Some(index) = found else {
-                    return Ok(());
-                };
-                let t = self.trips[index];
-                let event = row.stop_time()?;
-                if event.pickup_type == 1 {
-                    return Ok(());
-                }
-                let Some(departure) = event.departure else {
-                    return Ok(());
-                };
-                let route = self.resolved[usize::from(t.flags >> 3)].route;
-                for (group, g) in config.groups.iter().enumerate() {
-                    for (pick, p) in g.picks.iter().enumerate() {
-                        let resolved = self.resolved[group * crate::config::MAX_PICKS + pick];
-                        if resolved.route != route
-                            || resolved.stop.as_str() != event.stop_id
-                            || (p.direction >= 0 && t.direction() != p.direction)
-                        {
-                            continue;
-                        }
-                        for (day, epoch) in epochs.iter().enumerate() {
-                            let at = epoch + i64::from(departure.seconds());
-                            if t.flags & (1 << day) != 0
-                                && at > self.now
-                                && at <= self.now + HORIZON_SECONDS
+                    let Some(index) = found else {
+                        return Ok(());
+                    };
+                    let t = self.trips[index];
+                    let event = row.stop_time()?;
+                    if event.pickup_type == 1 {
+                        return Ok(());
+                    }
+                    let Some(departure) = event.departure else {
+                        return Ok(());
+                    };
+                    let route = self.resolved[usize::from(t.flags >> 3)].route;
+                    for (group, g) in config.groups.iter().enumerate() {
+                        for (pick, p) in g.picks.iter().enumerate() {
+                            let resolved = self.resolved[group * crate::config::MAX_PICKS + pick];
+                            if resolved.route != route
+                                || resolved.stop.as_str() != event.stop_id
+                                || (p.direction >= 0 && t.direction() != p.direction)
                             {
-                                let headsign = if let Some(name) = event.headsign {
-                                    staged.headsigns.insert(name)?
-                                } else {
-                                    t.headsign & 31
-                                };
-                                staged.events.push(Departure {
-                                    at,
-                                    group: group as u8,
-                                    pick: pick as u8,
-                                    conditional: event.pickup_type != 0,
-                                    headsign,
-                                })?;
+                                continue;
+                            }
+                            for (day, epoch) in epochs.iter().enumerate() {
+                                let at = epoch + i64::from(departure.seconds());
+                                if t.flags & (1 << day) != 0
+                                    && at > self.now
+                                    && at <= self.now + HORIZON_SECONDS
+                                {
+                                    let headsign = if let Some(name) = event.headsign {
+                                        staged.headsigns.insert(name)?
+                                    } else {
+                                        t.headsign & 31
+                                    };
+                                    staged.events.push(Departure {
+                                        at,
+                                        group: group as u8,
+                                        pick: pick as u8,
+                                        conditional: event.pickup_type != 0,
+                                        headsign,
+                                    })?;
+                                }
                             }
                         }
                     }
-                }
-                Ok(())
-            })
+                    Ok(())
+                },
+            )
             .await;
         staged.committed = result.is_ok();
         result.map(|_| ())

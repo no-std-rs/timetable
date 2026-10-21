@@ -63,6 +63,32 @@ class StackAuditTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'runtime_tls'):
             device_stack.audit(frames, 51968)
 
+    def test_outlined_wake_gate_counts_once_on_runtime_paths(self):
+        baseline = device_stack.audit(self.frames(), 60000)['paths_bytes']
+        frames = self.frames() + [('wake_gate Gated Future 4poll', 1024)]
+        grown = device_stack.audit(frames, 60000)['paths_bytes']
+        for path, size in baseline.items():
+            self.assertEqual(grown[path], size + (1024 if path.startswith('runtime_') else 0))
+        with self.assertRaisesRegex(ValueError, 'runtime_tls'):
+            device_stack.audit(frames, 50784)
+
+    def test_wake_gate_can_be_the_retained_session_poll_boundary(self):
+        baseline = device_stack.audit(self.frames(), 60000)['paths_bytes']
+        frames = [(n, s) for n, s in self.frames() if 'Select' not in n]
+        frames += [('wake_gate Gated Future 4poll', 2352),
+                   ('wake_gate Gated OtherFuture 4poll', 656)]
+        grown = device_stack.audit(frames, 60000)['paths_bytes']
+        for path, size in baseline.items():
+            self.assertEqual(grown[path], size + (2352 - 2560 if path.startswith('runtime_') else 0))
+
+    def test_publication_counts_cold_replay_caller_separately_from_tls(self):
+        frames = self.frames() + [('publish_departures', 4096)]
+        baseline = device_stack.audit(frames, 60000)['paths_bytes']
+        frames.append(('restore_saved_board closure', 4096))
+        grown = device_stack.audit(frames, 60000)['paths_bytes']
+        self.assertEqual(grown['runtime_publish'], 80 + 2560 + 4096 + 4096)
+        self.assertEqual(grown['runtime_tls'], baseline['runtime_tls'])
+
     def scoped_frames(self):
         old = self.frames()
         frames = [(name, size) for name, size in old if not any(part in name for part in

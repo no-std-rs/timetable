@@ -21,6 +21,7 @@ default = ["board-guition"]
 board-guition = ["esp-hal?/esp32c3", "esp-rtos?/esp32c3", "esp-radio?/esp32c3", "esp-backtrace?/esp32c3", "esp-println?/esp32c3", "esp-bootloader-esp-idf?/esp32c3", "esp-storage?/esp32c3"]
 board-waveshare-c6 = ["esp-hal?/esp32c6", "esp-rtos?/esp32c6", "esp-radio?/esp32c6", "esp-backtrace?/esp32c6", "esp-println?/esp32c6", "esp-bootloader-esp-idf?/esp32c6", "esp-storage?/esp32c6"]
 c6-landscape = ["board-waveshare-c6"]
+http-probe = []
 firmware = [
     "dep:esp-hal", "dep:esp-rtos", "dep:esp-radio", "dep:esp-alloc",
     "dep:esp-backtrace", "dep:esp-println", "dep:esp-bootloader-esp-idf",
@@ -64,6 +65,9 @@ embedded-tls = { version = "0.19", default-features = false, features = ["rustpk
 spin = { version = "0.9", default-features = false, features = ["portable_atomic", "lazy", "once", "mutex", "spin_mutex", "lock_api"], optional = true }
 
 [dev-dependencies]
+embassy-sync = "0.8"
+portable-atomic = "1"
+critical-section = { version = "1", features = ["std"] }
 # Exercise the real certificate verifier and the same first-fit heap algorithm
 # on the host, without bringing the radio or hardware into runtime libraries.
 embedded-tls = { version = "=0.19.0", default-features = false, features = ["rustpki", "p384", "rsa"] }

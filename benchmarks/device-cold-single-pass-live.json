@@ -1,0 +1,190 @@
+{
+  "date": "2026-10-22 Europe/Paris",
+  "board": "waveshare-c6-landscape",
+  "cpu_mhz": 80,
+  "opt_level": "s",
+  "lto": "fat",
+  "scope": "One full cold-cache run before and after. Cumulative HTTP body time includes consumer processing and excludes TLS/NTP/boot. A temporary transfer stall affected the candidate; cause not isolated. This change removes a duplicate pass, not per-pass CSV processing cost.",
+  "runs": {
+    "baseline": {
+      "rssi_at_association": -74,
+      "http_bodies": [
+        {
+          "bytes": 462905,
+          "body_ms": 4236
+        },
+        {
+          "bytes": 1,
+          "body_ms": 0
+        },
+        {
+          "bytes": 1024,
+          "body_ms": 2
+        },
+        {
+          "bytes": 171,
+          "body_ms": 6
+        },
+        {
+          "bytes": 22012,
+          "body_ms": 323
+        },
+        {
+          "bytes": 82548,
+          "body_ms": 1430
+        },
+        {
+          "bytes": 177,
+          "body_ms": 7
+        },
+        {
+          "bytes": 102,
+          "body_ms": 5
+        },
+        {
+          "bytes": 188908,
+          "body_ms": 6794
+        },
+        {
+          "bytes": 7947239,
+          "body_ms": 180659
+        },
+        {
+          "bytes": 1,
+          "body_ms": 0
+        },
+        {
+          "bytes": 1024,
+          "body_ms": 9
+        },
+        {
+          "bytes": 171,
+          "body_ms": 6
+        },
+        {
+          "bytes": 22012,
+          "body_ms": 377
+        },
+        {
+          "bytes": 82548,
+          "body_ms": 1653
+        },
+        {
+          "bytes": 177,
+          "body_ms": 11
+        },
+        {
+          "bytes": 102,
+          "body_ms": 5
+        },
+        {
+          "bytes": 188908,
+          "body_ms": 6669
+        },
+        {
+          "bytes": 7947239,
+          "body_ms": 182370
+        }
+      ],
+      "body_bytes": 16947269,
+      "cumulative_body_ms": 384562,
+      "stop_times_requests": 2,
+      "cache_committed": true,
+      "radio_off": true
+    },
+    "single_pass": {
+      "rssi_at_association": -76,
+      "http_bodies": [
+        {
+          "bytes": 462905,
+          "body_ms": 3586
+        },
+        {
+          "bytes": 1,
+          "body_ms": 0
+        },
+        {
+          "bytes": 1024,
+          "body_ms": 2
+        },
+        {
+          "bytes": 171,
+          "body_ms": 6
+        },
+        {
+          "bytes": 22012,
+          "body_ms": 356
+        },
+        {
+          "bytes": 82548,
+          "body_ms": 1379
+        },
+        {
+          "bytes": 177,
+          "body_ms": 7
+        },
+        {
+          "bytes": 102,
+          "body_ms": 5
+        },
+        {
+          "bytes": 188908,
+          "body_ms": 7184
+        },
+        {
+          "bytes": 1,
+          "body_ms": 0
+        },
+        {
+          "bytes": 1024,
+          "body_ms": 2
+        },
+        {
+          "bytes": 171,
+          "body_ms": 6
+        },
+        {
+          "bytes": 22012,
+          "body_ms": 368
+        },
+        {
+          "bytes": 82548,
+          "body_ms": 1460
+        },
+        {
+          "bytes": 177,
+          "body_ms": 9
+        },
+        {
+          "bytes": 102,
+          "body_ms": 5
+        },
+        {
+          "bytes": 188908,
+          "body_ms": 6592
+        },
+        {
+          "bytes": 7947239,
+          "body_ms": 207306
+        }
+      ],
+      "body_bytes": 9000030,
+      "cumulative_body_ms": 228273,
+      "stop_times_requests": 1,
+      "cache_committed": true,
+      "radio_off": true
+    }
+  },
+  "readback": {
+    "settings_unchanged": true,
+    "valid_new_banks": 1,
+    "payload_matches_previous_valid_bank": true,
+    "payload_bytes": 29414,
+    "payload_sha256": "a2b1230630432b1dcbe2179142678bf3a910ec5910e7a91551c0cfaf1e7afa49"
+  },
+  "cached_reboot": {
+    "source_unchanged": true,
+    "no_flash_writes": true,
+    "radio_off": true
+  }
+}

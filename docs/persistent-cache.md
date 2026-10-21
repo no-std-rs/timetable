@@ -15,11 +15,19 @@ When source fingerprints change, a read-only streaming comparison filters the
 selected tables. Unrelated routes, repacking and timestamp-only changes cause
 zero erases and zero programs. A changed selection first completes this same
 capacity/validation preflight, including the exact active-trip/departure query,
-then streams into the inactive bank. First fill and changed selected content
-need two scans of each required table: comparison/preflight and writing. The
+then streams into the inactive bank. Changed selected content needs two scans
+of each required table: comparison/preflight and writing. The
 exact active query runs alongside recording in each scan, so it needs no extra
-trip/stop-times download. The complete read-only preflight still rejects
-oversized or invalid data before erasing flash.
+trip/stop-times download. With an existing bank, complete read-only preflight
+still rejects oversized or invalid data before erasing flash.
+
+An empty cache checks metadata and trip-index bounds first, then reads the large
+stop-times table only once while writing provisional selected rows. Complete
+HTTP/ZIP, CRC and query validation still precede commit and publication. A late
+stop-time error, overflow or cancellation can leave uncommitted flash writes;
+they never become a usable bank, and the next attempt can rebuild it. Early
+metadata/trip capacity errors still cause no writes. No additional RAM buffer or
+compressed-stream checkpoint is needed.
 
 Two 480 KiB banks occupy the dedicated 960 KiB `ttcache` partition at `0x300000`
 (custom partition type `0x40`, subtype zero). Each reserves a 4 KiB header sector;
@@ -39,8 +47,9 @@ releases the filter on completion, error or cancellation, before opening any
 fallback connection. An unavailable filter uses the normal streaming query
 without flash writes. Existing active trip, service, heading and departure limits
 still fail explicitly. If selected
-data exceed a bank, the normal streaming query remains available with no flash
-writes and the previous bank retained.
+data exceed a bank, the normal streaming query remains available and the
+previous bank is retained. Existing-bank preflight prevents writes on overflow;
+an empty-bank attempt may have written provisional rows before a late overflow.
 
 A bank becomes visible only after HTTP/ZIP completion, selected-query validation,
 header/payload CRCs and a final commit word. Cancellation, obsolete settings,
