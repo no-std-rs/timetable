@@ -3,8 +3,8 @@
 A Cargo workspace for allocation-free, `no_std` public transport timetable
 libraries.
 
-The [USB installer](https://no-std-rs.github.io/timetable/) and [round-screen app](firmware/README.md) run on the GUITION
-ESP32-C3 display. Set up named groups of lines and stops, choose walking times,
+The [USB installer](https://no-std-rs.github.io/timetable/) and [touch-screen app](firmware/README.md) support the GUITION
+ESP32-C3 round display and Waveshare ESP32-C6-Touch-LCD-1.47 portrait display. Set up named groups of lines and stops, choose walking times,
 and switch groups by touch or an optional time-of-day schedule. Six departures
 fit on the board. Choose a country, city or region and operator from the public
 MobilityDatabase directory; [network setup and compatibility](web/README.md#countries-and-transport-networks) explain the device limits. Cold boots show saved times before Wi-Fi, with countdowns

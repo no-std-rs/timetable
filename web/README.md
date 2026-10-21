@@ -1,7 +1,7 @@
 # Timetable USB installer
 
 A static, responsive installer with a porcelain / ink / gold / chilli palette.
-Group changes update a WebAssembly instance of the actual round-screen Rust app. The route/stop
+Group changes update a WebAssembly instance of the actual Rust app in round or portrait layout. The route/stop
 picker and firmware share the selected network’s checked catalogue. Poznań has
 an instant bundled catalogue; other networks are built in a browser worker. It supports
 four named groups, four choices per group, direction filters, per-choice
@@ -65,7 +65,7 @@ last validated board if the mirror is unavailable, and never query Poznań.
 Directory source: [MobilityDatabase public CSV](https://files.mobilitydatabase.org/feeds_v2.csv)
 and [published schema](https://github.com/MobilityData/mobility-feed-api/blob/main/docs/SpreadsheetSchemaV2.md).
 
-Battery mode is off by default. Enable it to sleep the screen and CPU after
+Battery mode is off by default. On the GUITION, enable it to sleep the screen and CPU after
 30 seconds on the idle departure board, wake by touch and refresh Wi-Fi every
 three hours. Cached wakes do not initialize Wi-Fi. Group imports leave this
 device preference unchanged. See [battery operation and hardware limits](../docs/battery.md).
@@ -169,3 +169,17 @@ it as an Actions artifact. See [firmware instructions](../firmware/README.md).
 
 References: [ESP Web Tools](https://esphome.github.io/esp-web-tools/),
 [Web Serial](https://developer.chrome.com/docs/capabilities/serial).
+
+
+## Display models
+
+Choose GUITION ESP32-C3 (240×240) or Waveshare ESP32-C6-**Touch**-LCD-1.47
+(172×320). The browser remembers the model alongside the current draft. Changing
+models invalidates a prepared install and downloads that model's verified
+release; settings, selected transport network and routes stay available. The
+preview switches to the same native Rust layout and hit regions as that board.
+The C6 firmware lives under `devices/waveshare-c6/`; default C3 URLs remain
+compatible. Chip family, board identity, flash size and application header must
+agree, including when a catalogue is inserted into C6's unified ROM segment.
+Both builds keep the settings/cache partitions at the same addresses. C6 screen
+standby retains live touch polling and CPU idle sleep rather than deep sleep.

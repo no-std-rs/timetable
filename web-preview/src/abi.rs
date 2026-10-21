@@ -8,6 +8,7 @@ struct State {
     frame: Frame,
     simulator: Option<Simulator>,
     catalog: Option<Catalog<'static>>,
+    portrait: bool,
 }
 struct Cell(UnsafeCell<State>);
 // SAFETY: the built module has unshared memory, no threads, no host imports and
@@ -20,6 +21,7 @@ static STATE: Cell = Cell(UnsafeCell::new(State {
     frame: Frame([0; FRAME_BYTES]),
     simulator: None,
     catalog: None,
+    portrait: false,
 }));
 const CATALOG_BYTES: usize = timetable_display::profile::SLOT_BYTES;
 struct CatalogMemory {
@@ -100,9 +102,10 @@ pub extern "C" fn preview_configure(len: usize, now: i64, group: usize) -> u32 {
             || Simulator::new(bytes, now, group),
             |catalog| Simulator::with_catalog(bytes, now, group, catalog),
         );
-        let Some(simulator) = simulator else {
+        let Some(mut simulator) = simulator else {
             return 0;
         };
+        simulator.set_portrait(s.portrait);
         s.simulator = Some(simulator);
         1
     })
@@ -141,10 +144,13 @@ pub extern "C" fn preview_refresh(now: i64) {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn preview_gesture(x: u32, y: u32, dx: i32, dy: i32, held: u32) -> u32 {
-    if x >= 240 || y >= 240 || dx.unsigned_abs() > 480 || dy.unsigned_abs() > 480 {
+    if dx.unsigned_abs() > 640 || dy.unsigned_abs() > 640 {
         return 0;
     }
     state(|s| {
+        if x >= if s.portrait { 172 } else { 240 } || y >= if s.portrait { 320 } else { 240 } {
+            return 0;
+        }
         let Some(sim) = &mut s.simulator else {
             return 0;
         };
@@ -154,5 +160,19 @@ pub extern "C" fn preview_gesture(x: u32, y: u32, dx: i32, dy: i32, held: u32) -
             ui::Action::Save { refresh: false } => 2,
             ui::Action::Save { refresh: true } => 3,
         }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn preview_device(portrait: u32) -> u32 {
+    if portrait > 1 {
+        return 0;
+    }
+    state(|s| {
+        s.portrait = portrait == 1;
+        if let Some(sim) = &mut s.simulator {
+            sim.set_portrait(s.portrait);
+        }
+        1
     })
 }

@@ -1,5 +1,15 @@
 // English message keys keep validation modules independent of browser state.
 export const polish = {
+  "Desktop Chrome or Edge · {board} · {size} MB flash": "Chrome lub Edge na komputerze · {board} · {size} MB flash",
+  "For GUITION round and Waveshare C6 Touch 1.47 displays.": "Dla okrągłego GUITION i Waveshare C6 Touch 1.47.",
+  "Connect your display with a USB data cable. We’ll take it from here.": "Podłącz ekran kablem USB z transmisją danych. Dalej poprowadzi Cię instalator.",
+  "Your lines, your stops, a little time to spare. A small Rust timetable for ESP32 touch displays.": "Twoje linie, Twoje przystanki i chwila na zapas. Rozkład w Rust na dotykowe ekrany ESP32.",
+  "Display model": "Model ekranu",
+  "Round touch display · 4 MB flash": "Okrągły ekran dotykowy · 4 MB flash",
+  "Portrait touch display · 8 MB flash": "Pionowy ekran dotykowy · 8 MB flash",
+  "Screen standby after 30 seconds. Touch stays active to wake; CPU uses idle sleep, not deep sleep. Wi-Fi refreshes every three hours. Leave off for an always-visible display.": "Ekran gaśnie po 30 sekundach. Dotyk pozostaje aktywny; procesor czuwa bez głębokiego uśpienia. Wi-Fi odświeża dane co trzy godziny. Wyłącz tę opcję, aby ekran świecił stale.",
+  "This firmware does not match the selected display or settings format.": "To oprogramowanie nie pasuje do wybranego ekranu lub formatu ustawień.",
+  "Unknown display model.": "Nieznany model ekranu.",
   "Reading service calendars…": "Odczyt kalendarzy kursowania…",
   "Service IDs in this feed exceed the display’s 32-byte limit.": "Identyfikatory usług w tych danych przekraczają limit 32 bajtów ekranu.",
   "Journey IDs on this line exceed the display’s 255-byte limit.": "Identyfikatory kursów tej linii przekraczają limit 255 bajtów ekranu.",

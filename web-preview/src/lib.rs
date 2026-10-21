@@ -46,11 +46,42 @@ impl DrawTarget for Frame {
     }
 }
 
+/// Portrait reuses the larger round frame allocation; only the active packed
+/// 172×320 prefix is presented. The fixed 4 MiB WASM ceiling is unchanged.
+struct PortraitFrame<'a>(&'a mut Frame);
+impl OriginDimensions for PortraitFrame<'_> {
+    fn size(&self) -> Size {
+        Size::new(172, 320)
+    }
+}
+impl DrawTarget for PortraitFrame<'_> {
+    type Color = Rgb565;
+    type Error = Infallible;
+    fn draw_iter<I: IntoIterator<Item = Pixel<Rgb565>>>(
+        &mut self,
+        pixels: I,
+    ) -> Result<(), Infallible> {
+        for Pixel(p, c) in pixels {
+            if (0..172).contains(&p.x) && (0..320).contains(&p.y) {
+                let offset = (p.y as usize * 172 + p.x as usize) * 4;
+                self.0.0[offset..offset + 4].copy_from_slice(&[
+                    (u16::from(c.r()) * 255 / 31) as u8,
+                    (u16::from(c.g()) * 255 / 63) as u8,
+                    (u16::from(c.b()) * 255 / 31) as u8,
+                    255,
+                ]);
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct Simulator {
     pub app: App,
     pub config: Config,
     catalog: Catalog<'static>,
     mode: u32,
+    portrait: bool,
 }
 impl Simulator {
     pub fn new(json: &[u8], now: i64, group: usize) -> Option<Self> {
@@ -77,6 +108,7 @@ impl Simulator {
             config,
             catalog,
             mode: 0,
+            portrait: false,
         };
         value.app.choose_group(group, &value.config);
         value.samples(now);
@@ -147,17 +179,33 @@ impl Simulator {
         }
     }
     pub fn draw(&self, frame: &mut Frame, phase: u8) {
-        render::draw_animated(frame, &self.app, &self.config, &self.catalog, phase).unwrap();
+        if self.portrait {
+            render::portrait::draw_animated(
+                &mut PortraitFrame(frame),
+                &self.app,
+                &self.config,
+                &self.catalog,
+                phase,
+            )
+            .unwrap();
+        } else {
+            render::draw_animated(frame, &self.app, &self.config, &self.catalog, phase).unwrap();
+        }
     }
     pub fn gesture(&mut self, x: u16, y: u16, dx: i16, dy: i16, held: bool) -> ui::Action {
         if dx.unsigned_abs() > 35 || dy.unsigned_abs() > 35 {
             ui::swipe(&mut self.app, &self.config, &self.catalog, dx, dy);
             ui::Action::None
+        } else if self.portrait {
+            ui::tap_portrait(&mut self.app, &mut self.config, &self.catalog, x, y, held)
         } else if x < 240 && y < 240 {
             ui::tap(&mut self.app, &mut self.config, &self.catalog, x, y, held)
         } else {
             ui::Action::None
         }
+    }
+    pub fn set_portrait(&mut self, value: bool) {
+        self.portrait = value;
     }
     pub fn complete_mock_refresh(&mut self, now: i64) {
         if self.catalog.profile().zone().local(now).is_none() {
@@ -211,6 +259,7 @@ impl Simulator {
             manual: bool,
             loaded: bool,
             mode: u32,
+            portrait: bool,
             next: Option<Board<'a>>,
             draft: &'a Option<timetable_display::Pick>,
         }
@@ -227,6 +276,7 @@ impl Simulator {
                     || !self.config.groups.iter().any(|group| group.days != 0),
                 loaded: self.app.loaded_at.is_some(),
                 mode: self.mode,
+                portrait: self.portrait,
                 next,
                 draft: &self.app.draft,
             },

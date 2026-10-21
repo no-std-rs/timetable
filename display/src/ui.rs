@@ -297,3 +297,77 @@ pub fn tap(
     }
     Action::None
 }
+
+/// Translate the portrait layout's explicit hit regions to the shared editor.
+/// Pixels are drawn natively; only action coordinates cross this adapter.
+pub fn tap_portrait(
+    app: &mut App,
+    config: &mut Config,
+    catalog: &Catalog<'_>,
+    x: u16,
+    y: u16,
+    held: bool,
+) -> Action {
+    if x >= 172 || y >= 320 {
+        return Action::None;
+    }
+    let logical_y = match app.screen {
+        Screen::Board => {
+            if y < 32 {
+                24
+            } else if y < 60 {
+                45
+            } else if y >= 278 {
+                210
+            } else {
+                120
+            }
+        }
+        Screen::Freshness => {
+            if y < 32 {
+                24
+            } else if y >= 272 {
+                207
+            } else {
+                120
+            }
+        }
+        Screen::Groups | Screen::Picks | Screen::Routes | Screen::Stops => {
+            if y < 32 {
+                24
+            } else if (56..248).contains(&y) {
+                let row = (y - 56) / 48;
+                match app.screen {
+                    Screen::Groups => 62 + row * 36,
+                    Screen::Picks => 65 + row * 32,
+                    _ => 68 + row * 32,
+                }
+            } else if y >= 276 {
+                207
+            } else {
+                return Action::None;
+            }
+        }
+        Screen::Walk => {
+            if y < 32 {
+                24
+            } else if y < 80 {
+                52
+            } else if (90..234).contains(&y) {
+                90 + (y - 90) / 48 * 38
+            } else if y >= 276 {
+                200
+            } else {
+                return Action::None;
+            }
+        }
+    };
+    tap(
+        app,
+        config,
+        catalog,
+        (u32::from(x) * 240 / 172) as u16,
+        logical_y,
+        held,
+    )
+}

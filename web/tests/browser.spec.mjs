@@ -793,3 +793,32 @@ test("invalid installer drafts suspend stale WASM interactions until valid setti
   await expect(page.locator("#preview-line")).toHaveText("4");
   expect(moduleRequests).toBe(1);
 });
+
+
+test("C6 selection switches firmware, portrait controls and remembered model without mixing chip manifests", async ({page},info)=>{
+  await page.addInitScript(config=>{
+    if(!localStorage.getItem("timetable.settings.v1")) localStorage.setItem("timetable.settings.v1",JSON.stringify({version:1,active:0,config}));
+  },saved);
+  await prepare(page);
+  await page.route("**/devices/waveshare-c6/latest.json",r=>r.fulfill({json:{...release,chip:"ESP32-C6",board:"Waveshare ESP32-C6-Touch-LCD-1.47",flash_size:8388608}}));
+  await page.locator("#device-model").selectOption("waveshare-c6");
+  await expect(page.locator("#prepare")).toBeEnabled();
+  const canvas=page.locator("#device-canvas");
+  await expect(canvas).toHaveAttribute("width","172");await expect(canvas).toHaveAttribute("height","320");
+  await expect(canvas).toHaveAttribute("data-ready","true");
+  await canvas.focus();await page.keyboard.press("e");await expect(canvas).toHaveAttribute("data-screen","picks");
+  await page.keyboard.press("1");await expect(canvas).toHaveAttribute("data-screen","walk");
+  await page.keyboard.press("+");await page.keyboard.press("Enter");await expect(canvas).toHaveAttribute("data-screen","board");
+  await page.locator("#wifi-ssid").fill("C6-network");await page.locator("#prepare").click();
+  const manifest=await page.evaluate(async()=>await(await fetch(document.querySelector("#installer").manifest)).json());
+  expect(manifest.builds[0].chipFamily).toBe("ESP32-C6");expect(manifest.builds[0].parts[1].offset).toBe(4128768);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
+  await page.screenshot({path:`/tmp/timetable-c6-${info.project.name}.png`,fullPage:true});
+  await canvas.screenshot({path:`/tmp/timetable-c6-panel-${info.project.name}.png`});
+  await page.reload();await expect(page.locator("#device-model")).toHaveValue("waveshare-c6");await expect(canvas).toHaveAttribute("width","172");
+  await expect(page.locator("#prepare")).toBeEnabled();
+  await page.locator("#device-model").selectOption("guition-c3");await expect(page.locator("#install-area")).toBeHidden();
+  await expect(page.locator("#prepare")).toBeEnabled();await expect(canvas).toHaveAttribute("width","240");
+  await page.locator("#prepare").click();
+  expect(await page.evaluate(async()=> (await(await fetch(document.querySelector("#installer").manifest)).json()).builds[0].chipFamily)).toBe("ESP32-C3");
+});

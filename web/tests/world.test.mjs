@@ -8,7 +8,7 @@ import { directoryIndex } from "../feed-directory.js";
 import { catalogBytes,profileBytes,bundleBytes,zoneBytes } from "../feed-bundle.js";
 import { customizeFirmware } from "../firmware-image.js";
 import { catalogIndex } from "../catalog-search.js";
-import { archives,directory,template } from "./world-fixtures.mjs";
+import { archives,directory,template,factoryImage } from "./world-fixtures.mjs";
 import { saveDraft,loadFeedDraft,forgetDraft,SETTINGS_KEY } from "../settings-store.js";
 const now=Date.UTC(2026,9,21,12),encoder=new TextEncoder();
 test("header-only optional frequency tables are empty but actual templates remain unsupported",async()=>{
@@ -93,4 +93,20 @@ test("long human line labels remain bounded while unsupported service identities
   assert.equal(c.routes[0].line,"ABCDE...");assert.ok(catalogBytes(c).length);
   const invalid=await readFile(new URL("./fixtures/bad-service.zip",import.meta.url));
   await assert.rejects(()=>new FeedLoader().load(invalid,directory.feeds[0]),/Service IDs/);
+});
+
+
+test("C6 customization validates the chip, preserves the bootloader and repairs the unified-ROM app footer",async()=>{
+  const {manifestWithSettings}=await import("../config.js");
+  const feed=directory.feeds[0],catalog=await new FeedLoader().load(archives.get(feed.id),feed);
+  const bundle=bundleBytes(catalogBytes(catalog),profileBytes(feed,catalog.timezone,now));
+  const c6=factoryImage(bundle,13),result=await customizeFirmware(c6.bytes,c6.release,bundle);
+  assert.equal(result.bytes[12],13);assert.equal(result.bytes[c6.start+12],13);
+  assert.deepEqual(result.bytes.subarray(0,c6.slot),c6.bytes.subarray(0,c6.slot));
+  assert.deepEqual(result.bytes.subarray(c6.checksum+1),new Uint8Array(createHash("sha256").update(result.bytes.subarray(c6.start,c6.checksum+1)).digest()));
+  assert.equal(manifestWithSettings(c6.release,"fw","cfg","waveshare-c6").builds[0].chipFamily,"ESP32-C6");
+  assert.throws(()=>manifestWithSettings(c6.release,"fw","cfg"),/selected display/);
+  assert.throws(()=>manifestWithSettings(template.release,"fw","cfg","waveshare-c6"),/selected display/);
+  const mismatched={...c6.release,chip:template.release.chip,board:template.release.board,flash_size:template.release.flash_size};
+  await assert.rejects(()=>customizeFirmware(c6.bytes,mismatched,bundle),/firmware image/);
 });

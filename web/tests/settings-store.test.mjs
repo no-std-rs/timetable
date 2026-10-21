@@ -32,3 +32,10 @@ test("forget erases saved credentials even when a full quota rejects the prefere
   assert.throws(() => forgetDraft(storage), { name: "QuotaExceededError" });
   assert.equal(loadDraft(storage), null);
 });
+
+
+test("saved model identifiers cannot resolve inherited object properties", async()=>{
+  const {device}=await import("../devices.js");
+  for(const id of ["__proto__","constructor","ESP32-C6-LCD-1.47"])assert.throws(()=>device(id),/Unknown display/);
+  assert.equal(device("waveshare-c6").chipId,13);
+});

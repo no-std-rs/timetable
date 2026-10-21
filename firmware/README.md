@@ -1,9 +1,17 @@
-# Round timetable display
+# Timetable touch displays
 
-Rust firmware for **GUITION ESP32-2424S012-V1.0**, with an ESP32-C3, 4 MB flash,
-240×240 round GC9A01 LCD and CST816 touch. It runs independently over 2.4 GHz
-Wi-Fi, reading selected tables from the MobilityDatabase Poznań mirror, with
-the official GTFS ZIP as a fallback. No companion server is required.
+Rust firmware for two touch displays:
+
+| Installer model | MCU / flash | Screen | Controller / touch |
+| --- | --- | --- | --- |
+| GUITION ESP32-2424S012-V1.0 | ESP32-C3 / 4 MB | 240×240 round | GC9A01 / CST816 |
+| Waveshare ESP32-C6-Touch-LCD-1.47 | ESP32-C6 / 8 MB | 172×320 portrait | JD9853 / AXS5106L |
+
+Select the exact model in the installer. The C6 **Touch** board differs from
+ESP32-C6-LCD-1.47 without touch; that other board is not supported. Both run the
+same allocation-free timetable model, Embassy async network/cache pipeline and
+Rust renderer. No companion server is required. See the
+[C6 wiring, build and validation notes](../docs/waveshare-c6.md).
 The UI and installer use warm porcelain, dark ink, restrained kintsugi gold and
 chilli red for the main action and departure urgency.
 
@@ -53,10 +61,13 @@ after an update. Successful automatic updates run every three hours. Each
 connection synchronizes UTC through NTP before downloading, exceeding a daily
 correction while the network is available. A manual retry or selection change
 can start an earlier update.
-Optional **Battery mode** sleeps after 30 seconds idle on the board. A tap wakes
+Optional **Battery mode** deep-sleeps the GUITION after 30 seconds idle. A tap wakes
 saved departures without Wi-Fi; a timer refreshes every three hours (five-minute
 retry after failure). Editors stay awake. See [battery mode](../docs/battery.md)
-for retention, wake wiring and the remaining physical-board checks.
+for retention, wake wiring and the remaining physical-board checks. On C6, the
+same option switches off the screen while keeping touch polling and CPU idle
+sleep active: its GPIO21 touch interrupt cannot wake from deep sleep. Neither
+board blanks its screen unless this option is enabled.
 The website verifies SHA-256 before offering the binary. It sends settings as a
 separate USB image, never to a server. The page remembers settings locally by
 default; turn off Remember or use Forget on a shared computer. The firmware image itself contains no credentials. Installation replaces
