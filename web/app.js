@@ -1,3 +1,4 @@
+import { device, DEFAULT_DEVICE } from "./devices.js";
 import { DevicePreview } from "./device-preview.js";
 import { loadDraft, loadFeedDraft, saveDraft, forgetDraft, REMEMBER_KEY } from "./settings-store.js";
 import { NetworkPicker, FeedClient } from "./network-picker.js";
@@ -19,6 +20,7 @@ const element = (tag, text, className) => {
 };
 const emptyGroup = (name) => ({ name, days: 0, start: 360, end: 660, picks: [] });
 const state = { automatic: true, groups: [emptyGroup(t("Morning")), emptyGroup(t("Evening"))], active: 0, editing: null, catalog: null, index: null, undo: null, release: null, releaseGeneration: 0, firmwareUrl: null, urls: [] };
+state.device = DEFAULT_DEVICE;
 state.feed = { id: DEFAULT_FEED, provider: "ZTM Poznań", country: "PL", city: "Poznań" };
 state.catalogGeneration = 0; state.installGeneration = 0;
 const networkDrafts = new Map();
@@ -112,6 +114,7 @@ function preview() {
   $("preview-apply").disabled = true;
   if (!state.catalog) { devicePreview.clear(); return; }
   try {
+    devicePreview.setDevice(device(state.device));
     devicePreview.configure({ groups: state.groups, automatic: state.automatic, active: state.active, bundle: currentBundle() });
   } catch (error) {
     devicePreview.clear();
@@ -654,7 +657,7 @@ $("settings").addEventListener("submit", async (event) => {
     }
     const settingsUrl = URL.createObjectURL(new Blob([image], { type: "application/octet-stream" }));
     state.urls.push(settingsUrl);
-    const manifest = manifestWithSettings(state.release, firmwareUrl, settingsUrl), url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
+    const manifest = manifestWithSettings(state.release, firmwareUrl, settingsUrl, state.device), url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
     state.urls.push(url);
     $("installer").manifest = url;
     $("install-area").hidden = false;
@@ -802,14 +805,14 @@ async function loadRelease() {
   releaseLabel("Checking firmware");
   message("Checking the latest firmware…");
   try {
-    const response = await fetch("./latest.json", { cache: "no-store", credentials: "omit" });
+    const response = await fetch(`${device(state.device).path}latest.json`, { cache: "no-store", credentials: "omit" });
     if (!response.ok) throw new Error("The firmware build could not be loaded. Keep editing your groups and retry below.");
     const candidate = await response.json();
     if (generation !== state.releaseGeneration) return;
-    manifestWithSettings(candidate, "blob:firmware", "blob:settings");
+    manifestWithSettings(candidate, "blob:firmware", "blob:settings", state.device);
     releaseLabel("Downloading firmware");
     message("Downloading the display app. Your groups stay editable.");
-    const binary = await fetch("./timetable-display.bin", { cache: "no-store", credentials: "omit" });
+    const binary = await fetch(`${device(state.device).path}timetable-display.bin`, { cache: "no-store", credentials: "omit" });
     if (!binary.ok) throw new Error("The firmware download failed. Try the download again.");
     const bytes = await binary.arrayBuffer();
     if (generation !== state.releaseGeneration) return;
@@ -879,6 +882,7 @@ function restoreSettings() {
     $("remember-settings").checked = localStorage.getItem(REMEMBER_KEY) !== "false";
     const draft = $("remember-settings").checked ? loadDraft(localStorage) : null;
     if (!draft) return;
+    state.device = draft.device_id || DEFAULT_DEVICE;
     state.feed = { id: draft.feed_id || DEFAULT_FEED };
     state.groups = draft.config.groups;
     state.automatic = draft.config.automatic;
@@ -896,7 +900,7 @@ function persistSettings() {
     const remember = $("remember-settings").checked;
     if (remember) {
       localStorage.setItem(REMEMBER_KEY, "true");
-      saveDraft(localStorage, { version: 1, feed_id:state.feed.id, active: state.active, config: {
+      saveDraft(localStorage, { version: 1, device_id:state.device, feed_id:state.feed.id, active: state.active, config: {
       wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value,
       automatic: state.automatic, battery: $("battery-mode").checked, groups: state.groups,
       } });
@@ -945,6 +949,7 @@ document.addEventListener("languagechange", () => {
   for (const [id, { key, values }] of copies) $(id).textContent = t(key, values);
   releaseLabel(releaseText);
   renderLogs();
+  updateDevice();
   networkPicker.render();
   const shown = $("wifi-password").type === "text";
   $("show-password").textContent = t(shown ? "Hide" : "Show");
@@ -955,7 +960,23 @@ document.addEventListener("languagechange", () => {
     if (open) fillStops();
   }
 });
+function updateDevice() {
+  const board = device(state.device);
+  $("device-model").value = state.device;
+  $("device-canvas").closest(".device-figure").classList.toggle("portrait", board.portrait);
+  copy("device-hint", board.portrait ? "Portrait touch display · 8 MB flash" : "Round touch display · 4 MB flash");
+  copy("install-device-note", "Desktop Chrome or Edge · {board} · {size} MB flash", { board:board.name, size:board.flashSize/1048576 });
+  copy("battery-hint", board.portrait ? "Screen standby after 30 seconds. Touch stays active to wake; CPU uses idle sleep, not deep sleep. Wi-Fi refreshes every three hours. Leave off for an always-visible display." : "Sleep after 30 seconds of inactivity. Tap to wake with saved departures; Wi-Fi refreshes every three hours. Leave off for an always-visible display.");
+}
+$("device-model").addEventListener("change", () => {
+  state.device = $("device-model").value;
+  state.release = null;
+  updateDevice();
+  changed();
+  void loadRelease();
+});
 restoreSettings();
+updateDevice();
 storeReady = true;
 renderGroup();
 renderLogs();

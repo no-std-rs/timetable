@@ -5,5 +5,9 @@ target = "riscv32imc-unknown-none-elf"
 runner = "espflash flash --monitor --partition-table partitions.csv"
 rustflags = ["-C", "link-arg=-Tlinkall.x"]
 
+[target.riscv32imac-unknown-none-elf]
+runner = "espflash flash --monitor --partition-table partitions.csv"
+rustflags = ["-C", "link-arg=-Tboards/waveshare-c6/linkall.x"]
+
 [env]
 ESP_LOG = "info"

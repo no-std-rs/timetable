@@ -1,3 +1,4 @@
+import { device, releaseDevice, DEFAULT_DEVICE } from "./devices.js";
 const CONFIG_OFFSET = 4128768;
 const IMAGE_SIZE = 8192;
 const HEADER = 24;
@@ -51,9 +52,11 @@ function encodeSettingsPartition(config) {
   partition.set(encodeConfig(config));
   return partition;
 }
-function manifestWithSettings(release, firmware, settings) {
-  if (release?.chip !== "ESP32-C3" || release.board !== "GUITION ESP32-2424S012-V1.0" || release.flash_size !== 4194304 || release.config_offset !== CONFIG_OFFSET || release.config_version !== 2 || !/^[0-9a-f]{40}$/.test(release.revision) || !/^[0-9a-f]{64}$/.test(release.sha256) || !integer(release.size, 65536, CONFIG_OFFSET - 1)) throw new Error("This firmware does not match the round ESP32-C3 display or settings format.");
-  return { name: "timetable", version: release.revision.slice(0, 12), new_install_prompt_erase: true, new_install_improv_wait_time: 0, builds: [{ chipFamily: "ESP32-C3", parts: [{ path: firmware, offset: 0 }, { path: settings, offset: CONFIG_OFFSET }] }] };
+function manifestWithSettings(release, firmware, settings, selectedDevice = DEFAULT_DEVICE) {
+  const board = device(selectedDevice);
+  if (releaseDevice(release) !== board) throw new Error("This firmware does not match the selected display or settings format.");
+  if (release.config_offset !== CONFIG_OFFSET || release.config_version !== 2 || !/^[0-9a-f]{40}$/.test(release.revision) || !/^[0-9a-f]{64}$/.test(release.sha256) || !integer(release.size, 65536, CONFIG_OFFSET - 1)) throw new Error("This firmware does not match the selected display or settings format.");
+  return { name: "timetable", version: release.revision.slice(0, 12), new_install_prompt_erase: true, new_install_improv_wait_time: 0, builds: [{ chipFamily: board.chip, parts: [{ path: firmware, offset: 0 }, { path: settings, offset: CONFIG_OFFSET }] }] };
 }
 function walkingChance(minutes, walk, spread, margin) {
   const available = minutes - margin, low = Math.max(0, walk - spread), high = walk + spread;

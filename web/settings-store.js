@@ -1,3 +1,4 @@
+import { device } from "./devices.js";
 import { validateConfig } from "./config.js";
 import { validFeedId } from "./feed-directory.js";
 export const SETTINGS_KEY = "timetable.settings.v1";
@@ -8,6 +9,7 @@ const bytes = value => new TextEncoder().encode(value).length;
 export function validateDraft(draft) {
   if (!draft || draft.version !== 1 || !Number.isInteger(draft.active) || !draft.config) throw new Error("Invalid saved settings.");
   if (draft.feed_id !== undefined && !validFeedId(draft.feed_id)) throw new Error("Invalid saved settings.");
+  if (draft.device_id !== undefined) device(draft.device_id);
   const c = draft.config;
   if (typeof c.wifi_ssid !== "string" || bytes(c.wifi_ssid) > 128 || c.wifi_ssid.includes("\0")
       || typeof c.wifi_password !== "string" || bytes(c.wifi_password) > 256 || c.wifi_password.includes("\0")

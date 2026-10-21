@@ -18,22 +18,29 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, s
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use esp_backtrace as _;
+#[cfg(feature = "board-waveshare-c6")]
+use esp_hal::ledc::{
+    LSGlobalClkSource, Ledc, LowSpeed,
+    channel::{self, ChannelIFace},
+    timer::{self, TimerIFace},
+};
 use esp_hal::{
     clock::CpuClock,
     delay::Delay,
-    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull, RtcPin, RtcPinWithResistors},
+    gpio::{Level, Output, OutputConfig},
     i2c::master::{Config as I2cConfig, I2c},
     interrupt::software::SoftwareInterruptControl,
     rng::Rng,
-    rtc_cntl::{
-        Rtc,
-        sleep::{RtcioWakeupSource, TimerWakeupSource, WakeupLevel},
-        wakeup_cause,
-    },
+    rtc_cntl::{Rtc, wakeup_cause},
     spi::master::{Config as SpiConfig, Spi},
     system::SleepSource,
     time::Rate,
     timer::timg::TimerGroup,
+};
+#[cfg(not(feature = "board-waveshare-c6"))]
+use esp_hal::{
+    gpio::{Input, InputConfig, Pull, RtcPin, RtcPinWithResistors},
+    rtc_cntl::sleep::{RtcioWakeupSource, TimerWakeupSource, WakeupLevel},
 };
 use esp_radio::wifi::{
     AuthenticationMethod, Config as WifiConfig, Interface, PowerSaveMode, WifiController,
@@ -233,11 +240,16 @@ fn save(
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::_80MHz));
+    #[allow(unused_mut)]
     let mut rtc = Rtc::new(p.LPWR);
     let wake = wakeup_cause();
+    #[cfg(not(feature = "board-waveshare-c6"))]
     let mut wake_pin = p.GPIO0;
+    #[cfg(not(feature = "board-waveshare-c6"))]
     wake_pin.rtcio_pad_hold(false);
+    #[cfg(not(feature = "board-waveshare-c6"))]
     let mut reset_pin = p.GPIO1;
+    #[cfg(not(feature = "board-waveshare-c6"))]
     reset_pin.rtcio_pad_hold(false);
     esp_alloc::heap_allocator!(size: 64 * 1024);
     let timers = TimerGroup::new(p.TIMG0);
@@ -249,39 +261,108 @@ async fn main(spawner: Spawner) -> ! {
         "Boot: starting timetable; reset {:?}",
         esp_hal::system::reset_reason()
     );
-    let mut backlight = Output::new(p.GPIO3, Level::Low, OutputConfig::default());
-    let mut cs = Output::new(p.GPIO10, Level::Low, OutputConfig::default());
-    let dc = Output::new(p.GPIO2, Level::Low, OutputConfig::default());
-    let spi = Spi::new(
-        p.SPI2,
-        SpiConfig::default().with_frequency(Rate::from_mhz(40)),
-    )
-    .unwrap()
-    .with_sck(p.GPIO6)
-    .with_mosi(p.GPIO7);
-    let mut panel = panel::Panel::new(spi, dc);
     let mut delay = Delay::new();
+    #[cfg(not(feature = "board-waveshare-c6"))]
+    let (mut panel, mut touch, mut backlight, mut cs, _reset) = {
+        let backlight = Output::new(p.GPIO3, Level::Low, OutputConfig::default());
+        let cs = Output::new(p.GPIO10, Level::Low, OutputConfig::default());
+        let dc = Output::new(p.GPIO2, Level::Low, OutputConfig::default());
+        let spi = Spi::new(
+            p.SPI2,
+            SpiConfig::default().with_frequency(Rate::from_mhz(40)),
+        )
+        .unwrap()
+        .with_sck(p.GPIO6)
+        .with_mosi(p.GPIO7);
+        let panel = panel::Panel::new(spi, dc);
+
+        let mut touch = I2c::new(
+            p.I2C0,
+            I2cConfig::default().with_frequency(Rate::from_khz(400)),
+        )
+        .unwrap()
+        .with_sda(p.GPIO4)
+        .with_scl(p.GPIO5);
+        let mut reset = Output::new(reset_pin.reborrow(), Level::Low, OutputConfig::default());
+        delay.delay_millis(20);
+        reset.set_high();
+        delay.delay_millis(400);
+        let _ = touch.write(0x15, &[0xfe, 1]);
+        (panel, touch, backlight, cs, reset)
+    };
+    #[cfg(not(feature = "board-waveshare-c6"))]
+    let mut set_backlight = |on| {
+        if on {
+            backlight.set_high();
+        } else {
+            backlight.set_low();
+        }
+    };
+    #[cfg(feature = "board-waveshare-c6")]
+    let (mut panel, mut touch, _cs, _lcd_reset, _touch_reset, _sd_cs) = {
+        let cs = Output::new(p.GPIO14, Level::Low, OutputConfig::default());
+        let dc = Output::new(p.GPIO15, Level::Low, OutputConfig::default());
+        let sd_cs = Output::new(p.GPIO4, Level::High, OutputConfig::default());
+        let mut lcd_reset = Output::new(p.GPIO22, Level::Low, OutputConfig::default());
+        delay.delay_millis(10);
+        lcd_reset.set_high();
+        delay.delay_millis(10);
+        let spi = Spi::new(
+            p.SPI2,
+            SpiConfig::default().with_frequency(Rate::from_mhz(40)),
+        )
+        .unwrap()
+        .with_sck(p.GPIO1)
+        .with_mosi(p.GPIO2);
+        let panel = panel::Panel::new(spi, dc);
+        let touch = I2c::new(
+            p.I2C0,
+            I2cConfig::default().with_frequency(Rate::from_khz(400)),
+        )
+        .unwrap()
+        .with_sda(p.GPIO18)
+        .with_scl(p.GPIO19);
+        let mut reset = Output::new(p.GPIO20, Level::Low, OutputConfig::default());
+        delay.delay_millis(10);
+        reset.set_high();
+        delay.delay_millis(10);
+        (panel, touch, cs, lcd_reset, reset, sd_cs)
+    };
+    #[cfg(feature = "board-waveshare-c6")]
+    let mut ledc = Ledc::new(p.LEDC);
+    #[cfg(feature = "board-waveshare-c6")]
+    ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
+    #[cfg(feature = "board-waveshare-c6")]
+    let mut backlight_timer = ledc.timer::<LowSpeed>(timer::Number::Timer0);
+    #[cfg(feature = "board-waveshare-c6")]
+    backlight_timer
+        .configure(timer::config::Config {
+            duty: timer::config::Duty::Duty10Bit,
+            clock_source: timer::LSClockSource::APBClk,
+            frequency: Rate::from_khz(20),
+        })
+        .unwrap();
+    #[cfg(feature = "board-waveshare-c6")]
+    let mut backlight = ledc.channel(channel::Number::Channel0, p.GPIO23);
+    #[cfg(feature = "board-waveshare-c6")]
+    backlight
+        .configure(channel::config::Config {
+            timer: &backlight_timer,
+            duty_pct: 0,
+            drive_mode: esp_hal::gpio::DriveMode::PushPull,
+        })
+        .unwrap();
+    #[cfg(feature = "board-waveshare-c6")]
+    let set_backlight = |on| backlight.set_duty(if on { 40 } else { 0 }).unwrap();
     panel.init(&mut delay).unwrap();
-    let mut touch = I2c::new(
-        p.I2C0,
-        I2cConfig::default().with_frequency(Rate::from_khz(400)),
-    )
-    .unwrap()
-    .with_sda(p.GPIO4)
-    .with_scl(p.GPIO5);
-    let mut reset = Output::new(reset_pin.reborrow(), Level::Low, OutputConfig::default());
-    delay.delay_millis(20);
-    reset.set_high();
-    delay.delay_millis(400);
-    let _ = touch.write(0x15, &[0xfe, 1]);
-    let scratch = SETTINGS.init([0; config::IMAGE_SIZE]);
+    let scratch = SETTINGS.init_with(|| [0; config::IMAGE_SIZE]);
     if !matches!(wake, SleepSource::Timer) {
         let pixels = scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
-        for y in (0..240).step_by(panel::TILE_ROWS) {
-            render::starting(&mut panel::Tile { y, pixels }).unwrap();
+        for y in (0..panel::HEIGHT as u16).step_by(panel::TILE_ROWS) {
+            draw_starting(&mut panel::Tile { y, pixels }).unwrap();
             panel.write_tile(y, pixels).unwrap();
         }
-        backlight.set_high();
+        set_backlight(true);
     }
     info!("Boot: panel ready; loading settings");
     let mut flash = FlashStorage::new(p.FLASH);
@@ -304,11 +385,11 @@ async fn main(spawner: Spawner) -> ! {
     )
     else {
         let pixels = scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
-        for y in (0..240).step_by(panel::TILE_ROWS) {
-            render::setup(&mut panel::Tile { y, pixels }).unwrap();
+        for y in (0..panel::HEIGHT as u16).step_by(panel::TILE_ROWS) {
+            draw_setup(&mut panel::Tile { y, pixels }).unwrap();
             panel.write_tile(y, pixels).unwrap();
         }
-        backlight.set_high();
+        set_backlight(true);
         loop {
             Timer::after_secs(60).await;
         }
@@ -353,10 +434,26 @@ async fn main(spawner: Spawner) -> ! {
     let mut redraw = Instant::now();
     let mut last_activity = redraw;
     loop {
-        let mut data = [0; 5];
         let now = Instant::now();
-        if touch.write_read(0x15, &[0x02], &mut data).is_ok() {
-            let down = data[0] & 0x0f != 0;
+        #[cfg(not(feature = "board-waveshare-c6"))]
+        let sample = {
+            let mut data = [0; 5];
+            touch
+                .write_read(0x15, &[0x02], &mut data)
+                .ok()
+                .and_then(|()| timetable_firmware::touch::cst816(&data))
+        };
+        #[cfg(feature = "board-waveshare-c6")]
+        let sample = {
+            let mut data = [0; 14];
+            touch
+                .write(0x63, &[0x01])
+                .and_then(|()| touch.read(0x63, &mut data))
+                .ok()
+                .and_then(|()| timetable_firmware::touch::axs5106(&data))
+        };
+        if let Some(sample) = sample {
+            let down = matches!(sample, timetable_firmware::touch::Sample::Pressed { .. });
             if down {
                 last_activity = now;
                 if !visible {
@@ -364,10 +461,9 @@ async fn main(spawner: Spawner) -> ! {
                     suppress_touch = true;
                     redraw = now;
                 }
-                end = (
-                    ((data[1] as u16 & 15) << 8) | data[2] as u16,
-                    ((data[3] as u16 & 15) << 8) | data[4] as u16,
-                );
+                if let timetable_firmware::touch::Sample::Pressed { x, y } = sample {
+                    end = (x, y);
+                }
                 if down_at.is_none() {
                     start = end;
                     down_at = Some(now);
@@ -390,8 +486,8 @@ async fn main(spawner: Spawner) -> ! {
                 let dy = end.1 as i16 - start.1 as i16;
                 if dx.unsigned_abs() > 35 || dy.unsigned_abs() > 35 {
                     ui::swipe(app, c, &catalog, dx, dy);
-                } else if end.0 < 240 && end.1 < 240 {
-                    match ui::tap(
+                } else if end.0 < panel::WIDTH as u16 && end.1 < panel::HEIGHT as u16 {
+                    match tap_screen(
                         app,
                         c,
                         &catalog,
@@ -440,9 +536,9 @@ async fn main(spawner: Spawner) -> ! {
                 let State { config: c, app, .. } = &mut *s;
                 app.tick_in_zone(c, utc, catalog.profile().zone());
             }
-            for y in (0..240).step_by(panel::TILE_ROWS) {
+            for y in (0..panel::HEIGHT as u16).step_by(panel::TILE_ROWS) {
                 let tile_started = Instant::now();
-                render::draw_animated(
+                draw_screen(
                     &mut panel::Tile { y, pixels },
                     &s.app,
                     &s.config,
@@ -454,7 +550,7 @@ async fn main(spawner: Spawner) -> ! {
                 scheduler::tile(tile_started);
                 embassy_futures::yield_now().await;
             }
-            backlight.set_high();
+            set_backlight(true);
             animation = animation.wrapping_add(1);
             redraw = Instant::now()
                 + if matches!(
@@ -494,8 +590,9 @@ async fn main(spawner: Spawner) -> ! {
                 )
             {
                 visible = false;
-                backlight.set_low();
+                set_backlight(false);
             }
+            #[cfg(not(feature = "board-waveshare-c6"))]
             if s.config.battery
                 && battery::can_sleep(
                     &s.app,
@@ -552,7 +649,7 @@ async fn main(spawner: Spawner) -> ! {
                             s.app.sleep_failed = true;
                             let pixels =
                                 scratch.first_chunk_mut::<{ panel::TILE_BYTES }>().unwrap();
-                            for y in (0..240).step_by(panel::TILE_ROWS) {
+                            for y in (0..panel::HEIGHT as u16).step_by(panel::TILE_ROWS) {
                                 render::draw(
                                     &mut panel::Tile { y, pixels },
                                     &s.app,
@@ -562,7 +659,7 @@ async fn main(spawner: Spawner) -> ! {
                                 .unwrap();
                                 panel.write_tile(y, pixels).unwrap();
                             }
-                            backlight.set_high();
+                            set_backlight(true);
                             drop(s);
                             // Controller ownership has been consumed. Resume only
                             // through a fresh boot, never an orphaned REFRESH.
@@ -575,7 +672,7 @@ async fn main(spawner: Spawner) -> ! {
                     if touched {
                         battery::show_on_wake(retained);
                     }
-                    backlight.set_low();
+                    set_backlight(false);
                     if panel.sleep(&mut delay).is_err() {
                         warn!("Panel sleep command failed");
                     }
@@ -1085,3 +1182,14 @@ async fn update_once(
         60
     }
 }
+
+#[cfg(feature = "board-waveshare-c6")]
+use render::portrait::{
+    draw_animated as draw_screen, setup as draw_setup, starting as draw_starting,
+};
+#[cfg(not(feature = "board-waveshare-c6"))]
+use render::{draw_animated as draw_screen, setup as draw_setup, starting as draw_starting};
+#[cfg(not(feature = "board-waveshare-c6"))]
+use ui::tap as tap_screen;
+#[cfg(feature = "board-waveshare-c6")]
+use ui::tap_portrait as tap_screen;

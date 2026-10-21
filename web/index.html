@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#f5f1e8">
-  <meta name="description" content="Your lines, your stops, a little time to spare. A small Rust timetable for the round ESP32 display.">
+  <meta name="description" content="Your lines, your stops, a little time to spare. A small Rust timetable for ESP32 touch displays.">
   <title>timetable — a little time to spare</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="stylesheet" href="./style.css">
@@ -22,9 +22,14 @@
         <h1 id="title">A little time<br><em>to spare.</em></h1>
         <p class="intro">Your lines. Your stops. Just enough information<br class="desktop-break"> to know when it’s time to leave.</p>
         <a class="button primary" href="#your-groups">Make it yours <span aria-hidden="true">↓</span></a>
-        <p class="hardware-note">For the GUITION 240 × 240 round ESP32-C3 display.</p>
+        <p class="hardware-note">For GUITION round and Waveshare C6 Touch 1.47 displays.</p>
       </div>
       <figure class="device-figure">
+        <label class="device-picker">Display model<select id="device-model">
+          <option value="guition-c3">GUITION ESP32-C3 · 240×240</option>
+          <option value="waveshare-c6">Waveshare C6 Touch 1.47 · 172×320</option>
+        </select></label>
+        <p id="device-hint" class="preview-help">Round touch display · 4 MB flash</p>
         <div class="device-shell">
           <div class="device-face" id="preview">
             <canvas id="device-canvas" width="240" height="240" tabindex="0" role="application" aria-label="Interactive device demo" aria-describedby="preview-help preview-description"></canvas>
@@ -106,7 +111,7 @@
       </section>
 
       <section class="setup-section" aria-labelledby="install-title">
-        <div class="section-heading"><span class="step">03</span><div><h2 id="install-title">A small thing, ready to go.</h2><p>Connect the round display with a USB data cable. We’ll take it from here.</p></div></div>
+        <div class="section-heading"><span class="step">03</span><div><h2 id="install-title">A small thing, ready to go.</h2><p>Connect your display with a USB data cable. We’ll take it from here.</p></div></div>
         <div class="card install-card">
           <div class="release-row"><span class="release-state" id="release-state"><i></i> Checking the latest build</span><a id="revision" class="quiet-link" hidden></a></div>
           <p id="status" role="status">Loading the installer…</p>
@@ -121,7 +126,7 @@
             <pre id="log-output" class="log-output" tabindex="0" aria-label="Device serial logs"></pre>
           </details>
           <p class="startup-note">On power-up, a saved timetable appears before Wi-Fi connects. Saved times are labelled until the clock is synchronized; then countdowns and walking advice begin.</p>
-          <div class="install-notes"><p>Desktop Chrome or Edge · GUITION ESP32-2424S012-V1.0 · 4 MB flash</p><p>Installation replaces the device’s firmware and saved settings. Wi-Fi settings are stored in its local flash.</p></div>
+          <div class="install-notes"><p id="install-device-note">Desktop Chrome or Edge · GUITION ESP32-2424S012-V1.0 · 4 MB flash</p><p>Installation replaces the device’s firmware and saved settings. Wi-Fi settings are stored in its local flash.</p></div>
           <details class="download-details"><summary>Prefer to flash it yourself?</summary><p><a id="download" hidden download="timetable-display.bin">Download verified firmware</a><span id="no-download">A binary will be available after the first published build.</span></p><code id="digest"></code></details>
           <details class="download-details"><summary>Black screen or USB won’t connect?</summary><p>Hold the board’s BOOT button while reconnecting USB, then release it. Select the newly appeared port and install again. This starts the chip’s built-in flasher and bypasses the current app; installing different firmware first is unnecessary.</p></details>
         </div>

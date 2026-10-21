@@ -985,7 +985,7 @@ dependencies = [
  "esp32",
  "esp32c2",
  "esp32c3 0.32.2",
- "esp32c6",
+ "esp32c6 0.23.2",
  "esp32h2",
  "esp32s2",
  "esp32s3",
@@ -1012,6 +1012,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6aebfabb2c21bec45e575e4f6cb6bb7aa8e1b33e7ac45b5dffa0f9d33ff59105"
 dependencies = [
  "document-features",
+ "object",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -1045,7 +1046,9 @@ dependencies = [
  "esp-metadata-generated 0.4.0",
  "esp-sync",
  "esp-wifi-sys-esp32c3",
+ "esp-wifi-sys-esp32c6",
  "esp32c3 0.32.2",
+ "esp32c6 0.23.2",
  "log",
 ]
 
@@ -1095,6 +1098,7 @@ dependencies = [
  "esp-wifi-sys-esp32s2",
  "esp-wifi-sys-esp32s3",
  "esp32c3 0.32.2",
+ "esp32c6 0.23.2",
  "heapless 0.9.3",
  "instability",
  "log",
@@ -1135,6 +1139,7 @@ dependencies = [
  "document-features",
  "esp-metadata-generated 0.5.3",
  "esp32c3 0.33.0",
+ "esp32c6 0.24.0",
 ]
 
 [[package]]
@@ -1297,6 +1302,15 @@ name = "esp32c6"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c58f34ff2633968c12125efc7f4f8f101078d5d34c7cb60eab82268db20986f9"
+dependencies = [
+ "vcell",
+]
+
+[[package]]
+name = "esp32c6"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a207a5d6886ca89b4f220606dcf3779ca869803df192508314939186ae8de1ee"
 dependencies = [
  "vcell",
 ]
@@ -1821,6 +1835,15 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
+]
+
+[[package]]
+name = "object"
+version = "0.37.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

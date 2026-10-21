@@ -1,11 +1,19 @@
-//! GUITION ESP32-2424S012-V1.0 panel configuration from pawelchcki/razem-tag.
-//! GC9A01 initialization values match that board, including BGR and inversion.
+//! Bounded wire tiles for GUITION GC9A01 and Waveshare C6 Touch JD9853.
+//! GC9A01 values follow pawelchcki/razem-tag; JD9853 follows Waveshare.
 
 use core::convert::Infallible;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*, primitives::Rectangle};
 use embedded_hal::{delay::DelayNs, digital::OutputPin, spi::SpiBus};
 
+#[cfg(not(feature = "board-waveshare-c6"))]
 pub const WIDTH: usize = 240;
+#[cfg(feature = "board-waveshare-c6")]
+pub const WIDTH: usize = 172;
+pub const HEIGHT: usize = if cfg!(feature = "board-waveshare-c6") {
+    320
+} else {
+    240
+};
 pub const TILE_ROWS: usize = 16;
 pub const TILE_BYTES: usize = WIDTH * TILE_ROWS * 2;
 
@@ -28,6 +36,7 @@ impl<SPI: SpiBus, DC: OutputPin<Error = Infallible>> Panel<SPI, DC> {
         self.spi.flush()
     }
 
+    #[cfg(not(feature = "board-waveshare-c6"))]
     pub fn init(&mut self, delay: &mut impl DelayNs) -> Result<(), SPI::Error> {
         self.command(0x01, &[])?; // Software reset: no LCD reset GPIO on this board.
         delay.delay_ms(150);
@@ -106,8 +115,80 @@ impl<SPI: SpiBus, DC: OutputPin<Error = Infallible>> Panel<SPI, DC> {
         self.command(0x29, &[])
     }
 
+    /// JD9853 register values from Waveshare's ESP32-C6-Touch-LCD-1.47 demo.
+    /// Portrait RGB565, inversion enabled, visible columns 34..205.
+    #[cfg(feature = "board-waveshare-c6")]
+    pub fn init(&mut self, delay: &mut impl DelayNs) -> Result<(), SPI::Error> {
+        self.command(0x01, &[])?;
+        delay.delay_ms(150);
+        self.command(0x36, &[0x00])?;
+        for (cmd, data, ms) in [
+            (0x11, &[][..], 120),
+            (0xDF, &[0x98, 0x53][..], 0),
+            (0xDF, &[0x98, 0x53][..], 0),
+            (0xB2, &[0x23][..], 0),
+            (0xB7, &[0x00, 0x47, 0x00, 0x6F][..], 0),
+            (0xBB, &[0x1C, 0x1A, 0x55, 0x73, 0x63, 0xF0][..], 0),
+            (0xC0, &[0x44, 0xA4][..], 0),
+            (0xC1, &[0x16][..], 0),
+            (
+                0xC3,
+                &[0x7D, 0x07, 0x14, 0x06, 0xCF, 0x71, 0x72, 0x77][..],
+                0,
+            ),
+            (
+                0xC4,
+                &[
+                    0x00, 0x00, 0xA0, 0x79, 0x0B, 0x0A, 0x16, 0x79, 0x0B, 0x0A, 0x16, 0x82,
+                ][..],
+                0,
+            ),
+            (
+                0xC8,
+                &[
+                    0x3F, 0x32, 0x29, 0x29, 0x27, 0x2B, 0x27, 0x28, 0x28, 0x26, 0x25, 0x17, 0x12,
+                    0x0D, 0x04, 0x00, 0x3F, 0x32, 0x29, 0x29, 0x27, 0x2B, 0x27, 0x28, 0x28, 0x26,
+                    0x25, 0x17, 0x12, 0x0D, 0x04, 0x00,
+                ][..],
+                0,
+            ),
+            (0xD0, &[0x04, 0x06, 0x6B, 0x0F, 0x00][..], 0),
+            (0xD7, &[0x00, 0x30][..], 0),
+            (0xE6, &[0x14][..], 0),
+            (0xDE, &[0x01][..], 0),
+            (0xB7, &[0x03, 0x13, 0xEF, 0x35, 0x35][..], 0),
+            (0xC1, &[0x14, 0x15, 0xC0][..], 0),
+            (0xC2, &[0x06, 0x3A][..], 0),
+            (0xC4, &[0x72, 0x12][..], 0),
+            (0xBE, &[0x00][..], 0),
+            (0xDE, &[0x02][..], 0),
+            (0xE5, &[0x00, 0x02, 0x00][..], 0),
+            (0xE5, &[0x01, 0x02, 0x00][..], 0),
+            (0xDE, &[0x00][..], 0),
+            (0x35, &[0x00][..], 0),
+            (0x3A, &[0x05][..], 0),
+            (0x2A, &[0x00, 0x22, 0x00, 0xCD][..], 0),
+            (0x2B, &[0x00, 0x00, 0x01, 0x3F][..], 0),
+            (0xDE, &[0x02][..], 0),
+            (0xE5, &[0x00, 0x02, 0x00][..], 0),
+            (0xDE, &[0x00][..], 0),
+            (0x29, &[][..], 0),
+        ] {
+            self.command(cmd, data)?;
+            if ms != 0 {
+                delay.delay_ms(ms);
+            }
+        }
+        self.command(0x21, &[])
+    }
+
     pub fn write_tile(&mut self, y: u16, pixels: &[u8; TILE_BYTES]) -> Result<(), SPI::Error> {
-        self.command(0x2A, &[0, 0, 0, 239])?;
+        let x = if cfg!(feature = "board-waveshare-c6") {
+            34
+        } else {
+            0
+        };
+        self.command(0x2A, &[0, x, 0, x + WIDTH as u8 - 1])?;
         let end = y + TILE_ROWS as u16 - 1;
         self.command(
             0x2B,
@@ -137,7 +218,7 @@ impl Dimensions for Tile<'_> {
     fn bounding_box(&self) -> Rectangle {
         Rectangle::new(
             Point::new(0, self.y.into()),
-            Size::new(240, TILE_ROWS as u32),
+            Size::new(WIDTH as u32, TILE_ROWS as u32),
         )
     }
 }
@@ -151,7 +232,7 @@ impl DrawTarget for Tile<'_> {
         pixels: I,
     ) -> Result<(), Infallible> {
         for Pixel(p, color) in pixels {
-            if (0..240).contains(&p.x)
+            if (0..WIDTH as i32).contains(&p.x)
                 && (i32::from(self.y)..i32::from(self.y) + TILE_ROWS as i32).contains(&p.y)
             {
                 let offset = ((p.y - i32::from(self.y)) as usize * WIDTH + p.x as usize) * 2;
