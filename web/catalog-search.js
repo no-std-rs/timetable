@@ -2,8 +2,8 @@ import { routeTopology } from "./route-topology.js";
 // Poznań labels use Polish collation in either page language; line numbers sort naturally.
 export const compareLabels = new Intl.Collator("pl", { numeric: true, sensitivity: "base" }).compare;
 // Build both directions once; stop-first browsing never rescans all route links.
-export function searchText(value) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[łŁ]/g, "l").toLowerCase();
+export function searchText(value, locale = "pl") {
+  return value.toLocaleLowerCase(locale).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ł/g, "l");
 }
 
 export function catalogIndex(catalog) {
@@ -12,8 +12,9 @@ export function catalogIndex(catalog) {
   if (!catalog || !Array.isArray(catalog.routes) || !Array.isArray(catalog.stops) || !Array.isArray(catalog.links)
       || !catalog.routes.every((route) => route && text(route.id) && text(route.line) && Array.isArray(route.headsigns) && route.headsigns.length === 2 && route.headsigns.every(text))
       || !catalog.stops.every((stop) => stop && text(stop.id) && text(stop.name) && text(stop.code))) throw new Error("The route catalogue is invalid. Try downloading it again.");
-  const routes = catalog.routes.map((route) => searchText(`${route.line} ${route.headsigns.join(" ")}`));
-  const stops = catalog.stops.map((stop) => searchText(`${stop.name} ${stop.code}`));
+  const normalize = value => searchText(value, catalog.language || "pl");
+  const routes = catalog.routes.map((route) => normalize(`${route.line} ${route.headsigns.join(" ")}`));
+  const stops = catalog.stops.map((stop) => normalize(`${stop.name} ${stop.code}`));
   const compareRoutes = (a, b) => compareLabels(catalog.routes[a].line, catalog.routes[b].line) || compareLabels(catalog.routes[a].id, catalog.routes[b].id) || a - b;
   const compareStops = (a, b) => compareLabels(catalog.stops[a].name, catalog.stops[b].name) || compareLabels(catalog.stops[a].code, catalog.stops[b].code) || compareLabels(catalog.stops[a].id, catalog.stops[b].id) || a - b;
   const links = catalog.routes.map(() => []);
@@ -38,7 +39,7 @@ export function catalogIndex(catalog) {
     links[route].push({ stop, bits });
     serving[stop].add(route);
   }
-  const terms = (query) => searchText(query).trim().split(/\s+/).filter(Boolean);
+  const terms = (query) => normalize(query).trim().split(/\s+/).filter(Boolean);
   const matches = (text, query) => query.every((term) => text.includes(term));
   const index = {
     groups, groupOf, compareLabels,

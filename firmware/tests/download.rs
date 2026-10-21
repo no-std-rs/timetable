@@ -40,6 +40,7 @@ fn run<T>(future: impl Future<Output = T>) -> T {
 #[derive(Default)]
 struct Client {
     calls: RefCell<Vec<(String, Option<ByteRange>)>>,
+    mirror: Option<&'static [u8]>,
     disable: bool,
     split: bool,
     corrupt: bool,
@@ -88,7 +89,7 @@ impl Http for Client {
             TOMORROW
         } else {
             assert_eq!(url, OLD);
-            MIRROR
+            self.mirror.unwrap_or(MIRROR)
         };
         let (range, expected) = range.expect("mirror never downloads an entire ZIP");
         assert!(expected.is_none_or(|n| n == data.len() as u64));
@@ -326,6 +327,33 @@ fn empty_selection_never_reports_a_timetable_check_or_contacts_http() {
     assert!(client.calls.borrow().is_empty());
 }
 
+#[test]
+fn incomplete_feed_info_dates_use_calendar_coverage_and_refresh_departures() {
+    for data in [
+        include_bytes!("../../display/tests/fixtures/mirror-start-only.zip").as_slice(),
+        include_bytes!("../../display/tests/fixtures/mirror-end-only.zip").as_slice(),
+    ] {
+        let client = Client {
+            mirror: Some(data),
+            ..Client::default()
+        };
+        let mut workspace = zip::Workspace::new();
+        let mut mirror = run(download::Mirror::open(
+            &client,
+            OLD.parse().unwrap(),
+            &mut workspace,
+        ))
+        .unwrap();
+        assert_eq!(
+            run(mirror.coverage_dates(&mut workspace)).unwrap(),
+            ("20261015".parse().unwrap(), "20261031".parse().unwrap())
+        );
+        let (builder, result) = collect(&client);
+        result.unwrap();
+        assert_eq!(builder.events.len(), 2);
+        assert!(!client.fallback.get());
+    }
+}
 #[test]
 fn mirror_decoded_work_yields_even_with_an_always_ready_http_source() {
     use timetable_display::feed::Tables;

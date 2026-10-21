@@ -318,7 +318,9 @@ impl<'a, H: Http> Mirror<'a, H> {
             self.table(Table::FeedInfo, workspace, |row| {
                 let start = row.get(csv::Column::FeedStartDate).unwrap_or("");
                 let end = row.get(csv::Column::FeedEndDate).unwrap_or("");
-                if start.is_empty() && end.is_empty() {
+                // A partial optional pair cannot define a complete interval;
+                // derive coverage from service calendars below instead.
+                if start.is_empty() || end.is_empty() {
                     return Ok(());
                 }
                 let start: Date = start.parse()?;

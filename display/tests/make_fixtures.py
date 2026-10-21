@@ -36,6 +36,8 @@ def write_archive(name, tables, updated=None):
 
 write_archive('edge.zip', files)
 write_archive('mirror.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261015,20261031\n'})
+write_archive('mirror-start-only.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261001,\n'})
+write_archive('mirror-end-only.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n,20261115\n'})
 write_archive('mirror-tomorrow.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261018,20261031\n'})
 cache_files = {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261015,20261031\n'}
 cache_files['calendar.txt'] += 'ALWAYS,1,1,1,1,1,1,1,20261015,20261031\n'
