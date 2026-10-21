@@ -852,11 +852,11 @@ Trip metadata packs into five bytes per entry, retaining all 1,024 entries,
 in the unchanged 16 KiB pool; selected-hit cursors borrow their pool index.
 No parser/event capacity or heap limit was reduced.
 
-[Final linked C3 RAM](benchmarks/device-worldwide-ram.json) is **274,932 B static**
-including the 65,536 B heap, **299,508 B** with the minimum 24,576 B stack reserve,
-and **324,604 B** with all 49,672 B available stack. Both existing limits remain
+[Final linked C3 RAM](benchmarks/device-worldwide-ram.json) is **275,028 B static**
+including the 65,536 B heap, **299,604 B** with the minimum 24,576 B stack reserve,
+and **324,604 B** with all 49,576 B available stack. Both existing limits remain
 unchanged. [The scoped stack audit](benchmarks/device-worldwide-stack.json)
-passes: its largest audited path is 44,704 B plus 4,096 B headroom. This is linked
+passes: its largest audited path is 44,736 B plus 4,096 B headroom. This is linked
 accounting and a partial DWARF path audit, not physical stack high water.
 
 [Five paired Rust 1.95 release host runs](benchmarks/device-worldwide-host.json)

@@ -217,6 +217,20 @@ struct Payload<'a, V> {
     workspace: &'a mut zip::Workspace,
     visit: V,
 }
+struct Frequencies<'a> {
+    directory: &'a zip::Directory,
+    workspace: &'a mut zip::Workspace,
+}
+impl Operation for Frequencies<'_> {
+    async fn read<R: Read>(&mut self, mut body: R) -> Result<(), Error> {
+        self.directory
+            .validate_frequencies(&mut body, self.workspace)
+            .await?;
+        let mut scratch = [0; 256];
+        while body.read(&mut scratch).await.map_err(|_| Error::Network)? != 0 {}
+        Ok(())
+    }
+}
 impl<V: FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>> Operation for Payload<'_, V> {
     async fn read<R: Read>(&mut self, mut body: R) -> Result<(), Error> {
         {
@@ -264,6 +278,17 @@ impl<'a, H: Http> Mirror<'a, H> {
         let (cache, scratch) = workspace.scratch()[..3072].split_at_mut(2048);
         let mut reader = RangeReader::new(fetcher, length, cache)?;
         let directory = zip::Directory::read(&mut reader, scratch).await?;
+        if let Some(range) = directory.frequencies_range() {
+            http.fetch(
+                url,
+                Some((range, Some(length))),
+                &mut Frequencies {
+                    directory: &directory,
+                    workspace,
+                },
+            )
+            .await?;
+        }
         Ok(Self {
             http,
             snapshot,

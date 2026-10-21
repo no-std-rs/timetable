@@ -26,6 +26,9 @@ DEFLATE, and builds sorted route/stop choices. Route diagrams are reconstructed
 on demand from that same ZIP, including branches, interleaved journeys and
 non-boarding terminals. Public ZIPs are cached in IndexedDB for three hours.
 Downloads show progress and switching networks cancels the previous worker.
+Header-only optional frequency tables are accepted; actual frequency templates
+remain unsupported. The device validates frequency headers within 512 bytes and
+48 columns, using the existing decompression workspace.
 Groups are remembered separately per feed; Wi-Fi preferences stay in the current
 tab. Group exports contain `feed_id` and no credentials. Select that feed before
 importing its groups. Forget/opt-out erases every saved network’s credential copy.

@@ -11,6 +11,14 @@ import { catalogIndex } from "../catalog-search.js";
 import { archives,directory,template } from "./world-fixtures.mjs";
 import { saveDraft,loadFeedDraft,forgetDraft,SETTINGS_KEY } from "../settings-store.js";
 const now=Date.UTC(2026,9,21,12),encoder=new TextEncoder();
+test("header-only optional frequency tables are empty but actual templates remain unsupported",async()=>{
+  for(const file of ["frequencies-empty-stored.zip","frequencies-empty-deflated.zip","frequencies-zero.zip"]){
+    const bytes=await readFile(new URL(`./fixtures/${file}`,import.meta.url));
+    const c=await new FeedLoader().load(bytes,directory.feeds[0]);assert.equal(c.routes.length,1);
+  }
+  const bytes=await readFile(new URL("./fixtures/frequencies-populated.zip",import.meta.url));
+  await assert.rejects(new FeedLoader().load(bytes,directory.feeds[0]),/Frequency-based/);
+});
 function chunks(text){const bytes=encoder.encode(text);return new ReadableStream({start(c){for(const byte of bytes)c.enqueue(new Uint8Array([byte]));c.close();}});}
 test("global directory includes nonnumeric IDs, regional feeds and unavailable sources without inventing cities",()=>{
   const data=structuredClone(directory);data.feeds=data.feeds.slice(0,2);data.feeds.push({...data.feeds[0],id:"jbda-town-rail",country:"JP",city:"",region:"",mirror:"https://files.mobilitydatabase.org/jbda-town-rail/latest.zip"},{...data.feeds[0],id:"../bad",country:"",city:"",region:"",mirror:"https://private.invalid/"},{...data.feeds[0],id:"old",status:"inactive"});

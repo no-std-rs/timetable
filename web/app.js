@@ -681,7 +681,7 @@ function currentBundle() {
       const stops=new Set(state.catalog.links.filter(([r])=>full||routes.has(r)).map(([,s])=>s));
       state.catalogGlyphs=characters([
         ...state.catalog.routes.filter((_,i)=>full||routes.has(i)).flatMap(r=>[r.line,...r.headsigns,r.characters||""]),
-        ...[...stops].map(i=>state.catalog.stops[i].name),
+        ...[...stops].flatMap(i=>[state.catalog.stops[i].name,state.catalog.stops[i].code]),
       ]);
       state.catalogBytesKey=key;
     }
@@ -951,6 +951,9 @@ renderLogs();
 if(state.feed.id === DEFAULT_FEED) loadCatalog();
 networkPicker.load(false,state.feed.id).then(()=>{
   const feed=networkPicker.index?.feeds.find(f=>f.id===state.feed.id);
-  if(feed){state.feed=feed;if(feed.id!==DEFAULT_FEED)void selectFeed(feed,true);}
+  if(feed){state.feed=feed;if(feed.id!==DEFAULT_FEED){
+    if(networkPicker.index.available(feed))void selectFeed(feed,true);
+    else copy("network-progress","Unavailable timetable");
+  }}
 });
 loadRelease();

@@ -20,6 +20,17 @@ const END: u32 = 0x06054b50;
 const DESCRIPTOR: u32 = 0x08074b50;
 const INPUT: usize = 2048;
 
+pub(crate) async fn no_frequency_records<R: Read>(source: R) -> Result<(), Error> {
+    // Only the header is supported (the standard fields total under 128 bytes).
+    // Oversized headers/records fail explicitly, without retaining an 8 KiB row.
+    let mut rows = crate::csv::Reader::<_, 512, 48>::new(source, Table::FeedInfo);
+    match rows.next().await {
+        Ok(None) | Err(Error::MissingColumn("header")) => Ok(()),
+        Ok(Some(_)) => Err(Error::UnsupportedZip),
+        Err(error) => Err(error),
+    }
+}
+
 fn u16_at(b: &[u8], i: usize) -> u16 {
     u16::from_le_bytes([b[i], b[i + 1]])
 }
@@ -295,7 +306,7 @@ impl<'a, R: Read> Reader<'a, R> {
     pub fn data(source: R, workspace: &'a mut Workspace, member: Member) -> Self {
         let mut reader = Self::new(source, workspace);
         let mut name = [0; 128];
-        let bytes = member.table.filename().as_bytes();
+        let bytes = member.filename().as_bytes();
         name[..bytes.len()].copy_from_slice(bytes);
         reader.current = Some(Entry {
             name,
@@ -323,7 +334,7 @@ impl<'a, R: Read> Reader<'a, R> {
     ) -> Result<Self, Error> {
         let mut reader = Self::new(source, workspace);
         let entry = reader.next_entry().await?.ok_or(Error::InvalidZip)?;
-        if entry.table() != Some(member.table)
+        if entry.name() != member.filename().as_bytes()
             || entry.flags != member.flags
             || entry.compression != member.compression
             || entry
@@ -713,7 +724,7 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
             .map_err(|e| Error::Io(e.kind()))?;
         let mut reader = Self::new(source, workspace);
         let entry = reader.next_entry().await?.ok_or(Error::InvalidZip)?;
-        if entry.table() != Some(member.table)
+        if entry.name() != member.filename().as_bytes()
             || entry.compression != member.compression
             || entry.descriptor != (member.flags & 8 != 0)
             || entry
@@ -852,7 +863,9 @@ fn check_format(flags: u16, compression: u16) -> Result<(), Error> {
 /// Trusted only after `Directory::read` has validated the central directory.
 #[derive(Debug, Clone, Copy)]
 pub struct Member {
-    table: Table,
+    // None is the optional frequencies table, validated separately from the
+    // seven retained schedule tables and never added to their manifest.
+    table: Option<Table>,
     offset: u32,
     directory_offset: u32,
     record_end: u32,
@@ -877,7 +890,10 @@ impl Member {
         self.uncompressed_size
     }
     pub fn table(&self) -> Table {
-        self.table
+        self.table.expect("retained schedule table")
+    }
+    fn filename(&self) -> &'static str {
+        self.table.map_or("frequencies.txt", Table::filename)
     }
     /// Fetch these 30 local-header bytes before calculating the payload range.
     pub fn header_range(&self) -> crate::http::ByteRange {
@@ -905,7 +921,7 @@ impl Member {
             || u16_at(header, 4) > 20
             || u16_at(header, 6) != self.flags
             || u16_at(header, 8) != self.compression
-            || u16_at(header, 26) as usize != self.table.filename().len()
+            || u16_at(header, 26) as usize != self.filename().len()
         {
             return Err(Error::InvalidZip);
         }
@@ -929,12 +945,34 @@ impl Member {
 #[derive(Debug)]
 pub struct Directory {
     members: [Option<Member>; Table::COUNT],
+    frequencies: Option<Member>,
     updated_at: Option<i64>,
 }
 
 impl Directory {
     pub fn member(&self, table: Table) -> Option<Member> {
         self.members[table as usize]
+    }
+
+    /// An optional frequency table must be checked before querying schedules.
+    /// Fetch this exact range and pass it to `validate_frequencies` with the
+    /// existing caller-owned decompression workspace.
+    pub fn frequencies_range(&self) -> Option<crate::http::ByteRange> {
+        self.frequencies.map(|member| member.record_range())
+    }
+
+    /// Header-only frequency tables are harmless. Any actual frequency record
+    /// is unsupported; template stop times must not become scheduled departures.
+    pub async fn validate_frequencies<R: Read>(
+        &self,
+        source: R,
+        workspace: &mut Workspace,
+    ) -> Result<(), Error> {
+        if let Some(member) = self.frequencies {
+            let reader = Reader::record(source, workspace, member).await?;
+            no_frequency_records(reader).await?;
+        }
+        Ok(())
     }
 
     /// Read the ZIP directory with caller-owned scratch (at least 22 bytes).
@@ -1004,6 +1042,7 @@ impl Directory {
         }
         let mut result = Self {
             members: [None; Table::COUNT],
+            frequencies: None,
             updated_at: None,
         };
         let mut missing_timestamp = false;
@@ -1034,12 +1073,8 @@ impl Directory {
             }
             let mut name = [0; 128];
             read_exact(source, &mut name[..name_len]).await?;
-            // Frequency templates are not individual scheduled departures.
-            // A newly changed feed must fail rather than expose template times.
-            if &name[..name_len] == b"frequencies.txt" && u32_at(&h, 24) != 0 {
-                return Err(Error::UnsupportedZip);
-            }
-            if let Some(table) = Table::from_filename(&name[..name_len]) {
+            let table = Table::from_filename(&name[..name_len]);
+            if table.is_some() || &name[..name_len] == b"frequencies.txt" {
                 check_format(u16_at(&h, 8), u16_at(&h, 10))?;
                 if u16_at(&h, 6) > 20
                     || u32_at(&h, 20) == u32::MAX
@@ -1064,8 +1099,15 @@ impl Directory {
                 {
                     return Err(Error::InvalidZip);
                 }
-                if result.members[table as usize].replace(member).is_some() {
-                    return Err(Error::DuplicateTable(table));
+                if let Some(table) = table {
+                    if result.members[table as usize].replace(member).is_some() {
+                        return Err(Error::DuplicateTable(table));
+                    }
+                } else {
+                    if result.frequencies.replace(member).is_some() {
+                        return Err(Error::UnsupportedZip);
+                    }
+                    continue;
                 }
                 let modified = directory_timestamp(source, u16_at(&h, 30)).await?;
                 missing_timestamp |= modified.is_none();
@@ -1091,17 +1133,27 @@ impl Directory {
             let mut h = [0; 46];
             read_exact(source, &mut h).await?;
             let next = u32_at(&h, 42);
-            for member in result.members.iter_mut().flatten() {
+            for member in result
+                .members
+                .iter_mut()
+                .flatten()
+                .chain(result.frequencies.iter_mut())
+            {
                 if next > member.offset && next < member.record_end {
                     member.record_end = next;
                 }
             }
             pos += 46 + u16_at(&h, 28) as u64 + u16_at(&h, 30) as u64 + u16_at(&h, 32) as u64;
         }
-        for member in result.members.iter().flatten() {
+        for member in result
+            .members
+            .iter()
+            .flatten()
+            .chain(result.frequencies.iter())
+        {
             if member.offset as u64
                 + 30
-                + member.table.filename().len() as u64
+                + member.filename().len() as u64
                 + member.compressed_size as u64
                 > member.record_end as u64
             {
@@ -1183,7 +1235,7 @@ mod tests {
     #[test]
     fn record_range_includes_only_required_descriptor_lookahead() {
         let mut member = Member {
-            table: Table::StopTimes,
+            table: Some(Table::StopTimes),
             offset: 100,
             directory_offset: u32::MAX,
             record_end: u32::MAX - 46,

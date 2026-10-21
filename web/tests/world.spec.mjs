@@ -68,13 +68,26 @@ test("foreign-network USB installation contains that network’s checked ROM pro
   await page.locator("#wifi-ssid").fill("changed-network");await expect(page.locator("#install-area")).toBeHidden();
   await expect(page.locator("#digest")).toHaveText(`SHA-256 ${template.release.sha256}`);
 });
-test("Japanese stop names get a flash glyph subset and remain selectable in the same Rust demo",async({page})=>{
+test("Japanese stop names and platform codes get a flash glyph subset in the same Rust demo",async({page})=>{
   await prepare(page);await select(page,"demo-jp","JP");await pick(page,"東京駅");await expect(page.locator("#device-canvas")).toHaveAttribute("data-timezone","Asia/Tokyo");
   await page.locator("#wifi-ssid").fill("tokyo-local");await page.locator("#prepare").click();await expect(page.locator("#install-area")).toBeVisible();
-  const hasGlyphs=await page.locator("#installer").evaluate(async installer=>{
-    const m=await(await fetch(installer.manifest)).json(),bytes=await(await fetch(m.builds[0].parts[0].path)).arrayBuffer();return new TextDecoder().decode(bytes).includes("TTGLY001");
-  });expect(hasGlyphs).toBeTruthy();
+  const glyphs=await page.locator("#installer").evaluate(async installer=>{
+    const m=await(await fetch(installer.manifest)).json(),bytes=new Uint8Array(await(await fetch(m.builds[0].parts[0].path)).arrayBuffer());
+    const signature=new TextEncoder().encode("TTGLY001"),offset=bytes.findIndex((_,i)=>signature.every((b,j)=>bytes[i+j]===b)),view=new DataView(bytes.buffer);
+    return offset<0?[]:Array.from({length:view.getUint16(offset+8,true)},(_,i)=>String.fromCodePoint(view.getUint32(offset+10+24*i,true)));
+  });expect(glyphs).toEqual(expect.arrayContaining(["東","京","駅","番","一"]));
   await page.locator(".masthead [data-language=pl]").click();await expect(page.locator("#network-load")).toHaveText("Wczytaj tę sieć");await expect(page.locator("#schedule-timezone")).toHaveText("Asia/Tokyo");await expect(page.locator("#network-scope")).toContainText("wszystkie linie");
+});
+for(const change of [{status:"inactive"},{status:"deprecated"},{mirror:"https://example.com/withdrawn.zip"}])test(`remembered unavailable networks stay unloaded: ${JSON.stringify(change)}`,async({page})=>{
+  await prepare(page);await select(page,"demo-ny","US");await pick(page,"Broadway");
+  const withdrawn=structuredClone(directory);Object.assign(withdrawn.feeds.find(f=>f.id==="demo-ny"),change);
+  await page.route("**/feeds.json",r=>r.fulfill({json:withdrawn}));
+  let downloads=0;await page.route("https://files.mobilitydatabase.org/demo-ny/latest.zip",r=>{downloads++;return r.abort();});
+  await page.reload();
+  await expect(page.locator("#network-progress")).toHaveText("Unavailable timetable");
+  await expect(page.locator("#prepare")).toBeDisabled();await expect(page.locator("#add-pick")).toBeDisabled();
+  expect(downloads).toBe(0);
+  await page.locator("#network-panel summary").click();await expect(page.locator("#network-load")).toBeDisabled();
 });
 test("a cancelled network download cannot overwrite the next country’s catalogue or saved draft",async({page})=>{
   await prepare(page);

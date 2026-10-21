@@ -355,6 +355,38 @@ fn incomplete_feed_info_dates_use_calendar_coverage_and_refresh_departures() {
     }
 }
 #[test]
+fn mirror_accepts_empty_frequency_tables_and_rejects_actual_templates() {
+    for (bytes, supported) in [
+        (
+            include_bytes!("../../web/tests/fixtures/frequencies-zero.zip").as_slice(),
+            true,
+        ),
+        (
+            include_bytes!("../../web/tests/fixtures/frequencies-empty-stored.zip").as_slice(),
+            true,
+        ),
+        (
+            include_bytes!("../../web/tests/fixtures/frequencies-empty-deflated.zip").as_slice(),
+            true,
+        ),
+        (
+            include_bytes!("../../web/tests/fixtures/frequencies-populated.zip").as_slice(),
+            false,
+        ),
+    ] {
+        let client = Client {
+            mirror: Some(bytes),
+            ..Client::default()
+        };
+        let result = run(download::Mirror::open(
+            &client,
+            OLD.parse().unwrap(),
+            &mut zip::Workspace::new(),
+        ));
+        assert_eq!(result.is_ok(), supported);
+    }
+}
+#[test]
 fn mirror_decoded_work_yields_even_with_an_always_ready_http_source() {
     use timetable_display::feed::Tables;
     use timetable_firmware::cooperative::Cooperative;

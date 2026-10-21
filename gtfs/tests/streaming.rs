@@ -1233,6 +1233,82 @@ fn range_headers_reject_mismatches() {
 }
 
 #[test]
+fn empty_frequency_tables_work_in_indexed_and_forward_queries_but_templates_fail() {
+    block_on(async {
+        for (bytes, supported) in [
+            (
+                include_bytes!("../../web/tests/fixtures/frequencies-zero.zip").as_slice(),
+                true,
+            ),
+            (
+                include_bytes!("../../web/tests/fixtures/frequencies-empty-stored.zip").as_slice(),
+                true,
+            ),
+            (
+                include_bytes!("../../web/tests/fixtures/frequencies-empty-deflated.zip")
+                    .as_slice(),
+                true,
+            ),
+            (
+                include_bytes!("../../web/tests/fixtures/frequencies-populated.zip").as_slice(),
+                false,
+            ),
+        ] {
+            let mut workspace = zip::Workspace::new();
+            let mut feed = gtfs::query::Feed::open(Memory::new(bytes, 3), &mut [0; 128])
+                .await
+                .unwrap();
+            let mut routes = 0;
+            let indexed = feed
+                .scan(Table::Routes, &mut workspace, |_| {
+                    routes += 1;
+                    Ok(())
+                })
+                .await;
+            assert_eq!(indexed.is_ok(), supported);
+            assert_eq!(routes, usize::from(supported));
+            let forward = stream::scan(
+                Memory::new(bytes, 3),
+                &[Table::Routes],
+                None,
+                &mut workspace,
+                |_| Ok(()),
+            )
+            .await;
+            assert_eq!(forward.is_ok(), supported);
+        }
+        // A header-only file still needs its payload CRC checked through EOF.
+        let mut corrupt =
+            include_bytes!("../../web/tests/fixtures/frequencies-empty-stored.zip").to_vec();
+        let offset = corrupt
+            .windows(b"trip_id,start_time".len())
+            .position(|s| s == b"trip_id,start_time")
+            .unwrap();
+        corrupt[offset] ^= 1;
+        let mut workspace = zip::Workspace::new();
+        let mut feed = gtfs::query::Feed::open(Memory::new(&corrupt, 3), &mut [0; 128])
+            .await
+            .unwrap();
+        assert!(
+            feed.scan(Table::Routes, &mut workspace, |_| Ok(()))
+                .await
+                .is_err()
+        );
+        assert!(
+            stream::scan(
+                Memory::new(&corrupt, 3),
+                &[Table::Routes],
+                None,
+                &mut workspace,
+                |_| Ok(())
+            )
+            .await
+            .is_err()
+        );
+    });
+}
+
+#[test]
 fn mirror_snapshot_discovery_handles_split_links_and_duplicates() {
     block_on(async {
         let a = "https://files.mobilitydatabase.org/mdb-982/mdb-982-202610170128/mdb-982-202610170128.zip";

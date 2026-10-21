@@ -8,7 +8,7 @@ export class FeedLoader {
   rows(name) { return csvRows(this.zip.stream(name),{maxRecord:8192,maxFields:48}); }
   async load(bytes,feed,progress=()=>{}) {
     this.zip=new ZipArchive(bytes);this.feed=feed;this.trips=new Map();this.loadedRoutes=new Set();
-    if(this.zip.members.get("frequencies.txt")?.size)throw new Error("Frequency-based timetables are not supported by this display yet.");
+    if(this.zip.members.has("frequencies.txt"))for await(const _ of this.rows("frequencies.txt"))throw new Error("Frequency-based timetables are not supported by this display yet.");
     const agencies=[];for await(const a of this.rows("agency.txt"))agencies.push(a);
     const zones=[...new Set(agencies.map(a=>a.agency_timezone).filter(Boolean))];
     if(zones.length!==1)throw new Error("The feed must declare one agency timezone.");

@@ -35,6 +35,9 @@ pub async fn scan_with_limits<R: Read, const ROW: usize, const FIELDS: usize>(
     let mut archive = zip::Reader::new(source, workspace);
     let mut observed = Manifest::EMPTY;
     while let Some(entry) = archive.next_entry().await? {
+        if entry.name() == b"frequencies.txt" {
+            zip::no_frequency_records(&mut archive).await?;
+        }
         if let Some(table) = entry.table() {
             if observed.get(table).is_some() {
                 return Err(Error::DuplicateTable(table));
