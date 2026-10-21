@@ -146,7 +146,7 @@ fn service<'a>(
     Ok(&mut set[index])
 }
 
-// Match the catalogue's lossy human label only when no stable stop code exists.
+// Match the catalogue's normalized, bounded human labels.
 fn display_label<const N: usize>(name: &str) -> heapless::String<N> {
     let mut label = heapless::String::<N>::new();
     for word in name.split_whitespace() {
@@ -165,6 +165,13 @@ fn display_label<const N: usize>(name: &str) -> heapless::String<N> {
         }
     }
     label
+}
+
+/// Match a saved route in both live queries and persistent-cache recording.
+pub fn route_matches(route: gtfs::Route<'_>, pick: &crate::config::Pick) -> bool {
+    route.short_name == pick.line
+        || route.id == pick.route
+            && (route.short_name.is_empty() || display_label::<8>(route.short_name) == pick.line)
 }
 
 impl Builder {
@@ -265,11 +272,7 @@ impl Builder {
                                 let resolved = &mut self.resolved[g * crate::config::MAX_PICKS + p];
                                 if row.table() == Table::Routes {
                                     let r = row.route()?;
-                                    if r.short_name == pick.line
-                                        || r.id == pick.route
-                                            && (r.short_name.is_empty()
-                                                || display_label::<8>(r.short_name) == pick.line)
-                                    {
+                                    if route_matches(r, pick) {
                                         if r.id == pick.route {
                                             resolved.route = Id::new(r.id)?;
                                             resolved.route_exact = true;

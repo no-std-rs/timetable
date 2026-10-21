@@ -718,7 +718,7 @@ fn metadata_selected(row: Record<'_>, config: &Config) -> Result<bool, Error> {
                 .groups
                 .iter()
                 .flat_map(|g| &g.picks)
-                .any(|p| r.short_name == p.line || (r.short_name.is_empty() && r.id == p.route)))
+                .any(|p| timetable_display::feed::route_matches(r, p)))
         }
         Table::Stops => {
             let s = row.stop()?;

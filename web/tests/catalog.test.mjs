@@ -25,6 +25,13 @@ test("Polish search supports case, accents and ł", () => {
   assert.deepEqual(index.routes("4"), [1, 0]);
   assert.deepEqual(index.routes("missing"), []);
 });
+test("stop identity uses the feed's Turkish case rules", () => {
+  const stops = ["ISIK", "ısık", "isik", "İSİK"].map((name, i) => ({id: String(i), name, code: String(i)}));
+  const index = catalogIndex({...catalog, language: "tr", stops, links: stops.map((_, i) => [0, i, 1])});
+  assert.equal(index.groupOf[0], index.groupOf[1]);
+  assert.equal(index.groupOf[2], index.groupOf[3]);
+  assert.notEqual(index.groupOf[0], index.groupOf[2]);
+});
 test("boarding stop searches preserve route and direction membership", () => {
   const index = catalogIndex(catalog);
   assert.deepEqual(index.stops(1, -1, "lak"), [0]);

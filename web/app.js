@@ -57,7 +57,7 @@ function forgetInstall() {
     if(state.release)$("digest").textContent = `SHA-256 ${state.release.sha256}`;
   }
 }
-function canPrepare() { return !!state.release && !!navigator.serial && window.isSecureContext && (state.feed.id === DEFAULT_FEED || !!state.catalog); }
+function canPrepare() { return !!state.release && !!navigator.serial && window.isSecureContext && !!state.catalog; }
 function changed(refreshPreview = true) {
   state.undo = null;
   $("undo-area").hidden = true;

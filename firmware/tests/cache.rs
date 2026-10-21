@@ -317,6 +317,25 @@ fn events(b: &mut Builder) -> Vec<timetable_display::Departure> {
     b.events.iter().collect()
 }
 #[test]
+fn truncated_line_labels_survive_persistent_cache_and_unchanged_refresh() {
+    let flash = Memory::new();
+    let mut c = settings();
+    c.groups[0].picks[0].line = "ABCDE...".try_into().unwrap();
+    let client = Client::new(include_bytes!(
+        "../../display/tests/fixtures/cache-long-line.zip"
+    ));
+    let (mut fresh, result) = update(&flash, &client, &c, NOW);
+    result.unwrap();
+    let expected = events(&mut fresh);
+    assert!(!expected.is_empty());
+    let counters = flash.counters();
+    assert_eq!(events(&mut restore(&flash, &c, NOW)), expected);
+    let (mut unchanged, result) = update(&flash, &client, &c, NOW + 60);
+    result.unwrap();
+    assert_eq!(events(&mut unchanged), expected);
+    assert_eq!(flash.counters(), counters);
+}
+#[test]
 fn cold_boot_replays_full_period_and_unchanged_checks_do_not_write() {
     let flash = Memory::new();
     let c = settings();

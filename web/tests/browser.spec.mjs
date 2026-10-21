@@ -288,6 +288,17 @@ test("failed route and firmware downloads recover without losing group edits", a
   await expect(page.locator("#retry-catalog")).toBeHidden();
   await expect(page.locator("#retry-release")).toBeHidden();
 });
+test("verified firmware waits for a failed default catalogue to recover before preparation", async ({ page }) => {
+  await prepare(page, {catalogFailures: 1});
+  await expect(page.locator("#release-state")).toHaveText("Firmware verified");
+  await expect(page.locator("#retry-catalog")).toBeVisible();
+  await expect(page.locator("#prepare")).toBeDisabled();
+  await page.locator("#retry-catalog").click();
+  await expect(page.locator("#prepare")).toBeEnabled({timeout:15000});
+  await page.locator("#wifi-ssid").fill("catalogue-recovery-test");
+  await page.locator("#prepare").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+});
 test("a display name that is too long is shown at its group before installation", async ({ page }) => {
   await prepare(page);
   await expect(page.locator("#prepare")).toBeEnabled();

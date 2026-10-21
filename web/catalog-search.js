@@ -20,8 +20,8 @@ export function catalogIndex(catalog) {
   const serving = catalog.stops.map(() => new Set());
   const groups = [], groupOf = [], byName = new Map();
   catalog.stops.forEach((stop, i) => {
-    // Identity keeps Polish accents: search normalization is deliberately wider.
-    const name = stop.name.normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase("pl");
+    // Identity keeps accents and the feed's case rules; search is deliberately wider.
+    const name = stop.name.normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase(catalog.language || "pl");
     if (!byName.has(name)) {
       byName.set(name, groups.length);
       groups.push({ name: stop.name, stops: [] });
