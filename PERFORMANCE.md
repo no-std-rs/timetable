@@ -922,3 +922,30 @@ main-task stack temporary. These are pinned release ELF/CFI audits, not physical
 stack or allocator high-water measurements, a complete call graph or power
 measurements. Reference hardware sources, pin mapping, standby differences and
 remaining board checks are [documented separately](docs/waveshare-c6.md).
+
+
+## C6 landscape orientation
+
+The native 320×172 landscape image uses 8-row **5,120 B** tiles in the existing
+settings scratch. The last four screen rows are clipped and transferred as a
+half tile; no framebuffer or heap allocation is added. Its two-row route/stop
+picker uses doubled glyphs, while groups and saved choices use a 2×2 card grid.
+Both layouts use the same query, cache and network code.
+
+[Linked landscape RAM](benchmarks/device-c6-landscape-ram.json) remains
+**306,524 B static**, **331,100 B** with the minimum stack reserve and
+**397,308 B** with all **90,784 B** available stack. The 65,536 B heap and
+332,000 B minimum-reserve ratchet are unchanged. The
+[landscape stack audit](benchmarks/device-c6-landscape-stack.json) passes with
+a largest single frame of **14,560 B**, boot-settings path **14,400 B** and
+runtime TLS path **44,720 B**, with 4,096 B additional headroom required.
+These are pinned release linker/CFI results, not physical high-water or
+throughput measurements.
+
+Host tests compare tiled and full-frame pixels, including the final partial
+tile. Native UI and actual WASM tests exercise two-row paging, all four cards,
+walking adjustments, separated Save/Remove targets and cached startup states.
+Desktop and mobile browser tests use pointer gestures to edit the landscape
+preview, prepare the matching image and restore the remembered orientation.
+Panel colors, physical touch alignment and finger comfort still need a check
+on the actual Waveshare board.

@@ -450,7 +450,7 @@ async fn main(spawner: Spawner) -> ! {
                 .write(0x63, &[0x01])
                 .and_then(|()| touch.read(0x63, &mut data))
                 .ok()
-                .and_then(|()| timetable_firmware::touch::axs5106(&data))
+                .and_then(|()| decode_touch(&data))
         };
         if let Some(sample) = sample {
             let down = matches!(sample, timetable_firmware::touch::Sample::Pressed { .. });
@@ -485,7 +485,7 @@ async fn main(spawner: Spawner) -> ! {
                 let dx = end.0 as i16 - start.0 as i16;
                 let dy = end.1 as i16 - start.1 as i16;
                 if dx.unsigned_abs() > 35 || dy.unsigned_abs() > 35 {
-                    ui::swipe(app, c, &catalog, dx, dy);
+                    swipe_screen(app, c, &catalog, dx, dy);
                 } else if end.0 < panel::WIDTH as u16 && end.1 < panel::HEIGHT as u16 {
                     match tap_screen(
                         app,
@@ -1183,7 +1183,7 @@ async fn update_once(
     }
 }
 
-#[cfg(feature = "board-waveshare-c6")]
+#[cfg(all(feature = "board-waveshare-c6", not(feature = "c6-landscape")))]
 use render::portrait::{
     draw_animated as draw_screen, setup as draw_setup, starting as draw_starting,
 };
@@ -1191,5 +1191,21 @@ use render::portrait::{
 use render::{draw_animated as draw_screen, setup as draw_setup, starting as draw_starting};
 #[cfg(not(feature = "board-waveshare-c6"))]
 use ui::tap as tap_screen;
-#[cfg(feature = "board-waveshare-c6")]
+#[cfg(all(feature = "board-waveshare-c6", not(feature = "c6-landscape")))]
 use ui::tap_portrait as tap_screen;
+
+#[cfg(feature = "c6-landscape")]
+use render::landscape::{
+    draw_animated as draw_screen, setup as draw_setup, starting as draw_starting,
+};
+#[cfg(all(feature = "board-waveshare-c6", not(feature = "c6-landscape")))]
+use timetable_firmware::touch::axs5106 as decode_touch;
+#[cfg(feature = "c6-landscape")]
+use timetable_firmware::touch::axs5106_landscape as decode_touch;
+#[cfg(feature = "c6-landscape")]
+use ui::tap_landscape as tap_screen;
+
+#[cfg(not(feature = "c6-landscape"))]
+use ui::swipe as swipe_screen;
+#[cfg(feature = "c6-landscape")]
+use ui::swipe_landscape as swipe_screen;

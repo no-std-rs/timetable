@@ -17,9 +17,10 @@ for name in ['timetable-display.bin', 'latest.json', 'manifest.json', 'SHA256SUM
     shutil.copyfile(firmware / name, site / name)
 # The default round build retains its existing URLs. Additional targets have
 # complete, independently verified release bundles under devices/<id>/.
-extra = firmware / 'devices' / 'waveshare-c6'
-if not extra.is_dir():
-    raise ValueError('missing required Waveshare C6 firmware bundle')
-shutil.copytree(extra, site / 'devices' / 'waveshare-c6', dirs_exist_ok=True)
+for device in ['waveshare-c6', 'waveshare-c6-landscape']:
+    extra = firmware / 'devices' / device
+    if not extra.is_dir():
+        raise ValueError(f'missing required firmware bundle: {device}')
+    shutil.copytree(extra, site / 'devices' / device, dirs_exist_ok=True)
 (site / '.nojekyll').touch()
 print(site)

@@ -39,3 +39,11 @@ test("saved model identifiers cannot resolve inherited object properties", async
   for(const id of ["__proto__","constructor","ESP32-C6-LCD-1.47"])assert.throws(()=>device(id),/Unknown display/);
   assert.equal(device("waveshare-c6").chipId,13);
 });
+
+
+test("landscape drafts retain the physical board identity understood by portrait-only installers",()=>{
+ const storage=memory(),draft={version:1,device_id:"waveshare-c6",orientation:"landscape",active:0,config:structuredClone(config)};
+ saveDraft(storage,draft);assert.deepEqual(loadDraft(storage),draft);
+ assert.equal(loadDraft(storage).device_id,"waveshare-c6");
+ assert.throws(()=>saveDraft(storage,{...draft,orientation:"sideways"}),/Invalid saved/);
+});

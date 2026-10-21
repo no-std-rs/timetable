@@ -882,7 +882,7 @@ function restoreSettings() {
     $("remember-settings").checked = localStorage.getItem(REMEMBER_KEY) !== "false";
     const draft = $("remember-settings").checked ? loadDraft(localStorage) : null;
     if (!draft) return;
-    state.device = draft.device_id || DEFAULT_DEVICE;
+    state.device = draft.device_id === "waveshare-c6" && draft.orientation === "landscape" ? "waveshare-c6-landscape" : draft.device_id || DEFAULT_DEVICE;
     state.feed = { id: draft.feed_id || DEFAULT_FEED };
     state.groups = draft.config.groups;
     state.automatic = draft.config.automatic;
@@ -900,7 +900,7 @@ function persistSettings() {
     const remember = $("remember-settings").checked;
     if (remember) {
       localStorage.setItem(REMEMBER_KEY, "true");
-      saveDraft(localStorage, { version: 1, device_id:state.device, feed_id:state.feed.id, active: state.active, config: {
+      saveDraft(localStorage, { version: 1, device_id:device(state.device).chip === "ESP32-C6" ? "waveshare-c6" : state.device, orientation:device(state.device).orientation, feed_id:state.feed.id, active: state.active, config: {
       wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value,
       automatic: state.automatic, battery: $("battery-mode").checked, groups: state.groups,
       } });
@@ -962,18 +962,26 @@ document.addEventListener("languagechange", () => {
 });
 function updateDevice() {
   const board = device(state.device);
-  $("device-model").value = state.device;
+  $("device-model").value = board.chip === "ESP32-C6" ? "waveshare-c6" : state.device;
+  $("orientation-control").hidden = board.chip !== "ESP32-C6";
+  if (board.chip === "ESP32-C6") $("device-orientation").value = board.orientation;
   $("device-canvas").closest(".device-figure").classList.toggle("portrait", board.portrait);
-  copy("device-hint", board.portrait ? "Portrait touch display · 8 MB flash" : "Round touch display · 4 MB flash");
+  $("device-canvas").closest(".device-figure").classList.toggle("landscape", board.landscape);
+  copy("device-hint", board.landscape ? "Landscape touch display · 8 MB flash" : board.portrait ? "Portrait touch display · 8 MB flash" : "Round touch display · 4 MB flash");
   copy("install-device-note", "Desktop Chrome or Edge · {board} · {size} MB flash", { board:board.name, size:board.flashSize/1048576 });
-  copy("battery-hint", board.portrait ? "Screen standby after 30 seconds. Touch stays active to wake; CPU uses idle sleep, not deep sleep. Wi-Fi refreshes every three hours. Leave off for an always-visible display." : "Sleep after 30 seconds of inactivity. Tap to wake with saved departures; Wi-Fi refreshes every three hours. Leave off for an always-visible display.");
+  copy("battery-hint", board.chip === "ESP32-C6" ? "Screen standby after 30 seconds. Touch stays active to wake; CPU uses idle sleep, not deep sleep. Wi-Fi refreshes every three hours. Leave off for an always-visible display." : "Sleep after 30 seconds of inactivity. Tap to wake with saved departures; Wi-Fi refreshes every three hours. Leave off for an always-visible display.");
 }
 $("device-model").addEventListener("change", () => {
-  state.device = $("device-model").value;
+  state.device = $("device-model").value === "waveshare-c6" && $("device-orientation").value === "landscape" ? "waveshare-c6-landscape" : $("device-model").value;
   state.release = null;
   updateDevice();
   changed();
   void loadRelease();
+});
+$("device-orientation").addEventListener("change", () => {
+  state.device = $("device-orientation").value === "landscape" ? "waveshare-c6-landscape" : "waveshare-c6";
+  state.release = null;
+  updateDevice();changed();void loadRelease();
 });
 restoreSettings();
 updateDevice();
