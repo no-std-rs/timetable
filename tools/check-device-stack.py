@@ -244,6 +244,8 @@ def audit(frames, stack):
 
 if __name__ == '__main__':
     result = audit(*linked_frames(sys.argv[1]))
+    if "riscv32imac-unknown-none-elf" in sys.argv[1]:
+        result["target"] = "riscv32imac-unknown-none-elf"
     encoded = json.dumps(result, indent=2) + '\n'
     if len(sys.argv) > 2:
         Path(sys.argv[2]).write_text(encoded)

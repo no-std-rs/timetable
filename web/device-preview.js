@@ -7,6 +7,7 @@ export class DevicePreview {
     this.encoder = new TextEncoder();
     this.decoder = new TextDecoder();
     this.mode = 0;
+    this.width = 240; this.height = 240; this.portrait = false;
     this.pending = null;
     this.generation = 0;
     this.visible = true;
@@ -54,6 +55,7 @@ export class DevicePreview {
     // Cancel queued refreshes and reject stale interaction before validation.
     this.suspend();
     if (!this.api) return;
+    this.api.preview_device(Number(this.portrait));
     if (bundle && this.uploadedBundle !== bundle) {
       if (!this.api.preview_catalog_commit || bundle.length > this.api.preview_catalog_capacity()) { this.fail("settings"); return; }
       new Uint8Array(this.api.memory.buffer, this.api.preview_catalog_input(), bundle.length).set(bundle);
@@ -70,6 +72,12 @@ export class DevicePreview {
     this.api.preview_mode(this.mode, this.now());
     this.paint();
   }
+  setDevice(board) {
+    if (this.width === board.width && this.height === board.height) return;
+    this.suspend();
+    this.width = board.width; this.height = board.height; this.portrait = board.portrait;
+    this.canvas.width = this.width; this.canvas.height = this.height;
+  }
   snapshot() {
     const length = this.api.preview_snapshot();
     if (!length) throw new Error("Preview state exceeds capacity");
@@ -80,8 +88,8 @@ export class DevicePreview {
     try {
       if (!this.api.preview_render(this.now(), Math.floor(performance.now() / 500) % 8)) return;
       // Reacquire the view for every call; do not keep stale linear-memory views.
-      const pixels = new Uint8ClampedArray(this.api.memory.buffer, this.api.preview_frame(), 240 * 240 * 4);
-      this.context.putImageData(new ImageData(pixels, 240, 240), 0, 0);
+      const pixels = new Uint8ClampedArray(this.api.memory.buffer, this.api.preview_frame(), this.width * this.height * 4);
+      this.context.putImageData(new ImageData(pixels, this.width, this.height), 0, 0);
       this.canvas.dataset.ready = "true";
       const state = this.snapshot();
       this.canvas.dataset.screen = ["board", "groups", "picks", "routes", "stops", "walk", "freshness"][state.screen];
@@ -113,10 +121,20 @@ export class DevicePreview {
       }, 800);
     }
   }
+  keyboardGesture(x, y, dx = 0, dy = 0, held = false) {
+    if (!this.portrait) { this.gesture(x, y, dx, dy, held); return; }
+    const screen = this.snapshot().screen;
+    let py;
+    if (y < 38) py = 16;
+    else if (screen === 5) py = y >= 190 ? 288 : y < 63 ? 60 : 108 + Math.max(0, Math.floor((y - 70) / 38)) * 48;
+    else if ([1,2,3,4].includes(screen)) py = y >= 195 ? 288 : 72 + Math.max(0, Math.floor((y - (screen === 1 ? 52 : screen === 2 ? 55 : 58)) / (screen === 1 ? 36 : 32))) * 48;
+    else py = y >= 200 ? 288 : 160;
+    this.gesture(x * 172 / 240, py, dx, dy, held);
+  }
   bindInput() {
     const point = event => {
       const box = this.canvas.getBoundingClientRect();
-      return [(event.clientX - box.left) * 240 / box.width, (event.clientY - box.top) * 240 / box.height];
+      return [(event.clientX - box.left) * this.width / box.width, (event.clientY - box.top) * this.height / box.height];
     };
     this.canvas.addEventListener("pointerdown", event => {
       if (!this.configured || event.button !== 0 || this.press) return;
@@ -129,7 +147,7 @@ export class DevicePreview {
       const press = this.press;
       if (!press || press.id !== event.pointerId) return;
       this.press = null;
-      const [x, y] = point(event).map(value => Math.max(0, Math.min(239, Math.floor(value)))), [sx, sy] = press.start;
+      const [x, y] = point(event).map((value, i) => Math.max(0, Math.min((i ? this.height : this.width) - 1, Math.floor(value)))), [sx, sy] = press.start;
       this.gesture(x, y, x - sx, y - sy, performance.now() - press.time >= 700);
     });
     for (const name of ["pointercancel", "lostpointercapture"]) this.canvas.addEventListener(name, () => { this.press = null; });
@@ -147,14 +165,14 @@ export class DevicePreview {
         const index = Number(event.key) - 1;
         if (screen === 5) { this.walkRow = Math.min(index, 2); return; }
         const y = screen === 1 ? 52 + index * 36 + 10 : screen === 2 ? 55 + index * 32 + 10 : 58 + index * 32 + 10;
-        this.gesture(120, y);
+        this.keyboardGesture(120, y);
       } else if (["+", "-"].includes(event.key)) {
-        event.preventDefault(); this.gesture(event.key === "+" ? 180 : 60, 80 + (this.walkRow ?? 0) * 38);
+        event.preventDefault(); this.keyboardGesture(event.key === "+" ? 180 : 60, 80 + (this.walkRow ?? 0) * 38);
       } else if (commands[event.key]) {
         event.preventDefault();
         if (event.key === "Escape" && screen === 0) return;
         if (event.key === "Delete" && screen !== 5) return;
-        this.gesture(...commands[event.key]);
+        this.keyboardGesture(...commands[event.key]);
       }
     });
   }

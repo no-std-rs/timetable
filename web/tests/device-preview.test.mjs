@@ -95,3 +95,25 @@ test("accessible schedule status follows the Rust manual override and Resume aut
   api.preview_gesture(120,24,0,0,0);api.preview_gesture(120,212,0,0,0);api.preview_render(now,0);
   assert.equal(snapshot().manual,true);
 });
+
+
+test("portrait WASM uses all 172x320 pixels and shared editor actions with no extra memory",()=>{
+  const {api,snapshot}=load();
+  assert.equal(api.preview_device(1),1);
+  assert.equal(api.preview_device(2),0);
+  assert.equal(api.preview_render(now,4),1);
+  assert.equal(snapshot().portrait,true);
+  const pixels=new Uint8Array(api.memory.buffer,api.preview_frame(),172*320*4);
+  for(let i=3;i<pixels.length;i+=4)assert.equal(pixels[i],255,`alpha at ${i}`);
+  api.preview_gesture(86,160,0,0,1);assert.equal(snapshot().screen,2);
+  api.preview_gesture(86,72,0,0,0);assert.equal(snapshot().screen,5);
+  const before=snapshot().draft.walk;
+  api.preview_gesture(140,112,0,0,0);assert.equal(snapshot().draft.walk,before+1);
+  assert.equal(api.preview_gesture(125,288,0,0,0),2);assert.equal(snapshot().screen,0);
+  assert.equal(snapshot().config.groups[0].picks[0].walk,before+1);
+  api.preview_gesture(86,288,0,0,0);assert.equal(snapshot().screen,6);
+  api.preview_gesture(86,16,0,0,0);assert.equal(snapshot().screen,0);
+  const original=snapshot();api.preview_gesture(172,160,0,0,1);assert.deepEqual(snapshot(),original);
+  assert.equal(api.memory.buffer.byteLength,4194304);
+  assert.equal(api.preview_device(0),1);assert.equal(api.preview_render(now,0),1);assert.equal(snapshot().portrait,false);
+});

@@ -897,3 +897,28 @@ feed_info, 255-byte exact trip identities, cancellation, CRC failures, settings
 isolation, ESP image footer repair and actual WASM catalogue swaps. Browser-only
 WASM memory is now fixed at 4 MiB for separate 1 MiB upload/active slots; it does
 not change the ESP32 heap. Per-network ZIP parsing happens in a browser worker.
+
+## Waveshare C6 touch target
+
+The separate ESP32-C6-Touch-LCD-1.47 release uses the same 65,536-byte heap,
+parser/query capacities and 512-departure cache as C3. Its native 172×320
+renderer borrows 5,504 bytes for each 16-row tile from the existing settings
+scratch; there is no device framebuffer. The browser also reuses its larger
+round pixel allocation, retaining the fixed 4 MiB WASM memory ceiling.
+
+[Linked C6 RAM](benchmarks/device-c6-ram.json) counts **306,524 B static**, or
+**331,100 B** with the 24 KiB minimum stack reserve. The custom C6 linker region
+limits total linked RAM to **397,308 B**, including **90,784 B available stack**.
+The independent C6 ratchet is 332,000 B; the existing C3 300,000 B ratchet and
+both boards' 400,000 B full linked ceiling are enforced by the image builder.
+The larger C6 radio contributes more static IRAM/DRAM than C3; extra physical
+SRAM is not used to silently relax the project's RAM requirement.
+
+[Linked C6 stack audit](benchmarks/device-c6-stack.json) reports a largest single
+frame of **14,560 B**, boot settings path **14,448 B**, runtime TLS path
+**44,720 B** and frequency-record path **42,320 B**, with an additional 4,096 B
+headroom required. In-place initialization of settings scratch avoids an 8 KiB
+main-task stack temporary. These are pinned release ELF/CFI audits, not physical
+stack or allocator high-water measurements, a complete call graph or power
+measurements. Reference hardware sources, pin mapping, standby differences and
+remaining board checks are [documented separately](docs/waveshare-c6.md).

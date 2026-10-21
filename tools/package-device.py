@@ -12,14 +12,22 @@ CONFIG_OFFSET = 0x3F0000
 CACHE_OFFSET = 0x300000
 
 
-def package(directory):
+BOARDS = {
+    'guition-c3': ('GUITION ESP32-2424S012-V1.0', 'ESP32-C3', 5, 4 * 1024 * 1024, 0x2F),
+    'waveshare-c6': ('Waveshare ESP32-C6-Touch-LCD-1.47', 'ESP32-C6', 13, 8 * 1024 * 1024, 0x30),
+}
+
+def package(directory, board='guition-c3'):
+    board_name, chip, chip_id, flash_size, flash_byte = BOARDS[board]
     directory = Path(directory)
     binary = directory.joinpath('timetable-display.bin').read_bytes()
     if not 0x10000 <= len(binary) < CACHE_OFFSET or binary[0] != 0xE9:
-        raise ValueError('expected an ESP32-C3 merged factory image below the timetable cache partition')
-    # The first image is the C3 bootloader: DIO, 4 MB, 80 MHz, C3 chip id.
-    if binary[2] != 2 or binary[3] != 0x2F or int.from_bytes(binary[12:14], 'little') != 5:
+        raise ValueError('expected a merged factory image below the timetable cache partition')
+    # Verify the bootloader chip and flash header before publishing.
+    if binary[2] != 2 or binary[3] != flash_byte or int.from_bytes(binary[12:14], 'little') != chip_id:
         raise ValueError('unexpected chip, flash mode, size, or frequency')
+    if binary[0x10000] != 0xE9 or int.from_bytes(binary[0x1000C:0x1000E], 'little') != chip_id:
+        raise ValueError('application chip does not match the bootloader')
     partitions = {}
     for offset in range(0x8000, 0x8C00, 32):
         row = binary[offset:offset + 32]
@@ -35,9 +43,9 @@ def package(directory):
     dirty = bool(subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=normal'], cwd=ROOT, text=True))
     checksum = hashlib.sha256(binary).hexdigest()
     metadata = {
-        'name': 'timetable', 'board': 'GUITION ESP32-2424S012-V1.0',
-        'chip': 'ESP32-C3', 'revision': revision, 'dirty': dirty,
-        'sha256': checksum, 'size': len(binary), 'flash_size': 4 * 1024 * 1024,
+        'name': 'timetable', 'board': board_name,
+        'chip': chip, 'revision': revision, 'dirty': dirty,
+        'sha256': checksum, 'size': len(binary), 'flash_size': flash_size,
         'config_offset': CONFIG_OFFSET, 'config_version': 2,
     }
     # Locate the compiler-opaque ROM slot by a valid envelope, not the magic
@@ -56,7 +64,7 @@ def package(directory):
     manifest = {
         'name': metadata['name'], 'version': f'main-{revision[:12]}',
         'new_install_prompt_erase': True, 'new_install_improv_wait_time': 0,
-        'builds': [{'chipFamily': 'ESP32-C3', 'parts': [{'path': 'timetable-display.bin', 'offset': 0}]}],
+        'builds': [{'chipFamily': chip, 'parts': [{'path': 'timetable-display.bin', 'offset': 0}]}],
     }
     for filename, data in [('latest.json', metadata), ('manifest.json', manifest)]:
         directory.joinpath(filename).write_text(json.dumps(data, indent=2) + '\n')
@@ -65,4 +73,4 @@ def package(directory):
 
 
 if __name__ == '__main__':
-    package(sys.argv[1])
+    package(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else 'guition-c3')
