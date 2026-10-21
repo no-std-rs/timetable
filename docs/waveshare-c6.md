@@ -72,3 +72,53 @@ persistence. CI builds and audits both hardware targets before publishing Pages.
 These are compiler/host checks. Physical C6 display orientation, touch tracking,
 USB recovery, radio/TLS heap high-water and power consumption still require a
 board test; no physical-device validation is claimed.
+
+## Landscape alternative
+
+Select **Landscape** under Orientation in the installer after choosing the C6
+Touch board. The page remembers this choice with your groups and Wi-Fi settings,
+updates the real Rust/WASM preview, and downloads the matching firmware. Changing
+orientation invalidates a prepared install; install again to change the device's
+orientation. Portrait remains available, including existing saved browser drafts.
+
+The native 320×172 layout places a large next departure beside four upcoming
+services. Platform codes remain visible before shortened stop names. Cached
+startup shows saved times and the saved date until NTP establishes the clock.
+The groups and saved choices use four large cards in a 2×2 grid. Route and stop
+lists show two larger-text choices per page, with swipe paging and separate
+Previous/Next targets. Every choice remains reachable, and reopening a saved
+stop goes to its actual page. The walking editor provides three large adjustment
+areas and separated Save/Remove controls. Demo Apply/Reset actions remain visible
+without opening the simulated hardware settings.
+
+![Landscape departure board](previews/device-landscape.png)
+
+![Landscape choice cards](previews/device-landscape-choices.png)
+
+![Landscape walking editor](previews/device-landscape-walk.png)
+
+These are screenshots of the actual Rust/WASM renderer using sample departures,
+not photographs of hardware. Desktop/mobile pointer tests exercise the same hit
+regions as firmware, including the bottom-right choice, all walking fields,
+list paging, cached startup, orientation persistence and switching back to portrait.
+Physical display/touch alignment and comfort still require a board test.
+
+Landscape follows the reference demo's 90° rotation: JD9853 MADCTL 0x60, column
+range 0–319 and row offset 34. The touch adapter swaps the native AXS5106L axes.
+It borrows 5,120 bytes for a 320×8 tile from the same settings scratch; the last
+tile transfers only the remaining four rows. RAM/heap limits are unchanged.
+No full framebuffer or second render buffer is added on the device; WASM also
+reuses its existing pixel buffer within the same fixed 4 MiB memory.
+
+```sh
+cd firmware
+cargo clippy --locked --release --no-default-features --features firmware,c6-landscape --target riscv32imac-unknown-none-elf -- -D warnings
+cargo test --locked --no-default-features --features c6-landscape --lib --test panel-c6 --test touch --target x86_64-unknown-linux-gnu
+cd ..
+sh tools/build-device-artifact.sh dist/firmware/devices/waveshare-c6-landscape waveshare-c6-landscape
+```
+
+Landscape releases live at `devices/waveshare-c6-landscape/` and carry explicit
+orientation metadata so a portrait image cannot be prepared for a selected
+landscape layout. CI builds, checks and packages all three supported variants
+before publishing Pages. Settings and timetable-cache formats are unchanged.

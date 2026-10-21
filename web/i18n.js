@@ -1,5 +1,9 @@
 // English message keys keep validation modules independent of browser state.
 export const polish = {
+  "Orientation": "Orientacja",
+  "Portrait": "Pionowa",
+  "Landscape": "Pozioma",
+  "Landscape touch display · 8 MB flash": "Poziomy ekran dotykowy · 8 MB flash",
   "Desktop Chrome or Edge · {board} · {size} MB flash": "Chrome lub Edge na komputerze · {board} · {size} MB flash",
   "For GUITION round and Waveshare C6 Touch 1.47 displays.": "Dla okrągłego GUITION i Waveshare C6 Touch 1.47.",
   "Connect your display with a USB data cable. We’ll take it from here.": "Podłącz ekran kablem USB z transmisją danych. Dalej poprowadzi Cię instalator.",

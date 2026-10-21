@@ -371,3 +371,139 @@ pub fn tap_portrait(
         held,
     )
 }
+
+/// Two readable list choices per page; group/pick cards use a 2×2 grid.
+pub fn swipe_landscape(app: &mut App, config: &Config, catalog: &Catalog<'_>, dx: i16, dy: i16) {
+    if matches!(app.screen, Screen::Routes | Screen::Stops) && dy.unsigned_abs() > 35 {
+        let count = if app.screen == Screen::Routes {
+            catalog.route_count()
+        } else {
+            catalog
+                .route_stops(app.selected_route, app.direction)
+                .count()
+        };
+        app.cursor = if dy < 0 {
+            (app.cursor + 2).min(count.saturating_sub(1) / 2 * 2)
+        } else {
+            app.cursor.saturating_sub(2)
+        };
+    } else {
+        swipe(app, config, catalog, dx, dy);
+    }
+}
+
+/// Finger-sized hit regions for the native 320×172 layout. Shared editor
+/// mutations remain provisional; only the layout's paging/hit regions differ.
+pub fn tap_landscape(
+    app: &mut App,
+    config: &mut Config,
+    catalog: &Catalog<'_>,
+    x: u16,
+    y: u16,
+    held: bool,
+) -> Action {
+    if x >= 320 || y >= 172 {
+        return Action::None;
+    }
+    let previous = app.screen;
+    let mut lx = (u32::from(x) * 240 / 320) as u16;
+    let ly = match app.screen {
+        Screen::Board => {
+            if app.can_retry() && !held && y >= 20 {
+                45
+            } else if y < 32 {
+                24
+            } else if y >= 132 {
+                210
+            } else {
+                120
+            }
+        }
+        Screen::Freshness => {
+            if y < 32 {
+                24
+            } else if y >= 128 {
+                207
+            } else {
+                120
+            }
+        }
+        Screen::Groups | Screen::Picks => {
+            if y < 32 {
+                24
+            } else if y < 128 {
+                let index = ((y - 32) / 48) * 2 + x / 160;
+                if app.screen == Screen::Groups {
+                    62 + index * 36
+                } else {
+                    65 + index * 32
+                }
+            } else if app.screen == Screen::Groups {
+                207
+            } else {
+                24
+            }
+        }
+        Screen::Routes | Screen::Stops => {
+            if y < 32 {
+                24
+            } else if y < 128 {
+                68 + (y - 32) / 48 * 32
+            } else {
+                if !(64..256).contains(&x) {
+                    swipe_landscape(app, config, catalog, 0, if x < 64 { 80 } else { -80 });
+                    return Action::None;
+                }
+                if app.screen == Screen::Routes {
+                    return Action::None;
+                }
+                lx = 120;
+                207
+            }
+        }
+        Screen::Walk => {
+            if y < 28 {
+                24
+            } else if y < 60 {
+                lx = if x < 64 { 60 } else { 180 };
+                52
+            } else if (62..128).contains(&y) {
+                let col = (x / 106).min(2);
+                lx = if x.saturating_sub(col * 106) < 53 {
+                    60
+                } else {
+                    180
+                };
+                90 + col * 38
+            } else if y >= 128 {
+                lx = if x < 116 {
+                    60
+                } else if x >= 204 {
+                    180
+                } else {
+                    return Action::None;
+                };
+                200
+            } else {
+                return Action::None;
+            }
+        }
+    };
+    let result = tap(app, config, catalog, lx, ly, held);
+    if app.screen != previous {
+        if app.screen == Screen::Routes {
+            app.cursor = app.selected_route / 2 * 2;
+        } else if app.screen == Screen::Stops {
+            app.cursor = selected_stop(app, catalog)
+                .and_then(|index| {
+                    catalog
+                        .route_stops(app.selected_route, app.direction)
+                        .position(|(i, _)| i == index)
+                })
+                .unwrap_or(0)
+                / 2
+                * 2;
+        }
+    }
+    result
+}

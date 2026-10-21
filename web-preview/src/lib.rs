@@ -48,13 +48,13 @@ impl DrawTarget for Frame {
 
 /// Portrait reuses the larger round frame allocation; only the active packed
 /// 172×320 prefix is presented. The fixed 4 MiB WASM ceiling is unchanged.
-struct PortraitFrame<'a>(&'a mut Frame);
-impl OriginDimensions for PortraitFrame<'_> {
+struct RectFrame<'a, const W: usize, const H: usize>(&'a mut Frame);
+impl<const W: usize, const H: usize> OriginDimensions for RectFrame<'_, W, H> {
     fn size(&self) -> Size {
-        Size::new(172, 320)
+        Size::new(W as u32, H as u32)
     }
 }
-impl DrawTarget for PortraitFrame<'_> {
+impl<const W: usize, const H: usize> DrawTarget for RectFrame<'_, W, H> {
     type Color = Rgb565;
     type Error = Infallible;
     fn draw_iter<I: IntoIterator<Item = Pixel<Rgb565>>>(
@@ -62,8 +62,8 @@ impl DrawTarget for PortraitFrame<'_> {
         pixels: I,
     ) -> Result<(), Infallible> {
         for Pixel(p, c) in pixels {
-            if (0..172).contains(&p.x) && (0..320).contains(&p.y) {
-                let offset = (p.y as usize * 172 + p.x as usize) * 4;
+            if (0..W as i32).contains(&p.x) && (0..H as i32).contains(&p.y) {
+                let offset = (p.y as usize * W + p.x as usize) * 4;
                 self.0.0[offset..offset + 4].copy_from_slice(&[
                     (u16::from(c.r()) * 255 / 31) as u8,
                     (u16::from(c.g()) * 255 / 63) as u8,
@@ -81,7 +81,7 @@ pub struct Simulator {
     pub config: Config,
     catalog: Catalog<'static>,
     mode: u32,
-    portrait: bool,
+    layout: u32,
 }
 impl Simulator {
     pub fn new(json: &[u8], now: i64, group: usize) -> Option<Self> {
@@ -108,7 +108,7 @@ impl Simulator {
             config,
             catalog,
             mode: 0,
-            portrait: false,
+            layout: 0,
         };
         value.app.choose_group(group, &value.config);
         value.samples(now);
@@ -179,9 +179,18 @@ impl Simulator {
         }
     }
     pub fn draw(&self, frame: &mut Frame, phase: u8) {
-        if self.portrait {
+        if self.layout == 2 {
+            render::landscape::draw_animated(
+                &mut RectFrame::<320, 172>(frame),
+                &self.app,
+                &self.config,
+                &self.catalog,
+                phase,
+            )
+            .unwrap();
+        } else if self.layout == 1 {
             render::portrait::draw_animated(
-                &mut PortraitFrame(frame),
+                &mut RectFrame::<172, 320>(frame),
                 &self.app,
                 &self.config,
                 &self.catalog,
@@ -194,9 +203,15 @@ impl Simulator {
     }
     pub fn gesture(&mut self, x: u16, y: u16, dx: i16, dy: i16, held: bool) -> ui::Action {
         if dx.unsigned_abs() > 35 || dy.unsigned_abs() > 35 {
-            ui::swipe(&mut self.app, &self.config, &self.catalog, dx, dy);
+            if self.layout == 2 {
+                ui::swipe_landscape(&mut self.app, &self.config, &self.catalog, dx, dy);
+            } else {
+                ui::swipe(&mut self.app, &self.config, &self.catalog, dx, dy);
+            }
             ui::Action::None
-        } else if self.portrait {
+        } else if self.layout == 2 {
+            ui::tap_landscape(&mut self.app, &mut self.config, &self.catalog, x, y, held)
+        } else if self.layout == 1 {
             ui::tap_portrait(&mut self.app, &mut self.config, &self.catalog, x, y, held)
         } else if x < 240 && y < 240 {
             ui::tap(&mut self.app, &mut self.config, &self.catalog, x, y, held)
@@ -205,7 +220,14 @@ impl Simulator {
         }
     }
     pub fn set_portrait(&mut self, value: bool) {
-        self.portrait = value;
+        self.layout = u32::from(value);
+    }
+    pub fn set_layout(&mut self, layout: u32) -> bool {
+        if layout > 2 {
+            return false;
+        }
+        self.layout = layout;
+        true
     }
     pub fn complete_mock_refresh(&mut self, now: i64) {
         if self.catalog.profile().zone().local(now).is_none() {
@@ -260,6 +282,7 @@ impl Simulator {
             loaded: bool,
             mode: u32,
             portrait: bool,
+            landscape: bool,
             next: Option<Board<'a>>,
             draft: &'a Option<timetable_display::Pick>,
         }
@@ -276,7 +299,8 @@ impl Simulator {
                     || !self.config.groups.iter().any(|group| group.days != 0),
                 loaded: self.app.loaded_at.is_some(),
                 mode: self.mode,
-                portrait: self.portrait,
+                portrait: self.layout == 1,
+                landscape: self.layout == 2,
                 next,
                 draft: &self.app.draft,
             },

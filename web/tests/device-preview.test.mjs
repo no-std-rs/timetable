@@ -100,7 +100,7 @@ test("accessible schedule status follows the Rust manual override and Resume aut
 test("portrait WASM uses all 172x320 pixels and shared editor actions with no extra memory",()=>{
   const {api,snapshot}=load();
   assert.equal(api.preview_device(1),1);
-  assert.equal(api.preview_device(2),0);
+  assert.equal(api.preview_device(3),0);
   assert.equal(api.preview_render(now,4),1);
   assert.equal(snapshot().portrait,true);
   const pixels=new Uint8Array(api.memory.buffer,api.preview_frame(),172*320*4);
@@ -116,4 +116,19 @@ test("portrait WASM uses all 172x320 pixels and shared editor actions with no ex
   const original=snapshot();api.preview_gesture(172,160,0,0,1);assert.deepEqual(snapshot(),original);
   assert.equal(api.memory.buffer.byteLength,4194304);
   assert.equal(api.preview_device(0),1);assert.equal(api.preview_render(now,0),1);assert.equal(snapshot().portrait,false);
+});
+
+
+test("landscape uses all 320x172 pixels and its large cards and walk editor commit through shared Rust",()=>{
+ const {api,snapshot}=load();assert.equal(api.preview_device(2),1);assert.equal(api.preview_render(now,2),1);assert.equal(snapshot().landscape,true);
+ const pixels=new Uint8Array(api.memory.buffer,api.preview_frame(),320*172*4);for(let i=3;i<pixels.length;i+=4)assert.equal(pixels[i],255);
+ api.preview_gesture(160,90,0,0,1);assert.equal(snapshot().screen,2);
+ api.preview_gesture(80,56,0,0,0);assert.equal(snapshot().screen,5);const before=snapshot().draft;
+ api.preview_gesture(80,100,0,0,0);api.preview_gesture(186,100,0,0,0);api.preview_gesture(292,100,0,0,0);
+ assert.equal(snapshot().draft.walk,before.walk+1);assert.equal(snapshot().draft.spread,before.spread+1);assert.equal(snapshot().draft.margin,before.margin+1);
+ assert.equal(api.preview_gesture(260,150,0,0,0),2);assert.equal(snapshot().screen,0);
+ api.preview_gesture(160,160,0,0,0);assert.equal(snapshot().screen,6);
+ api.preview_gesture(160,100,0,0,0);assert.equal(snapshot().screen,0);
+ for(const mode of [1,2,3,4,5,0]){assert.equal(api.preview_mode(mode,now),1);assert.equal(api.preview_render(now,mode),1);}
+ const previous=snapshot();api.preview_gesture(160,172,0,0,1);assert.deepEqual(snapshot(),previous);assert.equal(api.memory.buffer.byteLength,4194304);
 });

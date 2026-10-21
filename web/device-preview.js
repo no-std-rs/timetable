@@ -7,7 +7,7 @@ export class DevicePreview {
     this.encoder = new TextEncoder();
     this.decoder = new TextDecoder();
     this.mode = 0;
-    this.width = 240; this.height = 240; this.portrait = false;
+    this.width = 240; this.height = 240; this.portrait = false; this.landscape = false;
     this.pending = null;
     this.generation = 0;
     this.visible = true;
@@ -33,7 +33,7 @@ export class DevicePreview {
     if (this.loading) return this.loading;
     this.loading = (async () => {
       try {
-        const response = await fetch(new URL("./device-preview.wasm", import.meta.url));
+        const response = await fetch(new URL("./device-preview.wasm", import.meta.url), { cache: "no-store" });
         if (!response.ok) throw new Error("Preview download failed");
         const { instance } = await WebAssembly.instantiate(await response.arrayBuffer(), {});
         this.api = instance.exports;
@@ -55,7 +55,7 @@ export class DevicePreview {
     // Cancel queued refreshes and reject stale interaction before validation.
     this.suspend();
     if (!this.api) return;
-    this.api.preview_device(Number(this.portrait));
+    if (!this.api.preview_device(this.landscape ? 2 : Number(this.portrait))) { this.fail("download"); return; }
     if (bundle && this.uploadedBundle !== bundle) {
       if (!this.api.preview_catalog_commit || bundle.length > this.api.preview_catalog_capacity()) { this.fail("settings"); return; }
       new Uint8Array(this.api.memory.buffer, this.api.preview_catalog_input(), bundle.length).set(bundle);
@@ -75,7 +75,7 @@ export class DevicePreview {
   setDevice(board) {
     if (this.width === board.width && this.height === board.height) return;
     this.suspend();
-    this.width = board.width; this.height = board.height; this.portrait = board.portrait;
+    this.width = board.width; this.height = board.height; this.portrait = board.portrait; this.landscape = board.landscape;
     this.canvas.width = this.width; this.canvas.height = this.height;
   }
   snapshot() {
@@ -93,6 +93,7 @@ export class DevicePreview {
       this.canvas.dataset.ready = "true";
       const state = this.snapshot();
       this.canvas.dataset.screen = ["board", "groups", "picks", "routes", "stops", "walk", "freshness"][state.screen];
+      this.canvas.dataset.orientation = this.landscape ? "landscape" : this.portrait ? "portrait" : "round";
       this.canvas.dataset.clock = state.clock_known ? "known" : "pending";
       this.canvas.dataset.feed = state.feed_id;
       this.canvas.dataset.timezone = state.timezone;
@@ -122,6 +123,23 @@ export class DevicePreview {
     }
   }
   keyboardGesture(x, y, dx = 0, dy = 0, held = false) {
+    if (this.landscape) {
+      const screen=this.snapshot().screen;
+      let px=x*320/240, py;
+      if (y<38) py=8;
+      else if (screen===5) {
+        if(y>=190)py=150;
+        else if(y<63)py=44;
+        else {const col=Math.max(0,Math.min(2,Math.floor((y-70)/38)));px=col*106+(x<120?28:78);py=100;}
+      } else if(screen===1||screen===2) {
+        if(y>=195)py=150;
+        else {const index=Math.max(0,Math.floor((y-(screen===1?52:55))/(screen===1?36:32)));px=80+(index%2)*160;py=56+Math.floor(index/2)*48;}
+      } else if(screen===3||screen===4) {
+        if(y>=195)py=150;
+        else {const index=Math.max(0,Math.floor((y-58)/32));if(index>=2)return;py=56+index*48;}
+      } else py=y>=200?160:90;
+      this.gesture(px,py,dx,dy,held);return;
+    }
     if (!this.portrait) { this.gesture(x, y, dx, dy, held); return; }
     const screen = this.snapshot().screen;
     let py;

@@ -8,7 +8,7 @@ struct State {
     frame: Frame,
     simulator: Option<Simulator>,
     catalog: Option<Catalog<'static>>,
-    portrait: bool,
+    layout: u32,
 }
 struct Cell(UnsafeCell<State>);
 // SAFETY: the built module has unshared memory, no threads, no host imports and
@@ -21,7 +21,7 @@ static STATE: Cell = Cell(UnsafeCell::new(State {
     frame: Frame([0; FRAME_BYTES]),
     simulator: None,
     catalog: None,
-    portrait: false,
+    layout: 0,
 }));
 const CATALOG_BYTES: usize = timetable_display::profile::SLOT_BYTES;
 struct CatalogMemory {
@@ -105,7 +105,7 @@ pub extern "C" fn preview_configure(len: usize, now: i64, group: usize) -> u32 {
         let Some(mut simulator) = simulator else {
             return 0;
         };
-        simulator.set_portrait(s.portrait);
+        simulator.set_layout(s.layout);
         s.simulator = Some(simulator);
         1
     })
@@ -148,7 +148,7 @@ pub extern "C" fn preview_gesture(x: u32, y: u32, dx: i32, dy: i32, held: u32) -
         return 0;
     }
     state(|s| {
-        if x >= if s.portrait { 172 } else { 240 } || y >= if s.portrait { 320 } else { 240 } {
+        if x >= [240, 172, 320][s.layout as usize] || y >= [240, 320, 172][s.layout as usize] {
             return 0;
         }
         let Some(sim) = &mut s.simulator else {
@@ -164,14 +164,14 @@ pub extern "C" fn preview_gesture(x: u32, y: u32, dx: i32, dy: i32, held: u32) -
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn preview_device(portrait: u32) -> u32 {
-    if portrait > 1 {
+pub extern "C" fn preview_device(layout: u32) -> u32 {
+    if layout > 2 {
         return 0;
     }
     state(|s| {
-        s.portrait = portrait == 1;
+        s.layout = layout;
         if let Some(sim) = &mut s.simulator {
-            sim.set_portrait(s.portrait);
+            sim.set_layout(s.layout);
         }
         1
     })

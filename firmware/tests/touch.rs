@@ -26,3 +26,24 @@ fn cst816_round_coordinates_remain_unchanged() {
     assert_eq!(cst816(&[1, 0, 240, 0, 0]), None);
     assert_eq!(cst816(&[0, 0, 0, 0, 0]), Some(Sample::Released));
 }
+
+#[test]
+fn landscape_touch_axes_match_reference_rotation_and_reject_outside_glass() {
+    use timetable_firmware::touch::axs5106_landscape;
+    let mut data = [0; 14];
+    assert_eq!(axs5106_landscape(&data), Some(Sample::Released));
+    data[1] = 1;
+    assert_eq!(
+        axs5106_landscape(&data),
+        Some(Sample::Pressed { x: 0, y: 0 })
+    );
+    data[3] = 171;
+    data[4] = 1;
+    data[5] = 63;
+    assert_eq!(
+        axs5106_landscape(&data),
+        Some(Sample::Pressed { x: 319, y: 171 })
+    );
+    data[3] = 172;
+    assert_eq!(axs5106_landscape(&data), None);
+}

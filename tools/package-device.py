@@ -18,7 +18,7 @@ BOARDS = {
 }
 
 def package(directory, board='guition-c3'):
-    board_name, chip, chip_id, flash_size, flash_byte = BOARDS[board]
+    board_name, chip, chip_id, flash_size, flash_byte = BOARDS[board.removesuffix('-landscape')]
     directory = Path(directory)
     binary = directory.joinpath('timetable-display.bin').read_bytes()
     if not 0x10000 <= len(binary) < CACHE_OFFSET or binary[0] != 0xE9:
@@ -48,6 +48,8 @@ def package(directory, board='guition-c3'):
         'sha256': checksum, 'size': len(binary), 'flash_size': flash_size,
         'config_offset': CONFIG_OFFSET, 'config_version': 2,
     }
+    if chip == 'ESP32-C6':
+        metadata['orientation'] = 'landscape' if board.endswith('-landscape') else 'portrait'
     # Locate the compiler-opaque ROM slot by a valid envelope, not the magic
     # string alone (the parser may also contain that string as a constant).
     slots = []
