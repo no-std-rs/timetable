@@ -150,9 +150,15 @@ pure Rust `embedded-tls` transport verifies each hostname and its pinned root:
 GTS for MobilityDatabase and Certum for ZTM. `reqwless` parses streaming HTTP
 responses. Compressed HTTP representations and redirects are rejected.
 
-The primary source is [MobilityDatabase mdb-982](https://mobilitydatabase.org/feeds/gtfs/mdb-982).
+The primary source is the MobilityDatabase feed chosen in the installer; the
+default is [mdb-982 Poznań](https://mobilitydatabase.org/feeds/gtfs/mdb-982).
+A checked 1 MiB immutable ROM slot holds its catalogue, feed ID, finite IANA zone
+rules and optional glyph subset. It is compiler-opaque assembly so customization
+cannot be defeated by constant folding. The profile is borrowed directly from
+flash; Config, heap and parser capacities do not grow. Country/network setup and
+compatibility limits are documented in [the installer](../web/README.md#countries-and-transport-networks).
 The app inspects the newest immutable snapshots, validates their ZIP directories,
-and reads `feed_info.txt` to select coverage for yesterday, today and tomorrow
+and reads `feed_info.txt` (or derives dates from calendars when absent) to select coverage for yesterday, today and tomorrow
 when needed by the six-hour horizon. At a feed handover more than one snapshot
 can be needed. For an uncached streaming query, each chosen snapshot downloads each required table once:
 calendars, routes/stops, trips and stop times. HTTP ranges skip shapes and other
@@ -163,13 +169,15 @@ invalidates the connection. Selected table data are decompressed directly into t
 bounded query builder. Stop times still require reading that table, not just
 individual selected rows. There is no full ZIP buffer or temporary file.
 
-If any mirror step fails, all staged data are cleared. The original ZTM listing
+If any mirror step fails, all staged data are cleared. For Poznań only, the original ZTM listing
 then selects immutable dated ZIPs for the same service window; each distinct
 archive gets three forward passes for calendars, selected trips and departures.
 That fallback transfers complete ZIP streams. Both paths check lengths, table
 identity, CRCs and end-of-body before publishing. Configuration changes cancel
 an obsolete query; failure retains the previously validated board. The generic
-`gtfs` crate's existing APIs remain available.
+`gtfs` crate's existing APIs remain available. Other networks retain the last
+validated board on mirror failure; there is no cross-city fallback. Cache and RTC
+keys include the selected feed and timezone rules.
 
 The dedicated flash cache retains selected all-period GTFS tables, with no
 writes on unchanged selected data. A cold boot shows saved absolute times before
@@ -273,6 +281,8 @@ cargo build --locked --release --features firmware
 # Hard 64 KiB first-fit heap, 34,320 B radio reserve, at most 20% host CPU duty.
 # Optional fixed query time keeps mirror/fallback outputs comparable:
 cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882
+# Other installed networks: LINE STOP_CODE_OR_ID DUTY UTC --bundle checked-network.bundle
+# The host loads that file before the 64 KiB allocator starts, modelling ROM.
 cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --official
 # First fill, unchanged check, then zero-network replay (reuse the same PATH):
 cargo run --locked --release --example probe_device --target x86_64-unknown-linux-gnu -- 4 MT44 20 1792367882 --cache /tmp/timetable.nor

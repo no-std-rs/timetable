@@ -18,9 +18,9 @@ fn valid_freshness(
     freshness: timetable_display::freshness::Freshness,
 ) -> bool {
     !freshness.checked_at.is_some_and(|t| {
-        timetable_display::clock::warsaw(t).is_none() || loaded.is_none_or(|epoch| t < epoch)
+        !timetable_display::clock::valid_utc(t) || loaded.is_none_or(|epoch| t < epoch)
     }) && !freshness.source_updated_at.is_some_and(|t| {
-        timetable_display::clock::warsaw(t).is_none()
+        !timetable_display::clock::valid_utc(t)
             || freshness.checked_at.is_none_or(|check| t > check)
     })
 }
@@ -208,7 +208,7 @@ pub fn restore(
         return Err(Error::Invalid);
     }
     let now = utc_micros.map(|us| us.div_euclid(1_000_000));
-    if now.is_some_and(|now| timetable_display::clock::warsaw(now).is_none()) {
+    if now.is_some_and(|now| !timetable_display::clock::valid_utc(now)) {
         return Err(Error::Invalid);
     }
     let refresh_in_us = u64_at(32).saturating_sub(elapsed);

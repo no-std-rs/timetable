@@ -55,6 +55,19 @@
 
     <div class="setup-heading"><span class="eyebrow">SETTLE IN. THEN SET OFF.</span><p>One small display. Your everyday journeys.</p></div>
     <form id="settings" autocomplete="off">
+      <details class="card network-picker" id="network-panel">
+        <summary>Transport network</summary>
+        <p id="network-active" class="fine-print">ZTM Poznań · Europe/Warsaw</p>
+        <p>Choose a country, city or region, then a timetable feed from MobilityDatabase. One network per display.</p>
+        <div class="field-pair"><label>Country<select id="network-country"><option value="">All countries</option></select></label><label>City or region<select id="network-city"><option value="*">All cities and regions</option></select></label></div>
+        <label>Find a network<input type="search" id="network-search" placeholder="City, operator or feed ID" autocomplete="off"></label>
+        <label>Network<select id="network-feed"><option value="">Choose a transport network</option></select></label>
+        <p id="network-choice-state" class="fine-print">Choose a network, then load its lines and stops.</p>
+        <div class="preview-actions"><button id="network-load" type="button" class="button primary" disabled>Load this network</button><a id="network-source" class="quiet-link" href="https://mobilitydatabase.org/" target="_blank" rel="noopener noreferrer" hidden>Source details ↗</a></div>
+        <p id="network-progress" class="fine-print" role="status"></p><p id="network-scope" class="fine-print"></p>
+        <p class="fine-print">Timetable ZIPs are downloaded once in your browser to build the choices. Wi-Fi credentials stay local. Unsupported archives or device limits are reported before installation.</p>
+        <p id="network-directory-state" class="fine-print" role="status"></p><button id="network-refresh-directory" type="button" class="text-button">Refresh network directory</button>
+      </details>
       <section class="setup-section" id="your-groups" aria-labelledby="groups-title">
         <div class="section-heading"><span class="step">01</span><div><h2 id="groups-title">The places you go.</h2><p>Keep different stops and directions together. Switch by touch, or by time of day.</p></div></div>
         <div class="card groups-card">
@@ -66,7 +79,7 @@
           <div class="picks" id="picks"></div>
           <p id="catalog-feedback" class="fine-print" role="status">Loading line and stop choices…</p><button type="button" id="retry-catalog" class="text-button" hidden>Retry route choices</button>
           <button type="button" id="add-pick" class="add-pick" disabled><span>+</span> Add a line &amp; stop</button>
-          <div class="schedule-toggle"><label><input type="checkbox" id="scheduled"> Use this group on a schedule</label><span>Poznań local time</span></div>
+          <div class="schedule-toggle"><label><input type="checkbox" id="scheduled"> Use this group on a schedule</label><span id="schedule-timezone">Europe/Warsaw</span></div>
           <div id="schedule" class="schedule" hidden>
             <div id="days" class="days" role="group" aria-label="Days of week"></div>
             <label>From<input type="time" id="start-time" value="06:00" required></label><span class="time-to">to</span><label>Until<input type="time" id="end-time" value="11:00" required></label>

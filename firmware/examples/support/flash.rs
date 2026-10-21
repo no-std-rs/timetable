@@ -8,6 +8,7 @@ use std::{
 };
 use timetable_firmware::cache::{self, Storage};
 pub struct Flash {
+    identity: &'static [u8],
     file: RefCell<File>,
     pub erases: Cell<u32>,
     pub writes: Cell<u32>,
@@ -18,7 +19,7 @@ fn error(_: std::io::Error) -> Error {
     Error::Io(embedded_io_async::ErrorKind::Other)
 }
 impl Flash {
-    pub fn open(path: &Path) -> Self {
+    pub fn open_with_identity(path: &Path, identity: &'static [u8]) -> Self {
         let mut f = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -36,6 +37,7 @@ impl Flash {
             assert_eq!(len, u64::from(cache::SIZE), "cache file partition size");
         }
         Self {
+            identity,
             file: RefCell::new(f),
             erases: Cell::new(0),
             writes: Cell::new(0),
@@ -54,6 +56,9 @@ impl Flash {
     }
 }
 impl Storage for Flash {
+    fn identity(&self) -> &[u8] {
+        self.identity
+    }
     fn scratch(&self) -> Result<impl AsMut<[u8]>, Error> {
         let mut bytes = Vec::new();
         bytes

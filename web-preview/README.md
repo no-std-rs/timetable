@@ -43,11 +43,14 @@ input buffer and 16 KiB output buffer, scalar gestures and a fixed RGBA framebuf
 parsed and validated provisionally before replacing Config and App together.
 The ordinary library is an rlib and passes bare-metal no_std checks. The browser
 build explicitly requests a cdylib; no host std dependency is needed.
+Catalogue commits validate the upload before dropping old borrowed state and
+copying into a separate active slot; invalid uploads retain the old simulator.
 The module has no host imports/callbacks, threads, shared memory or allocator.
 Its private UnsafeCell state is accessed only during non-reentrant synchronous
 exports; JS reads views between calls and reacquires them every time.
 
-WASM linear memory is capped at **2,097,152 bytes** including stack, catalogue,
+WASM linear memory is capped at **4,194,304 bytes** including separate 1 MiB
+upload/active catalogue slots, stack,
 state and framebuffer; its framebuffer alone is 230,400 bytes. These browser-only
 reserves are separate from ESP32 RAM and do not describe total browser/JS-engine
 memory. Firmware does not depend on this crate. Its normal 400,000-byte total

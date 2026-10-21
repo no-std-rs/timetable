@@ -7,6 +7,7 @@ struct State {
     output: [u8; OUTPUT_BYTES],
     frame: Frame,
     simulator: Option<Simulator>,
+    catalog: Option<Catalog<'static>>,
 }
 struct Cell(UnsafeCell<State>);
 // SAFETY: the built module has unshared memory, no threads, no host imports and
@@ -18,7 +19,55 @@ static STATE: Cell = Cell(UnsafeCell::new(State {
     output: [0; OUTPUT_BYTES],
     frame: Frame([0; FRAME_BYTES]),
     simulator: None,
+    catalog: None,
 }));
+const CATALOG_BYTES: usize = timetable_display::profile::SLOT_BYTES;
+struct CatalogMemory {
+    input: [u8; CATALOG_BYTES],
+    active: [u8; CATALOG_BYTES],
+}
+struct CatalogCell(UnsafeCell<CatalogMemory>);
+// SAFETY: same synchronous, private-memory, non-reentrant ABI as STATE.
+unsafe impl Sync for CatalogCell {}
+static CATALOG_MEMORY: CatalogCell = CatalogCell(UnsafeCell::new(CatalogMemory {
+    input: [0; CATALOG_BYTES],
+    active: [0; CATALOG_BYTES],
+}));
+#[unsafe(no_mangle)]
+pub extern "C" fn preview_catalog_input() -> *mut u8 {
+    // SAFETY: only the separate upload buffer is exposed, never active data.
+    unsafe { (*CATALOG_MEMORY.0.get()).input.as_mut_ptr() }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn preview_catalog_capacity() -> usize {
+    CATALOG_BYTES
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn preview_catalog_commit(length: usize) -> u32 {
+    state(|s| {
+        // SAFETY: private synchronous calls; drop all active catalogue borrows
+        // before mutation. Invalid uploads leave the previous simulator intact.
+        let valid = {
+            // Borrow only the upload field; an old simulator may still borrow
+            // the disjoint active field, including after a rejected upload.
+            let input = unsafe { &(*CATALOG_MEMORY.0.get()).input };
+            input
+                .get(..length)
+                .is_some_and(|bytes| Catalog::from_bundle(bytes).is_some())
+        };
+        if !valid {
+            return 0;
+        }
+        s.simulator = None;
+        s.catalog = None;
+        let memory = unsafe { &mut *CATALOG_MEMORY.0.get() };
+        memory.active[..length].copy_from_slice(&memory.input[..length]);
+        // The upload was validated before publication; retain one checked view.
+        let active = unsafe { &(*CATALOG_MEMORY.0.get()).active };
+        s.catalog = Catalog::from_bundle(&active[..length]);
+        1
+    })
+}
 fn state<T>(f: impl FnOnce(&mut State) -> T) -> T {
     // SAFETY: single-threaded, non-reentrant exported calls as documented above.
     f(unsafe { &mut *STATE.0.get() })
@@ -45,7 +94,13 @@ pub extern "C" fn preview_configure(len: usize, now: i64, group: usize) -> u32 {
         let Some(bytes) = s.input.get(..len) else {
             return 0;
         };
-        let Some(simulator) = Simulator::new(bytes, now, group) else {
+        // SAFETY: active bytes are immutable for the entire Simulator lifetime;
+        // commit drops that Simulator before writing them, with no callbacks.
+        let simulator = s.catalog.map_or_else(
+            || Simulator::new(bytes, now, group),
+            |catalog| Simulator::with_catalog(bytes, now, group, catalog),
+        );
+        let Some(simulator) = simulator else {
             return 0;
         };
         s.simulator = Some(simulator);

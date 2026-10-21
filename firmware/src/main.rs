@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 extern crate alloc;
+mod catalog_slot;
 mod http_request;
 mod http_session;
 mod rtc;
@@ -41,9 +42,7 @@ use esp_radio::wifi::{
 use esp_storage::FlashStorage;
 use log::{info, warn};
 use static_cell::{ConstStaticCell, StaticCell};
-use timetable_display::{
-    App, Config, catalog::Catalog, config, feed::Builder, model::Status, render, ui,
-};
+use timetable_display::{App, Config, config, feed::Builder, model::Status, render, ui};
 use timetable_firmware::{battery, cache, panel, power, settings};
 use transport::{Error, Http};
 
@@ -84,6 +83,9 @@ impl CacheFlash {
     }
 }
 impl cache::Storage for CacheFlash {
+    fn identity(&self) -> &[u8] {
+        catalog_slot::profile().identity()
+    }
     fn scratch(&self) -> Result<impl AsMut<[u8]>, gtfs::Error> {
         let mut bytes = alloc::vec::Vec::new();
         bytes
@@ -283,7 +285,7 @@ async fn main(spawner: Spawner) -> ! {
     }
     info!("Boot: panel ready; loading settings");
     let mut flash = FlashStorage::new(p.FLASH);
-    let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
+    let catalog = catalog_slot::catalog().expect("valid installed catalogue");
     // Only this main task accesses persistent bytes; restore validates them
     // before publishing an app. Settings load writes directly into static State.
     let retained = unsafe { &mut *core::ptr::addr_of_mut!(RETAINED) };
@@ -436,7 +438,7 @@ async fn main(spawner: Spawner) -> ! {
             let mut s = shared.lock().await;
             if let Some(utc) = transport::now() {
                 let State { config: c, app, .. } = &mut *s;
-                app.tick(c, utc);
+                app.tick_in_zone(c, utc, catalog.profile().zone());
             }
             for y in (0..240).step_by(panel::TILE_ROWS) {
                 let tile_started = Instant::now();
@@ -519,7 +521,8 @@ async fn main(spawner: Spawner) -> ! {
                     input.is_high()
                 };
                 config::encode(&s.config, generation, scratch).unwrap();
-                let tag = u32::from_le_bytes(scratch[16..20].try_into().unwrap());
+                let tag =
+                    catalog_slot::tag(u32::from_le_bytes(scratch[16..20].try_into().unwrap()));
                 let (ticks, period) = rtc::stamp();
                 let remaining =
                     next_refresh_rtc.saturating_sub(rtc.time_since_power_up().as_micros());
@@ -641,7 +644,7 @@ fn initialize_state(
     let mut s = shared.try_lock().unwrap();
     let (generation, bank) = load(flash, scratch, &mut s.config)?;
     config::encode(&s.config, generation, scratch).ok()?;
-    let tag = u32::from_le_bytes(scratch[16..20].try_into().unwrap());
+    let tag = catalog_slot::tag(u32::from_le_bytes(scratch[16..20].try_into().unwrap()));
     let restored = if s.config.battery && can_restore {
         let State { config, app, .. } = &mut *s;
         battery::restore(retained, config, tag, rtc_ticks, app).ok()
@@ -674,7 +677,11 @@ fn start_network(
             shared,
             NET.init(StackResources::new()),
             QUERY_CONFIG.take(),
-            FEED.init_with(|| Builder::new("20261017".parse().unwrap())),
+            FEED.init_with(|| {
+                let mut builder = Builder::new("20261017".parse().unwrap());
+                builder.zone = catalog_slot::profile().zone();
+                builder
+            }),
             WORKSPACE.take(),
             CachePartition {
                 flash,

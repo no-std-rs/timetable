@@ -2,13 +2,65 @@
 
 A static, responsive installer with a porcelain / ink / gold / chilli palette.
 Group changes update a WebAssembly instance of the actual round-screen Rust app. The route/stop
-picker uses the same checked-in official catalogue as firmware. It supports
+picker and firmware share the selected network’s checked catalogue. Poznań has
+an instant bundled catalogue; other networks are built in a browser worker. It supports
 four named groups, four choices per group, direction filters, per-choice
 walking time and optional weekday/time windows. Export/import contains group
 settings only, never Wi-Fi credentials.
 “Follow group schedules” controls automatic switching for all groups. Turn it
 off for touch-only selection without deleting time windows; imported manual
 settings can be inspected and switched back to automatic mode here.
+
+## Countries and transport networks
+
+Open **Transport network**, choose a country and city/region, then search for an
+operator or feed name. One feed is installed per display. The bundled public
+MobilityDatabase directory contains 4,646 schedule feeds across 96 country codes
+(including unspecified locations), dated 2026-10-21. Regional feeds without a city
+remain searchable. **Refresh network directory** reads the public CSV directly;
+no API account or token is needed. Real-time and bike-sharing feeds are not static
+timetables. Unavailable/inactive entries remain visible with a source link.
+
+Loading a network downloads its public mirrored ZIP in a worker, streams CSV and
+DEFLATE, and builds sorted route/stop choices. Route diagrams are reconstructed
+on demand from that same ZIP, including branches, interleaved journeys and
+non-boarding terminals. Public ZIPs are cached in IndexedDB for three hours.
+Downloads show progress and switching networks cancels the previous worker.
+Groups are remembered separately per feed; Wi-Fi preferences stay in the current
+tab. Group exports contain `feed_id` and no credentials. Select that feed before
+importing its groups. Forget/opt-out erases every saved network’s credential copy.
+
+Prepare validates the published firmware SHA first, replaces only a reserved
+1 MiB immutable catalogue/profile slot, and repairs the ESP image checksum and
+appended SHA. Settings still use their original flash partition. The checked
+profile stores the feed identity and IANA timezone transitions (installation year
+minus two through year plus ten). Reinstall after timezone legislation changes
+or before that finite coverage expires. No arbitrary source URL or credential
+is embedded in download requests. The real Rust WASM demo uses the same profile.
+
+For large networks, the installed catalogue contains only the chosen routes and
+all their boarding stops; the page states this scope. Add other routes here and
+reinstall. Full small catalogues remain editable on the display. Exact IDs are
+never shortened. Current device limits include 32-byte route/stop/service IDs and 255-byte journey IDs, 8-byte human line labels, 64-byte stop/headsign labels, 8 KiB CSV records,
+48 columns, 64 services, 1,024 active trips / 16 KiB trip IDs and 512 future
+selected departures. Oversized static identities and unsupported archives fail
+before installation; changing feeds or oversized active selections can still
+fail visibly at refresh. Frequency templates, GTFS Flex, ZIP64 and encrypted ZIPs
+are unsupported. No result is silently truncated to fit the display.
+
+Non-Latin labels use a local browser-generated 10×10 glyph subset in flash, with
+no whole font in ESP32 RAM. The preview shows the actual device lettering. It
+relies on installed browser fonts; per-character glyphs do not provide complex
+script shaping or right-to-left layout. These remain display limitations.
+
+The device discovers immutable snapshots for the installed feed and uses the
+existing bounded range-query/cache pipeline. Cache and RTC identities include
+the feed and timezone rules, so reused route/stop IDs cannot mix networks. Only
+Poznań has a configured direct official-source fallback. Other networks keep the
+last validated board if the mirror is unavailable, and never query Poznań.
+
+Directory source: [MobilityDatabase public CSV](https://files.mobilitydatabase.org/feeds_v2.csv)
+and [published schema](https://github.com/MobilityData/mobility-feed-api/blob/main/docs/SpreadsheetSchemaV2.md).
 
 Battery mode is off by default. Enable it to sleep the screen and CPU after
 30 seconds on the idle departure board, wake by touch and refresh Wi-Fi every
@@ -21,8 +73,8 @@ destination to resolve the exact boarding platform; the hint shows its code,
 next stop and actual destinations. Multiple platforms in one direction remain
 separate choices. Polish accents are optional for search, while distinct accented
 names remain distinct groups. You can also start with a line number or destination.
-Stop lists and destination choices use Polish alphabetical order in either page
-language; line labels sort naturally (2, 10, 100, T2, T10). Filtering preserves
+Stop lists and destination choices use the feed language’s alphabetical order
+(Polish for Poznań) in either page language; line labels sort naturally (2, 10, 100, T2, T10). Filtering preserves
 that order. Route diagrams and their stop lists retain actual travel order.
 Arrow keys browse; Enter commits the highlighted stop; Escape closes the list.
 Results include actual destinations and the next stop, so same-name platforms

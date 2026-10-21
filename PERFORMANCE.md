@@ -841,3 +841,57 @@ countdown exclusion, rejected configuration atomicity, exact escaped text,
 maximum settings plus a draft, fixed memory and absent imports. Browser tests
 cover scaled touch, keyboard Save/Cancel, explicit Apply/Reset, credential and
 power-preference isolation, PL/EN, and retry after a failed module load.
+
+## Worldwide network profiles
+
+The installer now supplies a bounded immutable ROM catalogue and IANA timezone
+profile for any compatible public MobilityDatabase schedule feed. The 1 MiB ROM
+slot replaces the old fixed catalogue without copying it into device RAM.
+Trip metadata packs into five bytes per entry, retaining all 1,024 entries,
+16 choices and 32 headings. Exact trip IDs can now occupy up to 255 bytes each
+in the unchanged 16 KiB pool; selected-hit cursors borrow their pool index.
+No parser/event capacity or heap limit was reduced.
+
+[Final linked C3 RAM](benchmarks/device-worldwide-ram.json) is **274,932 B static**
+including the 65,536 B heap, **299,508 B** with the minimum 24,576 B stack reserve,
+and **324,604 B** with all 49,672 B available stack. Both existing limits remain
+unchanged. [The scoped stack audit](benchmarks/device-worldwide-stack.json)
+passes: its largest audited path is 44,704 B plus 4,096 B headroom. This is linked
+accounting and a partial DWARF path audit, not physical stack high water.
+
+[Five paired Rust 1.95 release host runs](benchmarks/device-worldwide-host.json)
+compare the fetched base `7376f52` with this change. The same immutable Poznań
+fixture, original query and 512-frame/15-tile renderer examples are used on both
+sides. Query medians were 153 / 155 ms, with identical 18 departures and zero
+allocations. Renderer medians (base / candidate, microseconds per whole frame)
+were Board 117.9 / 113.7, Groups 67.4 / 62.9, Picks 67.1 / 66.2, Routes
+82.2 / 79.9, Stops 294.9 / 282.5 and Walk 77.1 / 74.4; all pixel checksums match.
+An initial glyph path regressed the board; avoiding offscreen label work and
+skipping atlas checks for ordinary fonts removed that regression. These host
+observations exclude SPI, radio, TLS, real C3 cycles, throughput and power.
+
+Reproduction: build `display/examples/query.rs` with `cargo +1.95.0 build
+--release --locked -p timetable-display --example query` on both trees, and
+`firmware/examples/bench_render.rs` using the firmware’s pinned compiler/profile
+with `cargo build --release --locked --example bench_render --target
+x86_64-unknown-linux-gnu`. Alternate the binaries five times, passing
+`poznan-mirror-20261017.zip 4 MT44 1792367882` to query and `512` to bench_render.
+The exact fixture SHA and raw outputs are in the report.
+
+[Live public-feed probes](benchmarks/device-worldwide-live.json) also exercised
+Bydgoszcz, German BBS Schapfl, Agematsu in Japan and Rhody Express in the US in the
+browser loader. Invalid/unsupported French, frequency-based Czech and oversized
+service-ID US samples fail explicitly. The real device pipeline queried Rhody
+Express at 20% host CPU duty with verified TLS, a hard 65,536 B first-fit heap and
+34,320 B radio reserve: seven departures, 56,648 B heap peak, two TLS connections,
+444,625 transferred bytes including discovery, and 5.42 s wall time. Its persistent
+cache replay returned the identical checksum with zero network requests and
+zero flash erases/programs. These are host diagnostics, not ESP32 speed claims.
+A Japanese feed with nonnumeric directory ID and long exact journey IDs also
+completed verified streaming, returning two departures in its Friday window.
+
+Offline CI covers source identity reuse, timezone/DST/non-hour offsets, optional
+feed_info, 255-byte exact trip identities, cancellation, CRC failures, settings
+isolation, ESP image footer repair and actual WASM catalogue swaps. Browser-only
+WASM memory is now fixed at 4 MiB for separate 1 MiB upload/active slots; it does
+not change the ESP32 heap. Per-network ZIP parsing happens in a browser worker.

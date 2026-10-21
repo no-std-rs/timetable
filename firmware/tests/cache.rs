@@ -26,6 +26,7 @@ fn run<T>(future: impl Future<Output = T>) -> T {
     }
 }
 struct Memory {
+    identity: Cell<&'static [u8]>,
     bytes: RefCell<Vec<u8>>,
     erases: Cell<usize>,
     writes: Cell<usize>,
@@ -44,6 +45,7 @@ struct Memory {
 impl Memory {
     fn new() -> Self {
         Self {
+            identity: Cell::new(&[]),
             bytes: RefCell::new(vec![0xff; cache::SIZE as usize]),
             erases: Cell::new(0),
             writes: Cell::new(0),
@@ -89,6 +91,9 @@ impl Drop for Scratch<'_> {
     }
 }
 impl Storage for Memory {
+    fn identity(&self) -> &[u8] {
+        self.identity.get()
+    }
     fn scratch(&self) -> Result<impl AsMut<[u8]>, Error> {
         self.scratch_calls.set(self.scratch_calls.get() + 1);
         if self.scratch_fails.get() {
@@ -845,4 +850,20 @@ fn saved_check_reference_replays_without_a_clock_or_flash_writes() {
     assert_eq!(app.upcoming().count(), 0);
     assert!(app.board_departures().next().is_some());
     assert_eq!(flash.counters(), before);
+}
+
+#[test]
+fn identical_selection_ids_from_different_networks_cannot_restore_each_others_data() {
+    let flash = Memory::new();
+    let c = settings();
+    flash.identity.set(b"feed A / timezone rules A");
+    update(&flash, &Client::new(ORIGINAL), &c, NOW).1.unwrap();
+    let bank = run(cache::load(&flash)).unwrap().unwrap();
+    flash.identity.set(b"feed B / timezone rules B");
+    let mut builder = Builder::new("20261017".parse().unwrap());
+    let mut ws = zip::Workspace::new();
+    assert!(run(cache::restore(&flash, bank, &mut builder, &mut ws, &c, NOW)).is_err());
+    assert!(builder.events.is_empty());
+    flash.identity.set(b"feed A / timezone rules A");
+    assert!(run(cache::restore(&flash, bank, &mut builder, &mut ws, &c, NOW)).is_ok());
 }

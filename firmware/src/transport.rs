@@ -62,6 +62,9 @@ impl CryptoProvider for Provider {
 }
 pub struct Http<'d>(pub Stack<'d>);
 impl download::Http for Http<'_> {
+    fn feed_id(&self) -> &str {
+        crate::catalog_slot::profile().feed_id().unwrap()
+    }
     fn stage(&self, message: &str) {
         log::info!("Feed: {}", message);
     }

@@ -7,6 +7,7 @@ export function searchText(value) {
 }
 
 export function catalogIndex(catalog) {
+  const compareLabels = new Intl.Collator(catalog?.language || "pl", { numeric: true, sensitivity: "base" }).compare;
   const text = (value) => typeof value === "string";
   if (!catalog || !Array.isArray(catalog.routes) || !Array.isArray(catalog.stops) || !Array.isArray(catalog.links)
       || !catalog.routes.every((route) => route && text(route.id) && text(route.line) && Array.isArray(route.headsigns) && route.headsigns.length === 2 && route.headsigns.every(text))
@@ -40,7 +41,7 @@ export function catalogIndex(catalog) {
   const terms = (query) => searchText(query).trim().split(/\s+/).filter(Boolean);
   const matches = (text, query) => query.every((term) => text.includes(term));
   const index = {
-    groups, groupOf,
+    groups, groupOf, compareLabels,
     topology: routeTopology(catalog),
     routes(query = "", stop = -1) {
       const words = terms(query);

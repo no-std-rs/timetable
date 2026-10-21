@@ -1,10 +1,11 @@
 use crate::{Config, Pick, clock, departures::Departures};
 use heapless::Vec;
+pub const MAX_HEADSIGNS: usize = 32;
 
 #[derive(Default)]
 pub struct Headings {
     bytes: Vec<u8, 1024>,
-    spans: Vec<(u16, u8), 32>,
+    spans: Vec<(u16, u8), MAX_HEADSIGNS>,
 }
 impl Headings {
     pub(crate) fn checkpoint(&self) -> (usize, usize) {
@@ -128,6 +129,9 @@ impl App {
     }
 
     pub fn tick(&mut self, config: &Config, now: i64) {
+        self.tick_in_zone(config, now, clock::Zone::WARSAW);
+    }
+    pub fn tick_in_zone(&mut self, config: &Config, now: i64, zone: clock::Zone<'_>) {
         self.clock = Some(now);
         if self.manual_until == i64::MAX {
             self.manual_until = now.saturating_add(2 * 3600);
@@ -139,7 +143,7 @@ impl App {
         {
             return;
         }
-        if let Some(local) = clock::warsaw(now) {
+        if let Some(local) = zone.local(now) {
             let day = local.weekday().number_days_from_monday();
             let minute = u16::from(local.hour()) * 60 + u16::from(local.minute());
             self.group = config

@@ -1034,6 +1034,11 @@ impl Directory {
             }
             let mut name = [0; 128];
             read_exact(source, &mut name[..name_len]).await?;
+            // Frequency templates are not individual scheduled departures.
+            // A newly changed feed must fail rather than expose template times.
+            if &name[..name_len] == b"frequencies.txt" && u32_at(&h, 24) != 0 {
+                return Err(Error::UnsupportedZip);
+            }
             if let Some(table) = Table::from_filename(&name[..name_len]) {
                 check_format(u16_at(&h, 8), u16_at(&h, 10))?;
                 if u16_at(&h, 6) > 20

@@ -54,7 +54,15 @@ pub struct Simulator {
 }
 impl Simulator {
     pub fn new(json: &[u8], now: i64, group: usize) -> Option<Self> {
-        timetable_display::clock::warsaw(now)?;
+        Self::with_catalog(json, now, group, Catalog::new(CATALOG)?)
+    }
+    pub fn with_catalog(
+        json: &[u8],
+        now: i64,
+        group: usize,
+        catalog: Catalog<'static>,
+    ) -> Option<Self> {
+        catalog.profile().zone().local(now)?;
         let mut unescape = [0; 64];
         let (config, used) =
             serde_json_core::from_slice_escaped::<Config>(json, &mut unescape).ok()?;
@@ -67,12 +75,14 @@ impl Simulator {
         let mut value = Self {
             app: App::default(),
             config,
-            catalog: Catalog::new(CATALOG)?,
+            catalog,
             mode: 0,
         };
         value.app.choose_group(group, &value.config);
         value.samples(now);
-        value.app.tick(&value.config, now);
+        value
+            .app
+            .tick_in_zone(&value.config, now, value.catalog.profile().zone());
         Some(value)
     }
 
@@ -104,7 +114,7 @@ impl Simulator {
 
     /// Explicit browser hardware scenarios: ready, cached boot, Wi-Fi, NTP, update, offline.
     pub fn mode(&mut self, mode: u32, now: i64) -> bool {
-        if mode > 5 || timetable_display::clock::warsaw(now).is_none() {
+        if mode > 5 || self.catalog.profile().zone().local(now).is_none() {
             return false;
         }
         self.mode = mode;
@@ -131,8 +141,9 @@ impl Simulator {
     }
 
     pub fn tick(&mut self, now: i64) {
-        if timetable_display::clock::warsaw(now).is_some() && self.app.clock.is_some() {
-            self.app.tick(&self.config, now);
+        if self.catalog.profile().zone().local(now).is_some() && self.app.clock.is_some() {
+            self.app
+                .tick_in_zone(&self.config, now, self.catalog.profile().zone());
         }
     }
     pub fn draw(&self, frame: &mut Frame, phase: u8) {
@@ -149,7 +160,7 @@ impl Simulator {
         }
     }
     pub fn complete_mock_refresh(&mut self, now: i64) {
-        if timetable_display::clock::warsaw(now).is_none() {
+        if self.catalog.profile().zone().local(now).is_none() {
             return;
         }
         self.samples(now);
@@ -191,6 +202,8 @@ impl Simulator {
         });
         #[derive(serde::Serialize)]
         struct Snapshot<'a> {
+            feed_id: &'a str,
+            timezone: &'a str,
             config: &'a Config,
             group: usize,
             screen: u32,
@@ -203,6 +216,8 @@ impl Simulator {
         }
         serde_json_core::to_slice(
             &Snapshot {
+                feed_id: self.catalog.profile().feed_id()?,
+                timezone: self.catalog.profile().timezone()?,
                 config: &self.config,
                 group: self.app.group,
                 screen: self.screen(),

@@ -64,18 +64,23 @@ impl Drop for Staged<'_> {
 
 #[derive(Clone, Copy)]
 struct Trip {
-    offset: u16,
+    offset: [u8; 2],
     length: u8,
-    route: u8,
+    /// Low 3 bits: active days; high 4 bits: selection (0..16).
     flags: u8,
+    /// Low 5 bits: heading (0..32); high 2 bits: GTFS direction (0,1,unset).
     headsign: u8,
 }
+const _: () = assert!(core::mem::size_of::<Trip>() == 5);
+const _: () = assert!(crate::config::MAX_GROUPS * crate::config::MAX_PICKS <= 16);
+const _: () = assert!(crate::model::MAX_HEADSIGNS <= 32 && TRIP_ID_BYTES <= u16::MAX as usize);
 impl Trip {
     fn id<'a>(&self, bytes: &'a [u8]) -> &'a [u8] {
-        &bytes[self.offset as usize..self.offset as usize + self.length as usize]
+        let offset = usize::from(u16::from_le_bytes(self.offset));
+        &bytes[offset..offset + self.length as usize]
     }
     fn direction(&self) -> i8 {
-        match self.flags >> 3 {
+        match self.headsign >> 5 {
             0 => 0,
             1 => 1,
             _ => -1,
@@ -120,6 +125,7 @@ pub struct Builder {
     pub dates: [Date; 3],
     pub now: i64,
     pub manifest: Option<zip::Manifest>,
+    pub zone: clock::Zone<'static>,
 }
 
 fn service<'a>(
@@ -141,8 +147,8 @@ fn service<'a>(
 }
 
 // Match the catalogue's lossy human label only when no stable stop code exists.
-fn stop_label(name: &str) -> heapless::String<64> {
-    let mut label = heapless::String::<64>::new();
+fn display_label<const N: usize>(name: &str) -> heapless::String<N> {
+    let mut label = heapless::String::<N>::new();
     for word in name.split_whitespace() {
         for c in (!label.is_empty())
             .then_some(' ')
@@ -150,7 +156,7 @@ fn stop_label(name: &str) -> heapless::String<64> {
             .chain(word.chars().filter(|c| *c != '\0'))
         {
             if label.push(c).is_err() {
-                while label.len() > 61 {
+                while label.len() > N - 3 {
                     label.pop();
                 }
                 label.push_str("...").unwrap();
@@ -184,10 +190,11 @@ impl Builder {
             ],
             now: 0,
             manifest: None,
+            zone: clock::Zone::WARSAW,
         }
     }
     pub fn begin(&mut self, now: i64) -> Result<(), Error> {
-        let date = clock::service_date(now).ok_or(Error::InvalidDate)?;
+        let date = self.zone.service_date(now).ok_or(Error::InvalidDate)?;
         self.dates = [
             clock::previous(date).ok_or(Error::InvalidDate)?,
             date,
@@ -201,7 +208,9 @@ impl Builder {
     }
     /// Include tomorrow when its GTFS service epoch enters the six-hour horizon.
     pub fn day_mask(&self) -> u8 {
-        if clock::service_epoch(self.dates[2])
+        if self
+            .zone
+            .service_epoch(self.dates[2])
             .is_some_and(|epoch| epoch <= self.now + HORIZON_SECONDS)
         {
             7
@@ -257,7 +266,9 @@ impl Builder {
                                 if row.table() == Table::Routes {
                                     let r = row.route()?;
                                     if r.short_name == pick.line
-                                        || r.short_name.is_empty() && r.id == pick.route
+                                        || r.id == pick.route
+                                            && (r.short_name.is_empty()
+                                                || display_label::<8>(r.short_name) == pick.line)
                                     {
                                         if r.id == pick.route {
                                             resolved.route = Id::new(r.id)?;
@@ -276,7 +287,7 @@ impl Builder {
                                         || (pick.stop_code.is_empty()
                                             && s.id == pick.stop
                                             && s.name.is_some_and(|name| {
-                                                stop_label(name) == pick.stop_name
+                                                display_label::<64>(name) == pick.stop_name
                                             }))
                                     {
                                         if s.id == pick.stop {
@@ -419,7 +430,7 @@ impl Builder {
                     }
                 }
                 if let Some(route) = route {
-                    if t.id.len() > 32 {
+                    if t.id.len() > u8::MAX as usize {
                         return Err(Error::IdTooLong);
                     }
                     let offset = self.trip_ids.len() as u16;
@@ -429,11 +440,10 @@ impl Builder {
                     let headsign = staged.headsigns.insert(t.headsign.unwrap_or(""))?;
                     self.trips
                         .push(Trip {
-                            offset,
+                            offset: offset.to_le_bytes(),
                             length: t.id.len() as u8,
-                            route,
-                            flags: days | (t.direction.unwrap_or(2) << 3),
-                            headsign,
+                            flags: days | (route << 3),
+                            headsign: headsign | (t.direction.unwrap_or(2) << 5),
                         })
                         .map_err(|_| Error::IndexFull)?;
                 }
@@ -485,9 +495,15 @@ impl Builder {
             .as_ref()
             .ok_or(Error::MissingTable(Table::StopTimes))?;
         let epochs = [
-            clock::service_epoch(self.dates[0]).ok_or(Error::InvalidDate)?,
-            clock::service_epoch(self.dates[1]).ok_or(Error::InvalidDate)?,
-            clock::service_epoch(self.dates[2]).ok_or(Error::InvalidDate)?,
+            self.zone
+                .service_epoch(self.dates[0])
+                .ok_or(Error::InvalidDate)?,
+            self.zone
+                .service_epoch(self.dates[1])
+                .ok_or(Error::InvalidDate)?,
+            self.zone
+                .service_epoch(self.dates[2])
+                .ok_or(Error::InvalidDate)?,
         ];
         let before = self.events.len();
         let headings_before = self.headsigns.checkpoint();
@@ -506,8 +522,10 @@ impl Builder {
                 record(row, Selection(&self.resolved))?;
                 let id = row.required(Column::TripId)?;
                 let found = if let Some((key, found)) = &last_trip
-                    && key.as_str() == id
-                {
+                    && found.map_or_else(
+                        || key.as_str() == id,
+                        |i| self.trips[i].id(&self.trip_ids) == id.as_bytes(),
+                    ) {
                     *found
                 } else {
                     let found = self
@@ -515,7 +533,11 @@ impl Builder {
                         .binary_search_by(|t| t.id(&self.trip_ids).cmp(id.as_bytes()))
                         .ok();
                     // Long unselected IDs remain valid and are never shortened.
-                    last_trip = Id::new(id).ok().map(|key| (key, found));
+                    last_trip = if found.is_some() {
+                        Some((Id::EMPTY, found))
+                    } else {
+                        Id::new(id).ok().map(|key| (key, None))
+                    };
                     found
                 };
                 let Some(index) = found else {
@@ -529,7 +551,7 @@ impl Builder {
                 let Some(departure) = event.departure else {
                     return Ok(());
                 };
-                let route = self.resolved[t.route as usize].route;
+                let route = self.resolved[usize::from(t.flags >> 3)].route;
                 for (group, g) in config.groups.iter().enumerate() {
                     for (pick, p) in g.picks.iter().enumerate() {
                         let resolved = self.resolved[group * crate::config::MAX_PICKS + pick];
@@ -548,7 +570,7 @@ impl Builder {
                                 let headsign = if let Some(name) = event.headsign {
                                     staged.headsigns.insert(name)?
                                 } else {
-                                    t.headsign
+                                    t.headsign & 31
                                 };
                                 staged.events.push(Departure {
                                     at,

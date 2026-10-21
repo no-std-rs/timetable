@@ -1251,3 +1251,39 @@ fn mirror_snapshot_discovery_handles_split_links_and_duplicates() {
         );
     });
 }
+
+#[test]
+fn worldwide_snapshot_links_roundtrip_and_stream_across_every_byte() {
+    use gtfs::mobility::{Snapshot, Snapshots, URL_BYTES};
+    let id = "jbda-agematsutown-agematu";
+    let url =
+        format!("https://files.mobilitydatabase.org/{id}/{id}-202610170128/{id}-202610170128.zip");
+    let snapshot: Snapshot = url.parse().unwrap();
+    assert_eq!(snapshot.feed_id(), id);
+    assert_eq!(snapshot.url(&mut [0; URL_BYTES]), url);
+    for chunk in 1..=40 {
+        block_on(async {
+            let page = format!("https://wrong.example/bad.zip\n<a href=\"{url}\">ZIP</a> {url}");
+            let mut reader = Snapshots::new(Memory::new(page.as_bytes(), chunk));
+            assert_eq!(reader.next().await.unwrap(), Some(snapshot));
+            assert_eq!(reader.next().await.unwrap(), Some(snapshot));
+            assert_eq!(reader.next().await.unwrap(), None);
+        });
+    }
+    for invalid in [
+        url.replace("202610170128", "202613170128"),
+        url.replace("202610170128", "202610172428"),
+        url.replacen(id, "../evil", 1),
+        format!("{url}/other"),
+    ] {
+        assert!(invalid.parse::<Snapshot>().is_err(), "{invalid}");
+    }
+    let longest = "a".repeat(80);
+    let url = format!(
+        "https://files.mobilitydatabase.org/{longest}/{longest}-202610170128/{longest}-202610170128.zip"
+    );
+    assert_eq!(
+        url.parse::<Snapshot>().unwrap().url(&mut [0; URL_BYTES]),
+        url
+    );
+}
