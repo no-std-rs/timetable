@@ -1,0 +1,35 @@
+{
+  "date": "2026-10-21",
+  "feeds": [
+    {
+      "id": "demo-ny",
+      "country": "US",
+      "city": "New York",
+      "region": "",
+      "provider": "Metro New York",
+      "name": "",
+      "status": "active",
+      "mirror": "https://files.mobilitydatabase.org/demo-ny/latest.zip"
+    },
+    {
+      "id": "demo-kolkata",
+      "country": "IN",
+      "city": "Kolkata",
+      "region": "",
+      "provider": "Kolkata Transit",
+      "name": "",
+      "status": "active",
+      "mirror": "https://files.mobilitydatabase.org/demo-kolkata/latest.zip"
+    },
+    {
+      "id": "demo-jp",
+      "country": "JP",
+      "city": "Tokyo",
+      "region": "",
+      "provider": "Tokyo Transit",
+      "name": "",
+      "status": "active",
+      "mirror": "https://files.mobilitydatabase.org/demo-jp/latest.zip"
+    }
+  ]
+}

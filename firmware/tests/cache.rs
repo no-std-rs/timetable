@@ -26,6 +26,7 @@ fn run<T>(future: impl Future<Output = T>) -> T {
     }
 }
 struct Memory {
+    identity: Cell<&'static [u8]>,
     bytes: RefCell<Vec<u8>>,
     erases: Cell<usize>,
     writes: Cell<usize>,
@@ -44,6 +45,7 @@ struct Memory {
 impl Memory {
     fn new() -> Self {
         Self {
+            identity: Cell::new(&[]),
             bytes: RefCell::new(vec![0xff; cache::SIZE as usize]),
             erases: Cell::new(0),
             writes: Cell::new(0),
@@ -89,6 +91,9 @@ impl Drop for Scratch<'_> {
     }
 }
 impl Storage for Memory {
+    fn identity(&self) -> &[u8] {
+        self.identity.get()
+    }
     fn scratch(&self) -> Result<impl AsMut<[u8]>, Error> {
         self.scratch_calls.set(self.scratch_calls.get() + 1);
         if self.scratch_fails.get() {
@@ -310,6 +315,25 @@ fn restore(flash: &Memory, c: &Config, now: i64) -> Builder {
 fn events(b: &mut Builder) -> Vec<timetable_display::Departure> {
     b.events.sort();
     b.events.iter().collect()
+}
+#[test]
+fn truncated_line_labels_survive_persistent_cache_and_unchanged_refresh() {
+    let flash = Memory::new();
+    let mut c = settings();
+    c.groups[0].picks[0].line = "ABCDE...".try_into().unwrap();
+    let client = Client::new(include_bytes!(
+        "../../display/tests/fixtures/cache-long-line.zip"
+    ));
+    let (mut fresh, result) = update(&flash, &client, &c, NOW);
+    result.unwrap();
+    let expected = events(&mut fresh);
+    assert!(!expected.is_empty());
+    let counters = flash.counters();
+    assert_eq!(events(&mut restore(&flash, &c, NOW)), expected);
+    let (mut unchanged, result) = update(&flash, &client, &c, NOW + 60);
+    result.unwrap();
+    assert_eq!(events(&mut unchanged), expected);
+    assert_eq!(flash.counters(), counters);
 }
 #[test]
 fn cold_boot_replays_full_period_and_unchanged_checks_do_not_write() {
@@ -845,4 +869,20 @@ fn saved_check_reference_replays_without_a_clock_or_flash_writes() {
     assert_eq!(app.upcoming().count(), 0);
     assert!(app.board_departures().next().is_some());
     assert_eq!(flash.counters(), before);
+}
+
+#[test]
+fn identical_selection_ids_from_different_networks_cannot_restore_each_others_data() {
+    let flash = Memory::new();
+    let c = settings();
+    flash.identity.set(b"feed A / timezone rules A");
+    update(&flash, &Client::new(ORIGINAL), &c, NOW).1.unwrap();
+    let bank = run(cache::load(&flash)).unwrap().unwrap();
+    flash.identity.set(b"feed B / timezone rules B");
+    let mut builder = Builder::new("20261017".parse().unwrap());
+    let mut ws = zip::Workspace::new();
+    assert!(run(cache::restore(&flash, bank, &mut builder, &mut ws, &c, NOW)).is_err());
+    assert!(builder.events.is_empty());
+    flash.identity.set(b"feed A / timezone rules A");
+    assert!(run(cache::restore(&flash, bank, &mut builder, &mut ws, &c, NOW)).is_ok());
 }

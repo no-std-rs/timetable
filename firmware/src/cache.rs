@@ -28,6 +28,10 @@ const EMPTY: i64 = i64::MIN;
 /// the real flash, allow byte reads, and enforce the dedicated partition bounds.
 #[allow(async_fn_in_trait)]
 pub trait Storage {
+    /// Stable installed feed/timezone identity, borrowed from ROM.
+    fn identity(&self) -> &[u8] {
+        &[]
+    }
     fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), Error>;
     fn write(&self, offset: u32, bytes: &[u8]) -> Result<(), Error>;
     fn erase(&self, start: u32, end: u32) -> Result<(), Error>;
@@ -284,7 +288,25 @@ fn key_fields(p: &Pick) -> [&str; 5] {
         },
     ]
 }
-fn key(config: &Config, mut write: impl FnMut(&[u8]) -> Result<(), Error>) -> Result<u32, Error> {
+fn key(
+    config: &Config,
+    identity: &[u8],
+    mut write: impl FnMut(&[u8]) -> Result<(), Error>,
+) -> Result<u32, Error> {
+    let prefix = if identity.is_empty() {
+        0
+    } else {
+        let length: u16 = identity
+            .len()
+            .try_into()
+            .map_err(|_| Error::BufferTooSmall)?;
+        write(&[255])?;
+        write(&length.to_le_bytes())?;
+        for chunk in identity.chunks(64) {
+            write(chunk)?;
+        }
+        3 + u32::from(length)
+    };
     let mut picks = [None; 16];
     let mut n = 0;
     for p in config.groups.iter().flat_map(|g| &g.picks) {
@@ -298,7 +320,7 @@ fn key(config: &Config, mut write: impl FnMut(&[u8]) -> Result<(), Error>) -> Re
         .filter(|(i, p)| *i == 0 || key_fields(p.unwrap()) != key_fields(picks[*i - 1].unwrap()))
         .count();
     write(&[count as u8])?;
-    let mut len = 1;
+    let mut len = 1 + prefix;
     for i in 0..n {
         let fields = key_fields(picks[i].unwrap());
         if i > 0 && fields == key_fields(picks[i - 1].unwrap()) {
@@ -315,7 +337,7 @@ fn key(config: &Config, mut write: impl FnMut(&[u8]) -> Result<(), Error>) -> Re
 fn same_key(bank: Bank, flash: &impl Storage, config: &Config) -> Result<bool, Error> {
     let mut pos = 0;
     let mut equal = true;
-    let len = key(config, |bytes| {
+    let len = key(config, flash.identity(), |bytes| {
         let mut old = [0; 64];
         if bytes.len() > old.len() || pos + bytes.len() as u32 > bank.key_length {
             equal = false;
@@ -696,7 +718,7 @@ fn metadata_selected(row: Record<'_>, config: &Config) -> Result<bool, Error> {
                 .groups
                 .iter()
                 .flat_map(|g| &g.picks)
-                .any(|p| r.short_name == p.line || (r.short_name.is_empty() && r.id == p.route)))
+                .any(|p| timetable_display::feed::route_matches(r, p)))
         }
         Table::Stops => {
             let s = row.stop()?;
@@ -771,7 +793,7 @@ async fn build<H: crate::download::Http, F: Storage>(
 ) -> Result<(), crate::download::Error> {
     let (writer, bits) = recording;
     builder.begin(writer.now)?;
-    key(config, |b| writer.append(b))?;
+    key(config, writer.flash.identity(), |b| writer.append(b))?;
     let mut remaining = builder.day_mask();
     for &snapshot in &snapshots.0 {
         let mut source = crate::download::Mirror::open(http, snapshot, workspace).await?;
@@ -989,6 +1011,9 @@ pub struct Http<'a, H, F> {
     pub enabled: bool,
 }
 impl<H: crate::download::Http, F: Storage> crate::download::Http for Http<'_, H, F> {
+    fn feed_id(&self) -> &str {
+        self.inner.feed_id()
+    }
     fn stage(&self, s: &str) {
         self.inner.stage(s)
     }

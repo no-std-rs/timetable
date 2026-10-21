@@ -1,0 +1,129 @@
+{
+  "date": "2026-10-21",
+  "method": "Manual public-mirror browser-loader probes; no live feed needed by CI; one route projection each; timings host-only",
+  "observations": [
+    {
+      "country": "fr",
+      "id": "mdb-3470",
+      "error": "Invalid stop call in feed."
+    },
+    {
+      "country": "jp",
+      "id": "jbda-agematsutown-agematu",
+      "zip_bytes": 8960,
+      "sha256": "4cb7d2ed28ba01f45e43e027be770e4e34ce83a321609935852debf0d2916aef",
+      "routes": 3,
+      "stops": 40,
+      "timezone": "Asia/Tokyo",
+      "selected_line": "\u82a6...",
+      "selected_stop": {
+        "id": "60_01",
+        "name": "\u304b\u307f\u3060",
+        "code": ""
+      },
+      "bundle_bytes": 2378,
+      "parse_ms": 22
+    },
+    {
+      "country": "us",
+      "id": "mdb-16",
+      "error": "Service IDs in this feed exceed the display\u2019s 32-byte limit."
+    },
+    {
+      "country": "pl",
+      "id": "mdb-1009",
+      "zip_bytes": 4098075,
+      "sha256": "d18d5549b98acdf8e4343ad7b53728e64302832dee4dbb05fbabf6514e518767",
+      "routes": 62,
+      "stops": 1183,
+      "timezone": "Europe/Warsaw",
+      "selected_line": "2",
+      "selected_stop": {
+        "id": "03052",
+        "name": "Bielawy - Peron 1",
+        "code": ""
+      },
+      "bundle_bytes": 6230,
+      "parse_ms": 3827
+    },
+    {
+      "country": "de",
+      "id": "mdb-770",
+      "zip_bytes": 86538802,
+      "sha256": "6c7e5a62530965c5cd0c5cad936138c3b5520c60a20622341433c291ea68c022",
+      "routes": 319,
+      "stops": 5415,
+      "timezone": "Europe/Berlin",
+      "selected_line": "1",
+      "selected_stop": {
+        "id": "de:08426:6189:0:1",
+        "name": "Bergerhausen B\u00fchl\u00e4cker Bstg 1",
+        "code": ""
+      },
+      "bundle_bytes": 7646,
+      "parse_ms": 3612
+    },
+    {
+      "country": "cz",
+      "id": "mdb-1901",
+      "error": "Frequency-based timetables are not supported by this display yet."
+    },
+    {
+      "country": "us2",
+      "id": "mdb-24",
+      "zip_bytes": 12831,
+      "sha256": "ceea66ea8c5de427c482d604981fa6d24fb6ac9947b0824a1fec31e02cbe1a57",
+      "routes": 2,
+      "stops": 29,
+      "timezone": "America/Los_Angeles",
+      "selected_line": "North...",
+      "selected_stop": {
+        "id": "759407",
+        "name": "42nd St & Hwy 101",
+        "code": ""
+      },
+      "bundle_bytes": 2100,
+      "parse_ms": 37
+    }
+  ],
+  "device_probe": {
+    "feed": "mdb-24",
+    "line": "North...",
+    "stop": "759407",
+    "now": 1792594800,
+    "cpu_duty_percent": 20,
+    "heap_capacity": 65536,
+    "radio_reserve": 34320,
+    "heap_peak": 56648,
+    "departures": 7,
+    "checksum": "d694bf3a65cab523",
+    "requests": 19,
+    "tls_connections": 2,
+    "transferred_bytes": 444625,
+    "wall_ms": 5420,
+    "cache_programmed_bytes": 3344,
+    "cold": {
+      "requests": 0,
+      "writes": 0,
+      "read_bytes": 6466,
+      "departures": 7,
+      "checksum": "d694bf3a65cab523"
+    }
+  },
+  "physical_device_measured": false,
+  "japan_probe": {
+    "feed": "jbda-agematsutown-agematu",
+    "now": 1792713600,
+    "selected_stop": "60_01",
+    "local_time": "09:00 Asia/Tokyo Friday",
+    "result": "validated; 2 selected departures",
+    "checksum": "7e89cc86d1491907",
+    "requests": 10,
+    "tls_connections": 2,
+    "transferred_bytes": 527373,
+    "heap_peak": 56648,
+    "heap_capacity": 65536,
+    "cpu_duty_percent": 20,
+    "wall_ms": 3072
+  }
+}

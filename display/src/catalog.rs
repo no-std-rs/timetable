@@ -13,6 +13,7 @@ pub struct Catalog<'a> {
     stops: usize,
     links: usize,
     sorted_links: bool,
+    profile: crate::profile::Profile<'a>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Route<'a> {
@@ -40,6 +41,15 @@ fn word(bytes: &[u8], offset: usize) -> usize {
 }
 
 impl<'a> Catalog<'a> {
+    pub fn from_bundle(bytes: &'a [u8]) -> Option<Self> {
+        let (bytes, profile) = crate::profile::bundle(bytes)?;
+        let mut catalog = Self::new(bytes)?;
+        catalog.profile = profile;
+        Some(catalog)
+    }
+    pub fn profile(&self) -> crate::profile::Profile<'a> {
+        self.profile
+    }
     pub fn new(bytes: &'a [u8]) -> Option<Self> {
         if bytes.len() < HEADER || &bytes[..8] != b"TTCAT001" || bytes[28..32] != [0; 4] {
             return None;
@@ -62,6 +72,7 @@ impl<'a> Catalog<'a> {
             stops,
             links,
             sorted_links: true,
+            profile: crate::profile::Profile::DEFAULT,
         };
         for i in 0..routes {
             let r = result.route(i)?;

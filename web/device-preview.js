@@ -36,6 +36,7 @@ export class DevicePreview {
         if (!response.ok) throw new Error("Preview download failed");
         const { instance } = await WebAssembly.instantiate(await response.arrayBuffer(), {});
         this.api = instance.exports;
+        this.uploadedBundle = null;
         if (this.pending) this.configure(this.pending);
         return true;
       } catch {
@@ -46,12 +47,19 @@ export class DevicePreview {
     })();
     return this.loading;
   }
-  configure({ groups, automatic, active }) {
+  clear() { this.suspend(); this.pending = null; }
+  configure({ groups, automatic, active, bundle = null }) {
     // No SSID/password/battery data crosses into WASM, including in error paths.
-    this.pending = structuredClone({ groups, automatic, active });
+    this.pending = { ...structuredClone({ groups, automatic, active }), bundle };
     // Cancel queued refreshes and reject stale interaction before validation.
     this.suspend();
     if (!this.api) return;
+    if (bundle && this.uploadedBundle !== bundle) {
+      if (!this.api.preview_catalog_commit || bundle.length > this.api.preview_catalog_capacity()) { this.fail("settings"); return; }
+      new Uint8Array(this.api.memory.buffer, this.api.preview_catalog_input(), bundle.length).set(bundle);
+      if (!this.api.preview_catalog_commit(bundle.length)) { this.fail("settings"); return; }
+      this.uploadedBundle = bundle;
+    }
     const json = this.encoder.encode(JSON.stringify({ wifi_ssid: "Browser demo", wifi_password: "", automatic, groups }));
     if (json.length > this.api.preview_capacity()) { this.fail("settings"); return; }
     new Uint8Array(this.api.memory.buffer, this.api.preview_input(), json.length).set(json);
@@ -78,6 +86,8 @@ export class DevicePreview {
       const state = this.snapshot();
       this.canvas.dataset.screen = ["board", "groups", "picks", "routes", "stops", "walk", "freshness"][state.screen];
       this.canvas.dataset.clock = state.clock_known ? "known" : "pending";
+      this.canvas.dataset.feed = state.feed_id;
+      this.canvas.dataset.timezone = state.timezone;
       this.onSnapshot(state);
     } catch { this.fail("render"); }
   }

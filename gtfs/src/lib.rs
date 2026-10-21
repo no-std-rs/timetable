@@ -6,6 +6,7 @@ pub mod csv;
 pub mod gtfs;
 pub mod http;
 pub mod memory;
+pub mod mobility;
 pub mod poznan;
 pub mod query;
 pub mod stream;

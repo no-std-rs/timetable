@@ -104,6 +104,7 @@ fn run<T>(future: impl Future<Output = T>, duty: u32) -> T {
     }
 }
 struct Client {
+    feed: &'static str,
     bytes: Cell<u64>,
     requests: Cell<u32>,
     fallback: Cell<bool>,
@@ -112,6 +113,9 @@ struct Client {
     started: Instant,
 }
 impl Http for Client {
+    fn feed_id(&self) -> &str {
+        self.feed
+    }
     fn stage(&self, message: &str) {
         println!("stage: {message}");
     }
@@ -267,12 +271,22 @@ fn main() {
         .map_or(Ok(20), |s| s.parse())
         .expect("CPU duty1..100");
     assert!((1..=100).contains(&duty));
-    let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
+    let catalog = if let Some(i) = args.iter().position(|s| s == "--bundle") {
+        // Host model of immutable ROM: load before enabling the bounded allocator.
+        let bytes = Box::leak(
+            std::fs::read(args.get(i + 1).expect("--bundle PATH"))
+                .unwrap()
+                .into_boxed_slice(),
+        );
+        Catalog::from_bundle(bytes).expect("checked network bundle")
+    } else {
+        Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap()
+    };
     let route = (0..catalog.route_count())
         .find_map(|i| catalog.route(i).filter(|r| r.line == line))
         .expect("catalogue line");
     let platform = (0..catalog.stop_count())
-        .find_map(|i| catalog.stop(i).filter(|s| s.code == stop))
+        .find_map(|i| catalog.stop(i).filter(|s| s.code == stop || s.id == stop))
         .expect("catalogue stop code");
     let mut image = *include_bytes!("../../display/tests/settings.bin");
     let mut config = timetable_display::config::decode(&mut image).unwrap().0;
@@ -290,8 +304,10 @@ fn main() {
         |s| s.parse().expect("query Unix UTC"),
     );
     let mut builder = Builder::new("20261019".parse().unwrap());
+    builder.zone = catalog.profile().zone();
     let mut workspace = gtfs::zip::Workspace::new();
     let client = Client {
+        feed: catalog.profile().feed_id().unwrap(),
         bytes: Cell::new(0),
         requests: Cell::new(0),
         fallback: Cell::new(false),
@@ -306,10 +322,12 @@ fn main() {
     println!(
         "profile: heap65536B, radio baseline34320B, host CPU duty{duty}%; line {line}, stop {stop}"
     );
-    let flash = args
-        .iter()
-        .position(|s| s == "--cache")
-        .map(|i| flash::Flash::open(std::path::Path::new(args.get(i + 1).expect("--cache PATH"))));
+    let flash = args.iter().position(|s| s == "--cache").map(|i| {
+        flash::Flash::open_with_identity(
+            std::path::Path::new(args.get(i + 1).expect("--cache PATH")),
+            catalog.profile().identity(),
+        )
+    });
     let saved_only = args.iter().any(|s| s == "--saved");
     let cold_only = saved_only || args.iter().any(|s| s == "--cache-only");
     let future = async {

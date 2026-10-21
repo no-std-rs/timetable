@@ -2,7 +2,7 @@
 //! Indexes belong to one feed snapshot; rebuild them when the feed changes.
 
 use crate::{Date, Error, Route, Stop, StopTime, Table, Time, Trip, csv, zip};
-use embedded_io_async::{Read, Seek};
+use embedded_io_async::{Error as _, Read, Seek, SeekFrom};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Id<const N: usize = 32> {
@@ -365,6 +365,15 @@ impl<R: Read + Seek> Feed<R> {
         table: Table,
         workspace: &'a mut zip::Workspace,
     ) -> Result<zip::Reader<'a, &'a mut R>, Error> {
+        if let Some(range) = self.directory.frequencies_range() {
+            self.source
+                .seek(SeekFrom::Start(range.start()))
+                .await
+                .map_err(|e| Error::Io(e.kind()))?;
+            self.directory
+                .validate_frequencies(&mut self.source, workspace)
+                .await?;
+        }
         let member = self
             .directory
             .member(table)

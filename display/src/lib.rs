@@ -7,6 +7,7 @@ pub mod departures;
 pub mod feed;
 pub mod freshness;
 pub mod model;
+pub mod profile;
 pub mod render;
 pub mod ui;
 

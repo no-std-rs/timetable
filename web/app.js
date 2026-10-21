@@ -1,5 +1,9 @@
 import { DevicePreview } from "./device-preview.js";
-import { loadDraft, saveDraft, forgetDraft, REMEMBER_KEY } from "./settings-store.js";
+import { loadDraft, loadFeedDraft, saveDraft, forgetDraft, REMEMBER_KEY } from "./settings-store.js";
+import { NetworkPicker, FeedClient } from "./network-picker.js";
+import { DEFAULT_FEED } from "./feed-directory.js";
+import { catalogBytes, bundleBytes, profileBytes, glyphBytes, needsGlyph } from "./feed-bundle.js";
+import { customizeFirmware } from "./firmware-image.js";
 import { SerialLogs } from "./serial-logs.js";
 import { t, language, initLanguage, polish } from "./i18n.js";
 import { encodeSettingsPartition, manifestWithSettings, validateConfig } from "./config.js";
@@ -15,6 +19,10 @@ const element = (tag, text, className) => {
 };
 const emptyGroup = (name) => ({ name, days: 0, start: 360, end: 660, picks: [] });
 const state = { automatic: true, groups: [emptyGroup(t("Morning")), emptyGroup(t("Evening"))], active: 0, editing: null, catalog: null, index: null, undo: null, release: null, releaseGeneration: 0, firmwareUrl: null, urls: [] };
+state.feed = { id: DEFAULT_FEED, provider: "ZTM Poznań", country: "PL", city: "Poznań" };
+state.catalogGeneration = 0; state.installGeneration = 0;
+const networkDrafts = new Map();
+const networkPicker = new NetworkPicker(feed => void selectFeed(feed));
 let storeReady = false;
 const group = () => state.groups[state.active];
 const minute = (value) => {
@@ -39,11 +47,17 @@ function message(text, error = false) {
   $("status").setAttribute("role", error ? "alert" : "status");
 }
 function forgetInstall() {
+  ++state.installGeneration;
   $("installer").manifest = "";
   $("installer").removeAttribute("manifest");
   $("install-area").hidden = true;
   for (const u of state.urls.splice(0)) URL.revokeObjectURL(u);
+  if (state.firmwareUrl) {
+    $("download").href = state.firmwareUrl;
+    if(state.release)$("digest").textContent = `SHA-256 ${state.release.sha256}`;
+  }
 }
+function canPrepare() { return !!state.release && !!navigator.serial && window.isSecureContext && !!state.catalog; }
 function changed(refreshPreview = true) {
   state.undo = null;
   $("undo-area").hidden = true;
@@ -96,7 +110,13 @@ const devicePreview = new DevicePreview($("device-canvas"), {
 function preview() {
   demoSaved = null;
   $("preview-apply").disabled = true;
-  devicePreview.configure({ groups: state.groups, automatic: state.automatic, active: state.active });
+  if (!state.catalog) { devicePreview.clear(); return; }
+  try {
+    devicePreview.configure({ groups: state.groups, automatic: state.automatic, active: state.active, bundle: currentBundle() });
+  } catch (error) {
+    devicePreview.clear();
+    $("preview-state").textContent = t(errorKey(error, "The selected lines exceed the display’s catalogue limits."));
+  }
 }
 $("preview-retry").addEventListener("click", () => devicePreview.load());
 $("preview-scenario").addEventListener("change", event => devicePreview.setMode(event.target.value));
@@ -265,6 +285,7 @@ function fillRoutes(selected = $("route-select").value) {
   $("route-select").value = selected !== "" && matches.includes(Number(selected)) ? selected : "";
   $("route-results").textContent = matches.length ? t(matches.length === 1 ? "{count} line" : "{count} lines", { count: matches.length }) + (picker.group === null ? t(" · choose here to search its stops") : t(" serving {stop}", { stop: stopLabel(picker.group) })) : picker.group === null ? t("No lines match. Try another line number or destination.") : t("No lines match. Clear the line search to see all lines serving your stop.");
   fillDirections();
+  if ($("route-select").value !== "") void loadRoutePaths(Number($("route-select").value));
 }
 function choiceName(route, choice) {
   if (choice.all) return t("All departures");
@@ -276,8 +297,9 @@ function fillDirections() {
   // Preserve a saved broad query at its exact platform when editing old settings.
   if (picker.stop !== null && picker.direction < 0 && picker.choices.some(c => c.stop === picker.stop)
       && !picker.choices.some(c => c.key === picker.choice)) picker.choices.push({ stop: picker.stop, direction: -1, all: true, key: picker.choice });
-  picker.choices.sort((a, b) => compareLabels(choiceName(route, a), choiceName(route, b))
-    || compareLabels(state.catalog.stops[a.stop].code || state.catalog.stops[a.stop].id, state.catalog.stops[b.stop].code || state.catalog.stops[b.stop].id)
+  const compare = state.index.compareLabels || compareLabels;
+  picker.choices.sort((a, b) => compare(choiceName(route, a), choiceName(route, b))
+    || compare(state.catalog.stops[a.stop].code || state.catalog.stops[a.stop].id, state.catalog.stops[b.stop].code || state.catalog.stops[b.stop].id)
     || a.stop - b.stop || a.direction - b.direction);
   const placeholder = route < 0 ? t("Choose a line first") : picker.group === null ? t("Choose a stop first") : t("Choose a destination and platform");
   $("direction-select").replaceChildren(new Option(placeholder, ""));
@@ -516,6 +538,7 @@ $("stop-search").addEventListener("keydown", (event) => {
   }
 });
 $("route-select").addEventListener("change", () => {
+  if ($("route-select").value !== "") void loadRoutePaths(Number($("route-select").value));
   picker.choice = "";
   picker.stop = null;
   picker.direction = -1;
@@ -574,7 +597,7 @@ function downloadJson(data, name) {
 $("export-groups").addEventListener("click", () => {
   try {
     validateConfig({ wifi_ssid: "validation", wifi_password: "", automatic: state.automatic, groups: state.groups });
-    downloadJson({ version: 1, automatic: state.automatic, groups: state.groups }, "timetable-groups.json");
+    downloadJson({ version: 1, ...(state.feed.id === DEFAULT_FEED ? {} : {feed_id:state.feed.id}), automatic: state.automatic, groups: state.groups }, "timetable-groups.json");
   } catch (e) {
     message(errorKey(e, "Check the group name (up to 24 UTF-8 bytes), schedule and four-choice limit."), true);
   }
@@ -587,6 +610,7 @@ $("import-groups").addEventListener("change", async (event) => {
     if (f.size > 16384) throw new Error("That group file is too large.");
     const data = JSON.parse(await f.text());
     if (data.version !== 1) throw new Error("Unsupported group file version.");
+    if ((data.feed_id || DEFAULT_FEED) !== state.feed.id) throw new Error("These groups belong to another network. Select that network before importing.");
     validateConfig({ wifi_ssid: "validation", wifi_password: "", automatic: data.automatic, groups: data.groups });
     const snapshot = removalSnapshot();
     state.groups = data.groups;
@@ -602,7 +626,7 @@ $("import-groups").addEventListener("change", async (event) => {
     event.target.value = "";
   }
 });
-$("settings").addEventListener("submit", (event) => {
+$("settings").addEventListener("submit", async (event) => {
   event.preventDefault();
   forgetInstall();
   try {
@@ -616,9 +640,21 @@ $("settings").addEventListener("submit", (event) => {
     }
     if (!state.release || !state.firmwareUrl) throw new Error("The published firmware is not available yet.");
     const settings = { wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value, automatic: state.automatic, battery: $("battery-mode").checked, groups: state.groups };
-    const image = encodeSettingsPartition(settings), settingsUrl = URL.createObjectURL(new Blob([image], { type: "application/octet-stream" }));
+    const generation = state.installGeneration;
+    const image = encodeSettingsPartition(settings);
+    let firmwareUrl = state.firmwareUrl;
+    currentBundle();
+    if(state.feed.id !== DEFAULT_FEED || state.release.catalog_slot || state.bundleHasProfile) {
+      if(!state.bundleFull && !state.groups.some(g=>g.picks.length))throw new Error("Choose a line and stop before installing this large network.");
+      $("prepare").disabled=true;
+      const customized = await customizeFirmware(state.firmwareBytes,state.release,currentBundle());
+      if(generation!==state.installGeneration)return;
+      firmwareUrl=URL.createObjectURL(new Blob([customized.bytes],{type:"application/octet-stream"}));
+      state.urls.push(firmwareUrl); $("download").href=firmwareUrl; $("digest").textContent=`SHA-256 ${customized.sha256}`;
+    }
+    const settingsUrl = URL.createObjectURL(new Blob([image], { type: "application/octet-stream" }));
     state.urls.push(settingsUrl);
-    const manifest = manifestWithSettings(state.release, state.firmwareUrl, settingsUrl), url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
+    const manifest = manifestWithSettings(state.release, firmwareUrl, settingsUrl), url = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
     state.urls.push(url);
     $("installer").manifest = url;
     $("install-area").hidden = false;
@@ -626,31 +662,131 @@ $("settings").addEventListener("submit", (event) => {
     $("install-area").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
   } catch (e) {
     message(errorKey(e, "Check the group name (up to 24 UTF-8 bytes), schedule and four-choice limit."), true);
-  }
+  } finally { $("prepare").disabled=!canPrepare(); }
 });
-async function loadCatalog() {
-  $("retry-catalog").hidden = true;
-  $("retry-catalog").disabled = true;
-  $("catalog-feedback").hidden = false;
-  copy("catalog-feedback", "Loading line and stop choices…");
-  try {
-    const response = await fetch("./catalog.json", { credentials: "omit" });
-    if (!response.ok) throw new Error("Could not load the Poznań route choices. Try again when your connection is back.");
-    const c = await response.json();
-    if (!c || !Array.isArray(c.routes) || !Array.isArray(c.stops) || !Array.isArray(c.links) || c.routes.length > 65535 || c.stops.length > 65535 || typeof c.date !== "string" || !/^\d{8}$/.test(c.date)) throw new Error("The route catalogue is invalid. Try downloading it again.");
-    const index = catalogIndex(c);
-    state.catalog = c;
-    state.index = index;
-    copy("catalog-status", "{routes} lines · {stops} stops · ZTM Poznań · catalogue {date}", { routes: c.routes.length, stops: c.stops.length, date: `${c.date.slice(0, 4)}-${c.date.slice(4, 6)}-${c.date.slice(6)}` });
-    $("catalog-feedback").hidden = true;
-    $("add-pick").disabled = false;
-    document.querySelectorAll(".pick-edit").forEach((button) => { button.disabled = false; });
-  } catch (e) {
-    copy("catalog-feedback", errorKey(e, "Could not load the Poznań route choices. Try again when your connection is back."));
-    $("retry-catalog").hidden = false;
-  } finally {
-    $("retry-catalog").disabled = false;
+function currentBundle() {
+  if (!state.catalog) throw new Error("Load a transport network first.");
+  const picks=state.groups.flatMap(g=>g.picks);
+  const routes=new Set(picks.map(p=>state.catalog.routes.findIndex(r=>r.id===p.route)));
+  const routeKey=[...routes].sort((a,b)=>a-b).join(",");
+  const characters=texts=>[...new Set(texts.flatMap(text=>[...String(text||"")]).filter(needsGlyph))].sort((a,b)=>a.codePointAt(0)-b.codePointAt(0)).join("");
+  const userChars=characters([...state.groups.map(g=>g.name),...picks.flatMap(p=>[p.line,p.stop_name,p.headsign])]);
+  if(state.bundle && state.bundleUserChars===userChars && (state.bundleFull || state.bundleKey===routeKey))return state.bundle;
+  if(state.fullBytes===undefined){try{state.fullBytes=catalogBytes(state.catalog);}catch{state.fullBytes=null;}}
+  const build=full=>{
+    if(!full && routes.has(-1))throw new Error("These saved choices need an updated line or stop. Choose them from the current catalogue.");
+    const key=full?"full":routeKey;
+    if(state.catalogBytesKey!==key){
+      state.catalogDeviceBytes=full?state.fullBytes:catalogBytes(state.catalog,routes);
+      const stops=new Set(state.catalog.links.filter(([r])=>full||routes.has(r)).map(([,s])=>s));
+      state.catalogGlyphs=characters([
+        ...state.catalog.routes.filter((_,i)=>full||routes.has(i)).flatMap(r=>[r.line,...r.headsigns,r.characters||""]),
+        ...[...stops].flatMap(i=>[state.catalog.stops[i].name,state.catalog.stops[i].code]),
+      ]);
+      state.catalogBytesKey=key;
+    }
+    const chars=characters([state.catalogGlyphs,userChars]);
+    if(state.profileGlyphs!==chars){state.profileBytes=null;state.profileGlyphs=chars;}
+    if(!state.profileBytes)state.profileBytes=state.feed.id===DEFAULT_FEED&&!chars?new Uint8Array():profileBytes(state.feed,state.catalog.timezone,undefined,glyphBytes([chars]));
+    const bundle=bundleBytes(state.catalogDeviceBytes,state.profileBytes);
+    state.bundleHasProfile=state.profileBytes.length>0;return bundle;
+  };
+  let full=false,bundle;
+  if(state.fullBytes){try{bundle=build(true);full=true;}catch{/* Project to explicitly installed lines when the whole network is too large. */}}
+  if(!bundle)bundle=build(false);
+  state.bundle=bundle;state.bundleFull=full;state.bundleKey=routeKey;state.bundleUserChars=userChars;
+  copy("network-scope",full?"All network lines and stops are available on the display.":"The display catalogue includes your selected lines and their stops. Add other lines in this installer.");
+  return bundle;
+}
+function acceptCatalog(c) {
+  if (!c || !Array.isArray(c.routes) || !Array.isArray(c.stops) || !Array.isArray(c.links) || typeof c.date !== "string" || !/^\d{8}$/.test(c.date)) throw new Error("The route catalogue is invalid. Try downloading it again.");
+  const index = catalogIndex(c);
+  state.catalog = c; state.index = index;
+  state.bundle = null; state.bundleFull = false; state.profileBytes = null;
+  state.fullBytes=undefined;state.catalogBytesKey=undefined;state.profileGlyphs=undefined;
+  $("network-active").textContent = `${state.feed.provider || c.provider || state.feed.id} · ${c.timezone || "Europe/Warsaw"}`;
+  $("schedule-timezone").textContent = c.timezone || "Europe/Warsaw";
+  copy("catalog-status", "{routes} lines · {stops} stops · {provider} · catalogue {date}", {routes:c.routes.length,stops:c.stops.length,provider:state.feed.provider || c.provider || state.feed.id,date:`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6)}`});
+  $("catalog-feedback").hidden = true; copy("network-progress", "Network ready.");
+  renderGroup(true); preview();
+  $("add-pick").disabled = false;
+  $("prepare").disabled = !canPrepare();
+}
+async function selectFeed(feed, initial = false) {
+  if (!initial) {
+    networkDrafts.set(state.feed.id, {groups:structuredClone(state.groups),automatic:state.automatic,active:state.active});
+    persistSettings();
   }
+  ++state.catalogGeneration; state.feedClient?.close(); state.feedClient = null;
+  state.feed = feed; state.catalog = state.index = state.bundle = state.profileBytes = null;
+  state.undo = null; $("undo-area").hidden = true; $("pick-dialog").close();
+  devicePreview.clear(); forgetInstall();
+  copy("network-scope", ""); copy("network-progress", "Loading line and stop choices…");
+  $("network-active").textContent=feed.provider||feed.id; $("schedule-timezone").textContent=t("Network local time");
+  $("prepare").disabled = !canPrepare();
+  if (!initial) {
+    let saved = networkDrafts.get(feed.id);
+    if (!saved && $("remember-settings").checked) {
+      try { const draft = loadFeedDraft(localStorage,feed.id); if(draft) saved={groups:draft.config.groups,automatic:draft.config.automatic,active:draft.active}; } catch { /* Current tab remains usable. */ }
+    }
+    state.groups = saved?.groups || [emptyGroup(t("Morning")),emptyGroup(t("Evening"))];
+    state.automatic = saved?.automatic ?? true; state.active = saved?.active ?? 0;
+  }
+  networkPicker.selected=feed.id; networkPicker.render("initial");
+  renderGroup(); persistSettings();
+  await loadCatalog();
+}
+async function loadCatalog() {
+  const generation = ++state.catalogGeneration, feed = state.feed;
+  if(feed.id!==DEFAULT_FEED){
+    const entry=networkPicker.index?.feeds.find(f=>f.id===feed.id);
+    if(!entry || !networkPicker.index.available(entry)){
+      state.feedClient?.close();state.feedClient=null;
+      state.catalog=state.index=state.bundle=state.profileBytes=null;
+      devicePreview.clear();forgetInstall();
+      $("add-pick").disabled=true;$("prepare").disabled=true;
+      copy("network-progress","Unavailable timetable");
+      return;
+    }
+  }
+  $("retry-catalog").hidden = true; $("retry-catalog").disabled = true;
+  $("catalog-feedback").hidden = false; copy("catalog-feedback", "Loading line and stop choices…");
+  try {
+    let c;
+    if (feed.id === DEFAULT_FEED) {
+      const response = await fetch("./catalog.json",{credentials:"omit"});
+      if (!response.ok) throw new Error("Could not load the route choices. Try again when your connection is back.");
+      c = await response.json(); c.feed_id = DEFAULT_FEED; c.timezone = "Europe/Warsaw"; c.language = "pl";
+    } else {
+      state.feedClient?.close();
+      state.feedClient = new FeedClient((text,count)=>{
+        if(generation!==state.catalogGeneration)return;
+        if(count)copy("network-progress",text==="Downloading timetable…"?"Downloaded {size} MiB":"{count} stop calls scanned",text==="Downloading timetable…"?{size:Math.round(count/10485.76)/100}:{count});else copy("network-progress",text);
+      });
+      c = (await state.feedClient.load(feed)).catalog;
+    }
+    if(generation!==state.catalogGeneration)return;
+    acceptCatalog(c);
+  } catch(error) {
+    if(generation!==state.catalogGeneration || error.name==="AbortError")return;
+    const key=errorKey(error,"Could not load the route choices. Try again when your connection is back.");
+    copy("catalog-feedback",key); $("network-progress").textContent=t(key); $("retry-catalog").hidden=false;
+  } finally { if(generation===state.catalogGeneration)$("retry-catalog").disabled=false; }
+}
+async function loadRoutePaths(route) {
+  if(!state.feedClient || state.catalog?.patterns.some(p=>p.route===route))return;
+  const generation=state.catalogGeneration, client=state.feedClient;
+  try {
+    const {patterns}=await client.paths(route);
+    if(generation!==state.catalogGeneration)return;
+    state.catalog.patterns=patterns; state.index=catalogIndex(state.catalog);
+    if($("pick-dialog").open && $("route-select").value===String(route)){
+      const browsing=!$("stop-options").hidden;
+      fillDirections();
+      if(browsing)fillStops();
+    }
+    copy("network-progress", "Network ready.");
+  } catch(error) { if(generation===state.catalogGeneration)$("network-progress").textContent=t(errorKey(error,"Could not build route paths. Retry the selected network.")); }
 }
 async function loadRelease() {
   const generation = ++state.releaseGeneration;
@@ -685,6 +821,7 @@ async function loadRelease() {
     if (state.firmwareUrl) URL.revokeObjectURL(state.firmwareUrl);
     state.firmwareUrl = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
     state.release = candidate;
+    state.firmwareBytes = new Uint8Array(bytes);
     releaseLabel("Firmware verified");
     $("release-state").classList.remove("pending");
     $("revision").textContent = candidate.revision.slice(0, 8);
@@ -695,7 +832,7 @@ async function loadRelease() {
     $("download").hidden = false;
     $("no-download").hidden = true;
     const supported = !!navigator.serial && window.isSecureContext;
-    $("prepare").disabled = !supported;
+    $("prepare").disabled = !canPrepare();
     message(supported ? "Firmware verified. Add your Wi-Fi settings, then prepare your display." : "USB installation needs desktop Chrome or Edge over HTTPS or localhost. You can still download the firmware and save your groups.");
   } catch (e) {
     if (generation !== state.releaseGeneration) return;
@@ -715,6 +852,7 @@ $("retry-catalog").addEventListener("click", loadCatalog);
 $("retry-release").addEventListener("click", loadRelease);
 window.addEventListener("pagehide", () => {
   persistSettings();
+  ++state.catalogGeneration; state.feedClient?.close(); state.feedClient = null;
   void logs.disconnect();
   ++state.releaseGeneration;
   forgetInstall();
@@ -734,13 +872,14 @@ window.addEventListener("pagehide", () => {
   $("download").removeAttribute("href");
 });
 window.addEventListener("pageshow", (event) => {
-  if (event.persisted) loadRelease();
+  if (event.persisted) { loadRelease(); if(state.feed.id !== DEFAULT_FEED)void loadCatalog(); }
 });
 function restoreSettings() {
   try {
     $("remember-settings").checked = localStorage.getItem(REMEMBER_KEY) !== "false";
     const draft = $("remember-settings").checked ? loadDraft(localStorage) : null;
     if (!draft) return;
+    state.feed = { id: draft.feed_id || DEFAULT_FEED };
     state.groups = draft.config.groups;
     state.automatic = draft.config.automatic;
     state.active = draft.active;
@@ -757,7 +896,7 @@ function persistSettings() {
     const remember = $("remember-settings").checked;
     if (remember) {
       localStorage.setItem(REMEMBER_KEY, "true");
-      saveDraft(localStorage, { version: 1, active: state.active, config: {
+      saveDraft(localStorage, { version: 1, feed_id:state.feed.id, active: state.active, config: {
       wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value,
       automatic: state.automatic, battery: $("battery-mode").checked, groups: state.groups,
       } });
@@ -806,6 +945,7 @@ document.addEventListener("languagechange", () => {
   for (const [id, { key, values }] of copies) $(id).textContent = t(key, values);
   releaseLabel(releaseText);
   renderLogs();
+  networkPicker.render();
   const shown = $("wifi-password").type === "text";
   $("show-password").textContent = t(shown ? "Hide" : "Show");
   $("show-password").setAttribute("aria-label", t(shown ? "Hide password" : "Show password"));
@@ -819,5 +959,9 @@ restoreSettings();
 storeReady = true;
 renderGroup();
 renderLogs();
-loadCatalog();
+if(state.feed.id === DEFAULT_FEED) loadCatalog();
+networkPicker.load(false,state.feed.id).then(()=>{
+  const feed=networkPicker.index?.feeds.find(f=>f.id===state.feed.id);
+  if(feed){state.feed=feed;if(feed.id!==DEFAULT_FEED)void selectFeed(feed,true);}
+});
 loadRelease();

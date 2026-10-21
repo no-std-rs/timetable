@@ -36,12 +36,15 @@ def write_archive(name, tables, updated=None):
 
 write_archive('edge.zip', files)
 write_archive('mirror.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261015,20261031\n'})
+write_archive('mirror-start-only.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261001,\n'})
+write_archive('mirror-end-only.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n,20261115\n'})
 write_archive('mirror-tomorrow.zip', {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261018,20261031\n'})
 cache_files = {**files, 'feed_info.txt': 'feed_start_date,feed_end_date\n20261015,20261031\n'}
 cache_files['calendar.txt'] += 'ALWAYS,1,1,1,1,1,1,1,20261015,20261031\n'
 cache_files['trips.txt'] += 'R4,ALWAYS,DAILY,Daytime,0\n'
 cache_files['stop_times.txt'] += 'DAILY,12:00:00,12:00:00,S1,1,0,Daytime\nDAILY,26:15:00,26:15:00,S1,2,0,Nighttime\n'
 write_archive('cache-full.zip', cache_files)
+write_archive('cache-long-line.zip', {**cache_files, 'routes.txt': cache_files['routes.txt'].replace('R4,4,0', 'R4,ABCDEFGHI,0')})
 write_archive('cache-unrelated.zip', {**cache_files, 'trips.txt': cache_files['trips.txt'].replace('R5,TODAY,T3,Unknown,', 'R5,TODAY,T3,Unused changed,')})
 write_archive('cache-changed.zip', {**cache_files, 'stop_times.txt': cache_files['stop_times.txt'].replace('Platform branch', 'Changed branch')})
 write_archive('cache-priority-old.zip', {**cache_files, 'stop_times.txt': cache_files['stop_times.txt'].replace('T2,00:30:00,00:30:00', 'T2,00:45:00,00:45:00')})

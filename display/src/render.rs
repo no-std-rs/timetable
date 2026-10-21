@@ -49,6 +49,93 @@ fn label<D: DrawTarget<Color = Rgb565>>(
     color: Rgb565,
     center: bool,
 ) -> Result<(), D::Error> {
+    label_with_profile(
+        crate::profile::Profile::DEFAULT,
+        d,
+        text,
+        x,
+        y,
+        color,
+        center,
+    )
+}
+fn label_with_profile<D: DrawTarget<Color = Rgb565>>(
+    profile: crate::profile::Profile<'_>,
+    d: &mut D,
+    text: &str,
+    x: i32,
+    y: i32,
+    color: Rgb565,
+    center: bool,
+) -> Result<(), D::Error> {
+    let bounds = d.bounding_box();
+    if y + 10 <= bounds.top_left.y || y >= bounds.bottom_right().map_or(0, |p| p.y + 1) {
+        return Ok(());
+    }
+    let unsupported = |c: char| {
+        !c.is_ascii()
+            && c != '?'
+            && FONT_6X10.glyph_mapping.index(c) == FONT_6X10.glyph_mapping.index('?')
+    };
+    if profile.has_glyphs() && text.chars().any(unsupported) {
+        let width = |c| {
+            if unsupported(c) && profile.glyph(c).is_some() {
+                10
+            } else {
+                6
+            }
+        };
+        let limit = if center {
+            2 * (x - 12).min(228 - x).max(0)
+        } else {
+            (232 - x).max(0)
+        };
+        let total: i32 = text.chars().map(width).sum();
+        let mut visible = String::<128>::new();
+        let mut used = 0;
+        for c in text.chars() {
+            if total > limit && used + width(c) > limit - 12 {
+                let _ = visible.push_str("..");
+                used += 12;
+                break;
+            }
+            if visible.push(c).is_err() {
+                break;
+            }
+            used += width(c);
+        }
+        let mut left = if center { x - used / 2 } else { x };
+        for c in visible.chars() {
+            if unsupported(c)
+                && let Some(bitmap) = profile.glyph(c)
+            {
+                if y < d.bounding_box().bottom_right().map_or(0, |p| p.y + 1)
+                    && y + 10 > d.bounding_box().top_left.y
+                {
+                    d.draw_iter((0..10).flat_map(|row| {
+                        let bits = u16::from_le_bytes([bitmap[row * 2], bitmap[row * 2 + 1]]);
+                        (0..10)
+                            .filter(move |col| bits & (1 << col) != 0)
+                            .map(move |col| Pixel(Point::new(left + col, y + row as i32), color))
+                    }))?;
+                }
+                left += 10;
+            } else {
+                let mut buf = [0; 4];
+                draw_visible(
+                    d,
+                    &Text::with_baseline(
+                        c.encode_utf8(&mut buf),
+                        Point::new(left, y),
+                        MonoTextStyle::new(&FONT_6X10, color),
+                        Baseline::Top,
+                    ),
+                )?;
+                left += 6;
+            }
+        }
+        return Ok(());
+    }
     draw_visible(
         d,
         &Text::with_text_style(
@@ -80,11 +167,14 @@ fn short(value: &str, count: usize) -> String<96> {
 
 /// Old checks show their date rather than a deceptively recent-looking time.
 pub fn freshness_line(app: &App) -> String<40> {
+    freshness_in_zone(app, clock::Zone::WARSAW)
+}
+fn freshness_in_zone(app: &App, zone: clock::Zone<'_>) -> String<40> {
     let mut text = String::new();
-    if let Some(checked) = app.freshness.checked_at.and_then(clock::warsaw) {
+    if let Some(checked) = app.freshness.checked_at.and_then(|at| zone.local(at)) {
         if app
             .clock
-            .and_then(clock::warsaw)
+            .and_then(|at| zone.local(at))
             .is_some_and(|now| now.date() == checked.date())
         {
             let _ = write!(text, "Chk{:02}:{:02}", checked.hour(), checked.minute());
@@ -94,7 +184,11 @@ pub fn freshness_line(app: &App) -> String<40> {
     } else {
         let _ = text.push_str("Chk --:--");
     }
-    if let Some(source) = app.freshness.source_updated_at.and_then(clock::warsaw) {
+    if let Some(source) = app
+        .freshness
+        .source_updated_at
+        .and_then(|at| zone.local(at))
+    {
         let _ = write!(text, " Src{:02}/{:02}", source.day(), source.month() as u8);
     } else {
         let _ = text.push_str(" Src --/--");
@@ -109,9 +203,9 @@ fn countdown(seconds: i64) -> String<12> {
     text
 }
 
-fn departure_time(at: i64) -> String<12> {
+fn departure_time(at: i64, zone: clock::Zone<'_>) -> String<12> {
     let mut text = String::new();
-    if let Some(local) = clock::warsaw(at) {
+    if let Some(local) = zone.local(at) {
         let _ = write!(text, "{:02}:{:02}", local.hour(), local.minute());
     } else {
         let _ = text.push_str("--:--");
@@ -119,9 +213,9 @@ fn departure_time(at: i64) -> String<12> {
     text
 }
 
-fn timestamp(stamp: Option<i64>, unknown: &str) -> String<40> {
+fn timestamp(stamp: Option<i64>, unknown: &str, zone: clock::Zone<'_>) -> String<40> {
     let mut text = String::new();
-    if let Some(local) = stamp.and_then(clock::warsaw) {
+    if let Some(local) = stamp.and_then(|at| zone.local(at)) {
         let _ = write!(
             text,
             "{:02}/{:02}/{:04} {:02}:{:02}",
@@ -262,6 +356,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
     catalog: &Catalog<'_>,
     phase: u8,
 ) -> Result<(), D::Error> {
+    let profile = catalog.profile();
     background(d)?;
     let Some(group) = config.groups.get(app.group) else {
         return setup(d);
@@ -275,9 +370,9 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
         Screen::Walk => "Your walk",
         Screen::Freshness => "Timetable age",
     };
-    label(d, &short(title, 20), 120, 24, INK, true)?;
+    label_with_profile(profile, d, &short(title, 20), 120, 24, INK, true)?;
     if app.screen != Screen::Board {
-        label(d, "<", 45, 25, INK, false)?;
+        label_with_profile(profile, d, "<", 45, 25, INK, false)?;
     }
     match app.screen {
         Screen::Board => {
@@ -286,32 +381,41 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
             if let Some((chosen_index, event)) = chosen {
                 let p = &group.picks[event.pick as usize];
                 pill(d, 32, 56, 47, 29, INK)?;
-                draw_visible(
-                    d,
-                    &Text::with_text_style(
-                        p.line.as_str(),
-                        Point::new(55, 60),
-                        MonoTextStyle::new(
-                            if p.line.chars().count() > 4 {
-                                &FONT_6X10
-                            } else {
-                                &FONT_10X20
-                            },
-                            PORCELAIN,
+                if p.line.chars().any(|c| {
+                    !c.is_ascii()
+                        && c != '?'
+                        && FONT_6X10.glyph_mapping.index(c) == FONT_6X10.glyph_mapping.index('?')
+                }) {
+                    label_with_profile(profile, d, &p.line, 55, 65, PORCELAIN, true)?;
+                } else {
+                    draw_visible(
+                        d,
+                        &Text::with_text_style(
+                            p.line.as_str(),
+                            Point::new(55, 60),
+                            MonoTextStyle::new(
+                                if p.line.chars().count() > 4 {
+                                    &FONT_6X10
+                                } else {
+                                    &FONT_10X20
+                                },
+                                PORCELAIN,
+                            ),
+                            TextStyleBuilder::new()
+                                .baseline(Baseline::Top)
+                                .alignment(Alignment::Center)
+                                .build(),
                         ),
-                        TextStyleBuilder::new()
-                            .baseline(Baseline::Top)
-                            .alignment(Alignment::Center)
-                            .build(),
-                    ),
-                )?;
+                    )?;
+                }
                 let value = if app.clock.is_some() {
                     countdown(event.at - now)
                 } else {
-                    departure_time(event.at)
+                    departure_time(event.at, catalog.profile().zone())
                 };
                 big(d, &value, 216 - value.len() as i32 * 20, 51)?;
-                label(
+                label_with_profile(
+                    profile,
                     d,
                     if app.clock.is_some() { "IN" } else { "AT" },
                     84,
@@ -319,7 +423,8 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     MUTED,
                     false,
                 )?;
-                label(
+                label_with_profile(
+                    profile,
                     d,
                     &short(
                         app.headsigns
@@ -338,12 +443,15 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 if !p.stop_code.is_empty() {
                     let _ = write!(platform, " / {}", p.stop_code);
                 }
-                label(d, &short(&platform, 31), 120, 104, MUTED, true)?;
+                label_with_profile(profile, d, &short(&platform, 31), 120, 104, MUTED, true)?;
                 let mut text = String::<64>::new();
                 let left = leave_in(event.at, now, p);
                 let urgent = app.clock.is_some() && left < 60;
                 if app.clock.is_none() {
-                    if let Some(saved) = app.loaded_at.and_then(clock::warsaw) {
+                    if let Some(saved) = app
+                        .loaded_at
+                        .and_then(|at| catalog.profile().zone().local(at))
+                    {
                         let _ = write!(
                             text,
                             "Saved {:02}/{:02} / clock pending",
@@ -361,7 +469,8 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     let _ = text.push_str("Leave now");
                 }
                 pill(d, 29, 118, 182, 21, if urgent { CHILLI } else { GOLD })?;
-                label(
+                label_with_profile(
+                    profile,
                     d,
                     &text,
                     120,
@@ -381,7 +490,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 } else {
                     let _ = text.push_str("Countdowns after clock sync");
                 }
-                label(d, &text, 120, 141, MUTED, true)?;
+                label_with_profile(profile, d, &text, 120, 141, MUTED, true)?;
                 for (i, next) in app
                     .board_departures()
                     .enumerate()
@@ -405,7 +514,8 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                             .unwrap_or(&p.headsign),
                         if next.conditional { " *" } else { "" }
                     );
-                    label(
+                    label_with_profile(
+                        profile,
                         d,
                         &short(&text, 20 - i.saturating_sub(2) * 2),
                         35 + i.saturating_sub(2) as i32 * 6,
@@ -421,9 +531,10 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     if app.clock.is_some() {
                         let _ = write!(text, "{}m", (next.at - now + 59) / 60);
                     } else {
-                        let _ = text.push_str(&departure_time(next.at));
+                        let _ = text.push_str(&departure_time(next.at, catalog.profile().zone()));
                     }
-                    label(
+                    label_with_profile(
+                        profile,
                         d,
                         &text,
                         (211 - i.saturating_sub(2) as i32 * 8) - text.len() as i32 * 6,
@@ -444,7 +555,8 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     _ if group.picks.is_empty() => "Hold to add lines + stops",
                     _ => "No departures in next 6h",
                 };
-                label(
+                label_with_profile(
+                    profile,
                     d,
                     if group.picks.is_empty() {
                         "Your next journey"
@@ -458,18 +570,58 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     INK,
                     true,
                 )?;
-                label(d, status, 120, 84, MUTED, true)?;
+                label_with_profile(profile, d, status, 120, 84, MUTED, true)?;
                 if group.picks.is_empty() {
-                    label(d, "Hold the screen to choose", 120, 118, INK, true)?;
-                    label(d, "a line, stop and walking time", 120, 133, MUTED, true)?;
-                    label(d, "Swipe to change group", 120, 170, MUTED, true)?;
+                    label_with_profile(
+                        profile,
+                        d,
+                        "Hold the screen to choose",
+                        120,
+                        118,
+                        INK,
+                        true,
+                    )?;
+                    label_with_profile(
+                        profile,
+                        d,
+                        "a line, stop and walking time",
+                        120,
+                        133,
+                        MUTED,
+                        true,
+                    )?;
+                    label_with_profile(profile, d, "Swipe to change group", 120, 170, MUTED, true)?;
                 } else {
                     for (i, pick) in group.picks.iter().take(4).enumerate() {
                         let y = 109 + i as i32 * 24;
                         pill(d, 29, y + 1, 30, 18, INK)?;
-                        label(d, &short(&pick.line, 4), 44, y + 6, PORCELAIN, true)?;
-                        label(d, &short(&pick.stop_name, 23), 66, y, INK, false)?;
-                        label(d, &short(&pick.headsign, 23), 66, y + 11, MUTED, false)?;
+                        label_with_profile(
+                            profile,
+                            d,
+                            &short(&pick.line, 4),
+                            44,
+                            y + 6,
+                            PORCELAIN,
+                            true,
+                        )?;
+                        label_with_profile(
+                            profile,
+                            d,
+                            &short(&pick.stop_name, 23),
+                            66,
+                            y,
+                            INK,
+                            false,
+                        )?;
+                        label_with_profile(
+                            profile,
+                            d,
+                            &short(&pick.headsign, 23),
+                            66,
+                            y + 11,
+                            MUTED,
+                            false,
+                        )?;
                     }
                     if group.picks.len() <= 2
                         && app.loaded_at.is_none()
@@ -479,15 +631,37 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                         )
                     {
                         let y = 124 + group.picks.len() as i32 * 24;
-                        label(d, "First download takes longer", 120, y, MUTED, true)?;
-                        label(d, "Later boots use saved times", 120, y + 14, MUTED, true)?;
+                        label_with_profile(
+                            profile,
+                            d,
+                            "First download takes longer",
+                            120,
+                            y,
+                            MUTED,
+                            true,
+                        )?;
+                        label_with_profile(
+                            profile,
+                            d,
+                            "Later boots use saved times",
+                            120,
+                            y + 14,
+                            MUTED,
+                            true,
+                        )?;
                     }
                 }
             }
             let mut foot = String::<40>::new();
             let fault = app.can_retry() || app.status == Status::Capacity;
             let saved_without_clock = app.clock.is_none() && app.loaded_at.is_some();
-            if !fault && let Some(local) = clock::warsaw(now).filter(|_| app.clock.is_some()) {
+            if !fault
+                && let Some(local) = catalog
+                    .profile()
+                    .zone()
+                    .local(now)
+                    .filter(|_| app.clock.is_some())
+            {
                 let _ = write!(
                     foot,
                     "{:02}:{:02}:{:02} / ",
@@ -528,7 +702,8 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
             } else {
                 "SCHEDULED"
             });
-            label(
+            label_with_profile(
+                profile,
                 d,
                 &foot,
                 if saved_without_clock { 126 } else { 120 },
@@ -580,30 +755,57 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     )),
                 )?;
             }
-            label(d, &freshness_line(app), 120, 212, MUTED, true)?;
+            label_with_profile(
+                profile,
+                d,
+                &freshness_in_zone(app, catalog.profile().zone()),
+                120,
+                212,
+                MUTED,
+                true,
+            )?;
         }
         Screen::Freshness => {
-            label(d, "Last successful check", 120, 62, MUTED, true)?;
-            label(
+            label_with_profile(profile, d, "Last successful check", 120, 62, MUTED, true)?;
+            label_with_profile(
+                profile,
                 d,
-                &timestamp(app.freshness.checked_at, "Not checked yet"),
+                &timestamp(
+                    app.freshness.checked_at,
+                    "Not checked yet",
+                    catalog.profile().zone(),
+                ),
                 120,
                 80,
                 INK,
                 true,
             )?;
-            label(d, "Source last updated", 120, 119, MUTED, true)?;
-            label(
+            label_with_profile(profile, d, "Source last updated", 120, 119, MUTED, true)?;
+            label_with_profile(
+                profile,
                 d,
-                &timestamp(app.freshness.source_updated_at, "Not supplied"),
+                &timestamp(
+                    app.freshness.source_updated_at,
+                    "Not supplied",
+                    catalog.profile().zone(),
+                ),
                 120,
                 137,
                 INK,
                 true,
             )?;
-            label(d, "Oldest source file used", 120, 155, MUTED, true)?;
-            label(d, "Times in Poznan", 120, 178, MUTED, true)?;
-            label(
+            label_with_profile(profile, d, "Oldest source file used", 120, 155, MUTED, true)?;
+            label_with_profile(
+                profile,
+                d,
+                catalog.profile().timezone().unwrap_or("Local time"),
+                120,
+                178,
+                MUTED,
+                true,
+            )?;
+            label_with_profile(
+                profile,
                 d,
                 if app.can_retry() {
                     "Retry now"
@@ -621,9 +823,10 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 if i == app.group {
                     pill(d, 30, 50 + i as i32 * 36, 180, 31, GOLD)?;
                 }
-                label(d, &g.name, 120, 61 + i as i32 * 36, INK, true)?;
+                label_with_profile(profile, d, &g.name, 120, 61 + i as i32 * 36, INK, true)?;
             }
-            label(
+            label_with_profile(
+                profile,
                 d,
                 if config.automatic && config.groups.iter().any(|group| group.days != 0) {
                     "Return to auto"
@@ -640,10 +843,19 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
             for (i, p) in group.picks.iter().enumerate() {
                 let mut row = String::<96>::new();
                 let _ = write!(row, "{} {}", p.line, short(&p.stop_name, 22));
-                label(d, &short(&row, 27), 32, 63 + i as i32 * 32, INK, false)?;
+                label_with_profile(
+                    profile,
+                    d,
+                    &short(&row, 27),
+                    32,
+                    63 + i as i32 * 32,
+                    INK,
+                    false,
+                )?;
             }
             if group.picks.len() < crate::config::MAX_PICKS {
-                label(
+                label_with_profile(
+                    profile,
                     d,
                     "+ Add a line + stop",
                     32,
@@ -652,7 +864,8 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     false,
                 )?;
             }
-            label(
+            label_with_profile(
+                profile,
                 d,
                 if app.save_failed {
                     "Save failed. Try again."
@@ -677,11 +890,19 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     }
                     let mut row = String::<96>::new();
                     let _ = write!(row, "{} {}", r.line, short(r.headsigns[0], 24));
-                    label(d, &short(&row, 27), 31, 66 + i as i32 * 32, INK, false)?;
+                    label_with_profile(
+                        profile,
+                        d,
+                        &short(&row, 27),
+                        31,
+                        66 + i as i32 * 32,
+                        INK,
+                        false,
+                    )?;
                 }
             }
             page_count(d, app.cursor, catalog.route_count())?;
-            label(d, "< previous      next >", 120, 204, MUTED, true)?;
+            label_with_profile(profile, d, "< previous      next >", 120, 204, MUTED, true)?;
         }
         Screen::Stops => {
             let selected = crate::ui::selected_stop(app, catalog);
@@ -694,8 +915,16 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 if selected == Some(index) {
                     pill(d, 25, 57 + i as i32 * 32, 190, 29, GOLD)?;
                 }
-                label(d, &short(s.name, 27), 31, 61 + i as i32 * 32, INK, false)?;
-                label(d, s.code, 31, 73 + i as i32 * 32, MUTED, false)?;
+                label_with_profile(
+                    profile,
+                    d,
+                    &short(s.name, 27),
+                    31,
+                    61 + i as i32 * 32,
+                    INK,
+                    false,
+                )?;
+                label_with_profile(profile, d, s.code, 31, 73 + i as i32 * 32, MUTED, false)?;
             }
             page_count(
                 d,
@@ -716,16 +945,16 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
             } else {
                 let _ = write!(foot, "Direction {}", app.direction + 1);
             }
-            label(d, "<", 52, 204, MUTED, true)?;
-            label(d, &foot, 120, 204, INK, true)?;
-            label(d, ">", 188, 204, MUTED, true)?;
+            label_with_profile(profile, d, "<", 52, 204, MUTED, true)?;
+            label_with_profile(profile, d, &foot, 120, 204, INK, true)?;
+            label_with_profile(profile, d, ">", 188, 204, MUTED, true)?;
         }
         Screen::Walk => {
             if let Some(p) = &app.draft {
                 let mut row = String::<96>::new();
                 pill(d, 35, 43, 39, 20, INK)?;
-                label(d, &short(&p.line, 4), 55, 48, PORCELAIN, true)?;
-                label(d, &short(&p.stop_name, 17), 83, 48, INK, false)?;
+                label_with_profile(profile, d, &short(&p.line, 4), 55, 48, PORCELAIN, true)?;
+                label_with_profile(profile, d, &short(&p.stop_name, 17), 83, 48, INK, false)?;
                 for (i, (title, value)) in [
                     ("Walk", p.walk),
                     ("Variation +/-", p.spread),
@@ -736,9 +965,10 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 {
                     row.clear();
                     let _ = write!(row, "-   {}: {}m   +", title, value);
-                    label(d, &row, 120, 78 + i as i32 * 38, INK, true)?;
+                    label_with_profile(profile, d, &row, 120, 78 + i as i32 * 38, INK, true)?;
                 }
-                label(
+                label_with_profile(
+                    profile,
                     d,
                     if app.edit_pick < group.picks.len() {
                         "Remove"
@@ -751,7 +981,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                     true,
                 )?;
                 pill(d, 117, 190, 73, 29, GOLD)?;
-                label(d, "Save", 153, 200, INK, true)?;
+                label_with_profile(profile, d, "Save", 153, 200, INK, true)?;
             }
         }
     }

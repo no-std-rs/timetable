@@ -1,0 +1,62 @@
+{
+  "base": "7376f52b05335ee9ba41cf5ef5d93f12727a96d5",
+  "method": "Five paired Rust1.95 release host runs; real unchanged examples, same fixtures and profiles; query zero-allocation assertion; renderer512frames/screen15tiles512events; excludes WiFi/TLS/SPI/physicalC3",
+  "fixture_sha256": "5b063fd41489371cf364c45b2e411e88bfc0fba16a4c9261fe0e8b95ee7bf906",
+  "rounds": [
+    {
+      "round": 1,
+      "baseline": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.154 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,117914,8ef7cbe12102c1da\nGroups,512,65574,797632645b0c4508\nPicks,512,68917,a8b602d3d22e2408\nRoutes,512,82330,9a08ce3bcb39f3b6\nStops,512,294905,3003dc5585112562\nWalk,512,77062,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.155 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,112693,8ef7cbe12102c1da\nGroups,512,62728,797632645b0c4508\nPicks,512,66141,a8b602d3d22e2408\nRoutes,512,76483,9a08ce3bcb39f3b6\nStops,512,279993,3003dc5585112562\nWalk,512,73364,eef7e275cb19bce1\n"
+      }
+    },
+    {
+      "round": 2,
+      "baseline": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.152 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,117125,8ef7cbe12102c1da\nGroups,512,67355,797632645b0c4508\nPicks,512,65616,a8b602d3d22e2408\nRoutes,512,79421,9a08ce3bcb39f3b6\nStops,512,292500,3003dc5585112562\nWalk,512,76653,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.151 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,116399,8ef7cbe12102c1da\nGroups,512,62943,797632645b0c4508\nPicks,512,68201,a8b602d3d22e2408\nRoutes,512,80202,9a08ce3bcb39f3b6\nStops,512,277731,3003dc5585112562\nWalk,512,74429,eef7e275cb19bce1\n"
+      }
+    },
+    {
+      "round": 3,
+      "baseline": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.150 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,116494,8ef7cbe12102c1da\nGroups,512,67113,797632645b0c4508\nPicks,512,67073,a8b602d3d22e2408\nRoutes,512,83793,9a08ce3bcb39f3b6\nStops,512,302152,3003dc5585112562\nWalk,512,81626,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.157 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,113713,8ef7cbe12102c1da\nGroups,512,63562,797632645b0c4508\nPicks,512,66651,a8b602d3d22e2408\nRoutes,512,77769,9a08ce3bcb39f3b6\nStops,512,282725,3003dc5585112562\nWalk,512,73293,eef7e275cb19bce1\n"
+      }
+    },
+    {
+      "round": 4,
+      "baseline": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.153 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,118360,8ef7cbe12102c1da\nGroups,512,67660,797632645b0c4508\nPicks,512,66514,a8b602d3d22e2408\nRoutes,512,79324,9a08ce3bcb39f3b6\nStops,512,285443,3003dc5585112562\nWalk,512,76804,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.152 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,111996,8ef7cbe12102c1da\nGroups,512,62779,797632645b0c4508\nPicks,512,66204,a8b602d3d22e2408\nRoutes,512,79864,9a08ce3bcb39f3b6\nStops,512,282510,3003dc5585112562\nWalk,512,75721,eef7e275cb19bce1\n"
+      }
+    },
+    {
+      "round": 5,
+      "baseline": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.160 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,127422,8ef7cbe12102c1da\nGroups,512,69194,797632645b0c4508\nPicks,512,70840,a8b602d3d22e2408\nRoutes,512,82234,9a08ce3bcb39f3b6\nStops,512,300270,3003dc5585112562\nWalk,512,83729,eef7e275cb19bce1\n"
+      },
+      "candidate": {
+        "query": "4 / Most Teatralny: 18 departures in the next six hours; 0.156 s; zero allocations\n04:45 PO\u0141ABSKA\n04:49 PO\u0141ABSKA\n05:02 PO\u0141ABSKA\n05:17 PO\u0141ABSKA\n05:32 PO\u0141ABSKA\n05:47 PO\u0141ABSKA\n06:02 PO\u0141ABSKA\n06:17 PO\u0141ABSKA\n06:26 PO\u0141ABSKA\n06:31 PO\u0141ABSKA\n06:41 PO\u0141ABSKA\n06:51 PO\u0141ABSKA\n07:01 PO\u0141ABSKA\n07:11 PO\u0141ABSKA\n07:21 PO\u0141ABSKA\n07:31 PO\u0141ABSKA\n07:41 PO\u0141ABSKA\n07:51 PO\u0141ABSKA\n",
+        "render": "screen,frames,ns_per_frame,checksum\nBoard,512,116207,8ef7cbe12102c1da\nGroups,512,63059,797632645b0c4508\nPicks,512,64198,a8b602d3d22e2408\nRoutes,512,82081,9a08ce3bcb39f3b6\nStops,512,283619,3003dc5585112562\nWalk,512,75338,eef7e275cb19bce1\n"
+      }
+    }
+  ]
+}

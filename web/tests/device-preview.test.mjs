@@ -49,7 +49,7 @@ test("actual WASM pixels match native Rust for clock/network states and saved/ca
 test("WASM ABI rejects malformed updates atomically and uses fixed private memory without host imports", () => {
   assert.deepEqual(WebAssembly.Module.imports(module),[]);
   const {api,configure,snapshot}=load(), original=snapshot();
-  assert.equal(api.memory.buffer.byteLength,2097152);
+  assert.equal(api.memory.buffer.byteLength,4194304);
   assert.throws(()=>api.memory.grow(1),RangeError);
   assert.equal(api.preview_configure(api.preview_capacity()+1,now,0),0);
   assert.equal(configure({...fixture,groups:[]}),0);

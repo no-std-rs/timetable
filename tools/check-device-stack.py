@@ -144,6 +144,9 @@ def audit(frames, stack):
         http = (frame('transport', 'Timed', '5fetch', 'closure')
                 + frame('http_session', 'Connection', '5fetch', 'closure'))
         table_worker = max(max(cached), transport + normal)
+        mirror_open = max((size for name, size in frames
+                           if all(part in name for part in ('download', 'Mirror', '4open', 'closure'))),
+                          default=0)
         outlined_open = [size for name, size in frames
                          if all(part in name for part in ('embedded_tls', 'TlsConnection', '4open'))]
         stages = max(frame('feed', 'Builder', stage) for stage in
@@ -176,6 +179,11 @@ def audit(frames, stack):
             'runtime_settings_copy': worker + frame('copy_query') + frame('config', 'Config', '10clone_from'),
             'runtime_mirror_record': base + http + table_worker + scan_context + frame('gtfs', 'zip', '6record', 'closure'),
             'runtime_http_headers': base + http + table_worker + scan_context + frame('response', 'Response', '7headers'),
+            # Optional frequencies are decoded during Mirror::open, before
+            # coverage/calendar scans. Keep HTTP outlines in this conservative
+            # envelope even when that specialization is inlined into open.
+            'runtime_frequency_record': base + table_worker + mirror_open + http + frame('gtfs', 'zip', '6record', 'closure'),
+            'runtime_frequency_headers': base + table_worker + mirror_open + http + frame('response', 'Response', '7headers'),
             'runtime_official_inflate': worker + http + frame('gtfs', 'next_entry'),
             'runtime_tls': base + transport + request + max(outlined_open, default=0) + lower_tls,
             'runtime_cache_flash': base + http + max(cached) + stages + writer + max(flash_read, flash_write, flash_erase),

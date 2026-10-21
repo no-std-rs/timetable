@@ -4,7 +4,7 @@ use embedded_io_async::Read;
 use gtfs::{
     Date, Table, csv,
     http::{ByteRange, RangeFetch, RangeReader},
-    poznan::MirrorSnapshot,
+    mobility::{Snapshot as MirrorSnapshot, URL_BYTES},
     zip,
 };
 use timetable_display::{
@@ -47,6 +47,9 @@ pub struct Metadata {
 }
 #[allow(async_fn_in_trait)]
 pub trait Http {
+    fn feed_id(&self) -> &str {
+        "mdb-982"
+    }
     /// A range must be exact, HTTP 206, identity encoded and from the pinned
     /// object length. Full requests require HTTP 200. Reject duplicate headers.
     async fn fetch(
@@ -152,26 +155,47 @@ async fn end<R: Read>(body: &mut R) -> Result<(), Error> {
     Ok(())
 }
 pub struct Snapshots(pub heapless::Vec<MirrorSnapshot, 8>);
-impl Operation for Snapshots {
-    async fn read<R: Read>(&mut self, body: R) -> Result<(), Error> {
-        let mut listing = gtfs::poznan::MirrorSnapshots::new(body);
-        while let Some(snapshot) = listing.next().await? {
-            if self.0.contains(&snapshot) {
-                continue;
-            }
-            if self.0.is_full() {
-                if self.0.last().unwrap().url() >= snapshot.url() {
-                    continue;
-                }
-                self.0.pop();
-            }
-            self.0.push(snapshot).unwrap();
-            self.0.sort_unstable_by(|a, b| b.url().cmp(a.url()));
+impl Snapshots {
+    fn add(&mut self, snapshot: MirrorSnapshot) {
+        if self.0.contains(&snapshot) {
+            return;
         }
-        if self.0.is_empty() {
+        if self.0.is_full() {
+            if *self.0.last().unwrap() >= snapshot {
+                return;
+            }
+            self.0.pop();
+        }
+        self.0.push(snapshot).unwrap();
+        self.0.sort_unstable_by(|a, b| b.cmp(a));
+    }
+}
+struct SnapshotListing<'a> {
+    snapshots: &'a mut Snapshots,
+    feed: &'a str,
+}
+impl Operation for SnapshotListing<'_> {
+    async fn read<R: Read>(&mut self, body: R) -> Result<(), Error> {
+        let mut listing = gtfs::mobility::Snapshots::new(body);
+        while let Some(snapshot) = listing.next().await? {
+            if snapshot.feed_id() == self.feed {
+                self.snapshots.add(snapshot);
+            }
+        }
+        if self.snapshots.0.is_empty() {
             return Err(Error::MissingArchive);
         }
         Ok(())
+    }
+}
+impl Operation for Snapshots {
+    async fn read<R: Read>(&mut self, body: R) -> Result<(), Error> {
+        SnapshotListing {
+            snapshots: self,
+            feed: "mdb-982",
+        }
+        .read(body)
+        .await
     }
 }
 struct Range<'a, H> {
@@ -192,6 +216,20 @@ struct Payload<'a, V> {
     member: zip::Member,
     workspace: &'a mut zip::Workspace,
     visit: V,
+}
+struct Frequencies<'a> {
+    directory: &'a zip::Directory,
+    workspace: &'a mut zip::Workspace,
+}
+impl Operation for Frequencies<'_> {
+    async fn read<R: Read>(&mut self, mut body: R) -> Result<(), Error> {
+        self.directory
+            .validate_frequencies(&mut body, self.workspace)
+            .await?;
+        let mut scratch = [0; 256];
+        while body.read(&mut scratch).await.map_err(|_| Error::Network)? != 0 {}
+        Ok(())
+    }
 }
 impl<V: FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>> Operation for Payload<'_, V> {
     async fn read<R: Read>(&mut self, mut body: R) -> Result<(), Error> {
@@ -226,22 +264,31 @@ impl<'a, H: Http> Mirror<'a, H> {
         snapshot: MirrorSnapshot,
         workspace: &mut zip::Workspace,
     ) -> Result<Self, Error> {
+        let mut url = [0; URL_BYTES];
+        let url = snapshot.url(&mut url);
         let meta = http
             .fetch(
-                snapshot.url(),
+                url,
                 Some((ByteRange::new(0, 0)?, None)),
                 &mut Fill(&mut [0]),
             )
             .await?;
         let length = meta.length.ok_or(Error::Http)?;
-        let fetcher = Range {
-            http,
-            url: snapshot.url(),
-            length,
-        };
+        let fetcher = Range { http, url, length };
         let (cache, scratch) = workspace.scratch()[..3072].split_at_mut(2048);
         let mut reader = RangeReader::new(fetcher, length, cache)?;
         let directory = zip::Directory::read(&mut reader, scratch).await?;
+        if let Some(range) = directory.frequencies_range() {
+            http.fetch(
+                url,
+                Some((range, Some(length))),
+                &mut Frequencies {
+                    directory: &directory,
+                    workspace,
+                },
+            )
+            .await?;
+        }
         Ok(Self {
             http,
             snapshot,
@@ -260,9 +307,10 @@ impl<'a, H: Http> Mirror<'a, H> {
             .member(table)
             .ok_or(gtfs::Error::MissingTable(table))?;
         self.http.stage(table.filename());
+        let mut url = [0; URL_BYTES];
         self.http
             .fetch(
-                self.snapshot.url(),
+                self.snapshot.url(&mut url),
                 Some((member.record_range(), Some(self.length))),
                 &mut Payload {
                     member,
@@ -291,16 +339,53 @@ impl<'a, H: Http> Mirror<'a, H> {
         workspace: &mut zip::Workspace,
     ) -> Result<(Date, Date), Error> {
         let mut coverage = None;
-        self.table(Table::FeedInfo, workspace, |row| {
-            let start: Date = row.required(csv::Column::FeedStartDate)?.parse()?;
-            let end: Date = row.required(csv::Column::FeedEndDate)?.parse()?;
-            if start > end || coverage.is_some() {
-                return Err(gtfs::Error::InvalidDate);
+        if self.directory.member(Table::FeedInfo).is_some() {
+            self.table(Table::FeedInfo, workspace, |row| {
+                let start = row.get(csv::Column::FeedStartDate).unwrap_or("");
+                let end = row.get(csv::Column::FeedEndDate).unwrap_or("");
+                // A partial optional pair cannot define a complete interval;
+                // derive coverage from service calendars below instead.
+                if start.is_empty() || end.is_empty() {
+                    return Ok(());
+                }
+                let start: Date = start.parse()?;
+                let end: Date = end.parse()?;
+                if start > end || coverage.is_some() {
+                    return Err(gtfs::Error::InvalidDate);
+                }
+                coverage = Some((start, end));
+                Ok(())
+            })
+            .await?;
+        }
+        if coverage.is_none() {
+            // feed_info and its dates are optional GTFS. Calendar-only feeds
+            // still use pinned ranges and the exact same staged query checks.
+            for table in [Table::Calendar, Table::CalendarDates] {
+                if self.directory.member(table).is_none() {
+                    continue;
+                }
+                self.table(table, workspace, |row| {
+                    let (start, end): (Date, Date) = if table == Table::Calendar {
+                        (
+                            row.required(csv::Column::StartDate)?.parse()?,
+                            row.required(csv::Column::EndDate)?.parse()?,
+                        )
+                    } else {
+                        let date = row.required(csv::Column::Date)?.parse()?;
+                        (date, date)
+                    };
+                    if start > end {
+                        return Err(gtfs::Error::InvalidDate);
+                    }
+                    coverage = Some(coverage.map_or((start, end), |(a, b): (Date, Date)| {
+                        (a.min(start), b.max(end))
+                    }));
+                    Ok(())
+                })
+                .await?;
             }
-            coverage = Some((start, end));
-            Ok(())
-        })
-        .await?;
+        }
         coverage.ok_or(Error::MissingArchive)
     }
 }
@@ -337,8 +422,26 @@ pub async fn mirror(
 ) -> Result<Freshness, Error> {
     http.stage("MobilityDatabase: discovering immutable snapshots");
     let mut candidates = Snapshots(heapless::Vec::new());
-    http.fetch(gtfs::poznan::MIRROR_PAGE, None, &mut candidates)
-        .await?;
+    if !gtfs::mobility::valid_id(http.feed_id()) {
+        return Err(Error::MissingArchive);
+    }
+    use core::fmt::Write;
+    let mut page = heapless::String::<128>::new();
+    write!(
+        page,
+        "https://mobilitydatabase.org/feeds/gtfs/{}",
+        http.feed_id()
+    )
+    .map_err(|_| Error::MissingArchive)?;
+    http.fetch(
+        &page,
+        None,
+        &mut SnapshotListing {
+            snapshots: &mut candidates,
+            feed: http.feed_id(),
+        },
+    )
+    .await?;
     http.mirror_tables(&candidates, builder, workspace, config)
         .await
 }
@@ -500,6 +603,10 @@ pub async fn refresh(
     match mirror(http, builder, workspace, config).await {
         Ok(freshness) => Ok(freshness),
         Err(error) => {
+            if http.feed_id() != "mdb-982" {
+                builder.begin(now)?;
+                return Err(error);
+            }
             http.fallback(&error);
             builder.begin(now)?;
             official(http, builder, workspace, config).await
