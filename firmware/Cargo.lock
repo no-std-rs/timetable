@@ -1482,6 +1482,7 @@ dependencies = [
  "crc32fast",
  "csv-core",
  "embedded-io-async 0.7.0",
+ "memchr",
  "miniz_oxide",
 ]
 
@@ -2532,6 +2533,7 @@ version = "0.1.0"
 dependencies = [
  "chacha20poly1305",
  "crc32fast",
+ "critical-section",
  "embassy-executor",
  "embassy-futures",
  "embassy-net",

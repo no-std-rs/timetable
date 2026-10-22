@@ -802,15 +802,15 @@ fn bloom_false_positive_keeps_unselected_malformed_rows_out_of_typed_join() {
 }
 
 #[test]
-fn first_fill_scans_stop_times_twice_and_unchanged_checks_need_no_scratch() {
+fn first_fill_scans_stop_times_once_and_unchanged_checks_need_no_scratch() {
     let flash = Memory::new();
     let c = settings();
     let first = Client::new(ORIGINAL);
     update(&flash, &first, &c, NOW).1.unwrap();
     assert_eq!(
         first.stop_requests.get(),
-        2,
-        "preflight+write, no extra validation scan"
+        1,
+        "empty-cache preflight only checks metadata/trips; stop_times validates while writing"
     );
     assert_eq!(flash.scratch_calls.get(), 1);
     let before = flash.counters();
@@ -820,6 +820,66 @@ fn first_fill_scans_stop_times_twice_and_unchanged_checks_need_no_scratch() {
     assert_eq!(repeated.stop_requests.get(), 0);
     assert_eq!(flash.scratch_calls.get(), 1);
     assert_eq!(flash.counters(), before);
+}
+
+#[test]
+fn first_fill_late_error_and_cancel_leave_no_committed_bank_and_can_retry() {
+    let c = settings();
+    for cancel in [false, true] {
+        let flash = Memory::new();
+        let mut client = Client::new(ORIGINAL);
+        if cancel {
+            client.cancel_stop_request = Some(1);
+        } else {
+            // Also fail any ordinary-query fallback after the cache attempt.
+            client.late_error = true;
+        }
+        let http = cache::Http {
+            inner: &client,
+            flash: &flash,
+            enabled: true,
+        };
+        let mut builder = Builder::new("20261017".parse().unwrap());
+        let mut workspace = zip::Workspace::new();
+        {
+            let mut future = pin!(download::refresh(
+                &http,
+                &mut builder,
+                &mut workspace,
+                &c,
+                NOW
+            ));
+            if cancel {
+                while client.stop_requests.get() == 0 {
+                    assert!(
+                        future
+                            .as_mut()
+                            .poll(&mut Context::from_waker(Waker::noop()))
+                            .is_pending()
+                    );
+                }
+            } else {
+                assert!(run(future).is_err());
+            }
+        }
+        assert!(
+            flash.writes.get() > 0,
+            "the single pass writes provisional rows"
+        );
+        assert!(run(cache::load(&flash)).unwrap().is_none());
+        assert!(
+            builder.events.is_empty(),
+            "failed stream discards provisional departures"
+        );
+        assert_eq!(flash.scratch_active.get(), 0);
+        let retry = Client::new(ORIGINAL);
+        let (mut cached, result) = update(&flash, &retry, &c, NOW);
+        result.unwrap();
+        assert_eq!(retry.stop_requests.get(), 1);
+        let mut direct = online(&Client::new(ORIGINAL), &c, NOW);
+        assert_eq!(events(&mut cached), events(&mut direct));
+        assert!(run(cache::load(&flash)).unwrap().is_some());
+    }
 }
 
 #[test]

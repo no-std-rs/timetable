@@ -2,7 +2,9 @@
 
 Measured on 2026-10-17 with rustc 1.97.1, release builds, x86_64 Linux,
 AMD Ryzen 9 7900. All files were already downloaded; CPU/file timings below
-exclude network. MCU timing and actual driver/TLS RAM have not been measured.
+exclude network. Physical C6 timing is reported separately in
+[C6 HTTP wake isolation](#c6-http-wake-isolation). Combined physical RAM
+high-water remains unmeasured.
 
 ## Workload and correctness
 
@@ -949,3 +951,200 @@ Desktop and mobile browser tests use pointer gestures to edit the landscape
 preview, prepare the matching image and restore the remembered orientation.
 Panel colors, physical touch alignment and finger comfort still need a check
 on the actual Waveshare board.
+
+## C6 HTTP wake isolation
+
+Measured on 2026-10-22 on the physical C6 connected to bluefin, landscape,
+**80 MHz CPU**, display enabled, transfer modem power saving disabled. CPU
+frequency, 512-byte decoded cooperative quantum, 6 KiB TCP RX, 16,640 B TLS RX,
+64 KiB heap and two radio RX buffers remain unchanged. Association RSSI was
+**−81 dBm**. [All eight rounds](benchmarks/device-http-wake-live.json) record a
+single diagnostic binary: raw HTTPS and inflate controls, then three paired
+ZIP/CSV runs with alternating wake-gate order.
+
+The network runner and update were siblings in `select` with one parent waker.
+Every CSV cooperative yield polled the runner again. Empty socket reads also
+wake the network stack, which could repoll the waiting read through the shared
+waker. Separate readiness gates now use two small native Embassy relay tasks;
+native wakers preserve the integrated timer queue. Cancellation still drops
+both session futures before the radio is released.
+
+Each request reads the same **524,288 compressed bytes**, starting at offset
+3,070,233 of the immutable `mdb-982-202610170128.zip`. Inflation produces
+**4,642,656 bytes**; every CSV round returns **80,585 rows** before the expected
+partial-member error. The diagnostic drains the exact HTTP range but never
+publishes or caches partial results. This measures a truncated member, not a
+full verified timetable refresh.
+
+| Median of three CSV rounds | Shared waker | Separate wake gates |
+| --- | ---: | ---: |
+| HTTP body elapsed time | 9,868 ms | 8,839 ms |
+| Compressed body throughput | 51.9 KiB/s | 57.9 KiB/s |
+| Request time including connection/TLS | 11,347 ms | 10,254 ms |
+| Network runner child polls during body | 10,096 | 1,255 |
+| Network elapsed poll work | 1,903 ms | 930 ms |
+
+Body time falls **10.4%**, throughput rises **11.6%**, and actual runner polls
+fall **87.6%**. The raw HTTPS control takes **3,126 ms** (163.8 KiB/s); inflate
+takes **5,584 ms** (91.7 KiB/s). HTTP progress includes consumer backpressure,
+so it also measures inflation, CSV parsing and contention with display work.
+The scheduling fix removes redundant work; it does not make that remaining
+pipeline run at raw HTTPS speed. Scheduler counters include preemption time,
+not pure CPU utilization. Three pairs in one Wi-Fi session do not characterize
+other feeds, whole-query performance or other RF conditions.
+
+The normal 80 MHz landscape image was restored with diagnostics disabled.
+Settings and cache partitions matched the original flash backup byte for byte.
+The normal image subsequently restored the cached board, synchronized NTP,
+verified TLS, checked the unchanged remote snapshot and released the radio.
+
+All three production board builds pass the RAM and scoped stack guards.
+[C3 RAM](benchmarks/device-http-wake-c3-ram.json) is **275,204 B static**,
+**299,780 B** with the unchanged 24 KiB minimum stack reserve, and **324,604 B**
+with all **49,400 B** available stack. [C6 portrait RAM](benchmarks/device-http-wake-c6-ram.json)
+and [landscape RAM](benchmarks/device-http-wake-c6-landscape-ram.json) are
+**306,716 B static**, **331,292 B** with the minimum reserve and **397,308 B**
+with all **90,592 B** available stack. The existing 300,000/332,000 B regression
+limits and 400,000 B total limit are unchanged. The
+[C3](benchmarks/device-http-wake-c3-stack.json),
+[C6 portrait](benchmarks/device-http-wake-c6-stack.json) and
+[C6 landscape](benchmarks/device-http-wake-c6-landscape-stack.json) audits count
+the outlined gate poll frames; cache publication has its own stack path outside
+TLS. The TLS envelope is **40,912 B + 4,096 B headroom**. These are compiler and
+linker bounds, not a complete call graph or a physical stack high-water test.
+The diagnostic's sampled allocator peak was **61,420 / 65,536 B**, including
+earlier handshake allocations, and is not a whole-device RAM peak.
+
+Host regressions reproduce the shared-waker empty-read loop and check independent
+wakes, received-data delivery, self-wakes, pinning, cancellation, late wakes and
+relay startup. See [the firmware README](firmware/README.md) for the opt-in
+`http-probe` build and partition-preserving flashing instructions.
+
+## Single stop-times scan for an empty cache
+
+The full physical C6 cold-cache run exposed work not covered by the earlier
+512 KiB parser probe: the first fill downloaded and processed the entire
+**7,947,239-byte** stop-times record twice, taking **180,659 + 182,370 ms**.
+That member expands to **72,547,076 bytes**. The HTTP progress rate includes
+consumer processing; repeated inflation, CSV parsing, selection and display
+work account for much of the apparent download slowdown.
+
+With no active cache there are no old selected bytes to compare. The empty-cache
+preflight now reads metadata and trips, preserving early active-trip/service/ID
+capacity checks, then streams stop times once into a provisional bank. HTTP
+completion, full member CRC/size verification, exact query validation and bank
+validation still precede successful publication. A late stop-time error,
+overflow or cancellation may leave provisional flash writes, but no valid bank;
+the next attempt can retry. An existing cache retains its read-only comparison
+pass and zero writes for unchanged selected content. No extra rewind buffer or
+decoder checkpoint is retained.
+
+ZIP-directory ranges already avoid unrelated entries such as shapes. Seeking
+within the compressed stop-times member needs more than a byte offset:
+[DEFLATE](https://www.rfc-editor.org/rfc/rfc1951) carries block coding state and
+references up to 32 KiB of previous output. An indexed decoder checkpoint can
+support seeking, but retaining one does not discover which rows are relevant
+or eliminate the first scan. Replaying the selected canonical tables already
+uses the much smaller local flash cache.
+
+The physical comparison and limitations are recorded in
+[the cold-cache report](benchmarks/device-cold-single-pass-live.json).
+[C3 linked RAM](benchmarks/device-cold-single-pass-c3-ram.json) adds **8 B** to
+the wake-gate build: **275,212 B static**, **299,788 B** with the unchanged
+24 KiB minimum stack reserve, and **324,604 B** with all **49,392 B** available
+stack. [C6 landscape RAM](benchmarks/device-cold-single-pass-c6-landscape-ram.json)
+is **306,724 B static**, **331,300 B** with the minimum reserve, and **397,308 B**
+with all **90,584 B** available stack. All three production board builds pass
+their unchanged guards. The [C3](benchmarks/device-cold-single-pass-c3-stack.json)
+and [C6 landscape](benchmarks/device-cold-single-pass-c6-landscape-stack.json)
+scoped stack audits retain **40,912 B + 4,096 B** for TLS. These are compiler
+and linker bounds, not physical stack high-water measurements.
+
+Host regressions require one stop-times request for a first fill and zero for
+unchanged snapshot checks; late HTTP errors and cancellation leave no committed
+first bank, release scratch, discard staged departures and allow a clean retry.
+The existing overflow, interrupted write, unrelated-row comparison and prior-bank
+recovery checks continue to pass.
+
+## Rejecting irrelevant stop-time data before parsing
+
+The selective mirror now searches buffered decoded blocks for selected stop IDs
+before materializing rows. If no identity can occur, a small quote-state check
+establishes that the block ends at a CSV record boundary, then discards it.
+Possible matches remain in the same buffer for exact field matching and full
+parsing. Unused values in rejected rows need no copying, UTF-8 checks, field-width
+validation or trip lookup. Headers and returned rows retain their checks.
+Ambiguous/permissive quoting falls back to `csv-core`; embedded newlines,
+escaped quotes and chunk boundaries remain supported. The ordinary strict CSV
+API is unchanged. No compressed bytes, DEFLATE history or ZIP CRC checks are
+skipped, and a complete validated query still precedes publication.
+
+The actual source quotes trip IDs and headsigns on every row. The normalized
+instruction-probe fixture does not preserve that quoting. A plain-row shortcut
+therefore fell back on this feed, and a general substring-search constructor
+added work. The final path uses a small first-byte search and a quote-aware
+block-boundary check. Conservative substring false positives, including IDs
+appearing in unrelated fields, go through the exact matcher. IDs requiring CSV
+escaping disable raw negative hints. Two small statically selected reader modes
+keep the larger matching future out of ordinary metadata scans.
+
+[Physical paired measurements](benchmarks/device-selective-csv-live.json) use
+one diagnostic binary on C6 landscape at **80 MHz**, `opt-level=s`, fat LTO,
+display enabled and unchanged network/heap/decoded-byte budgets. Two controls
+precede three strict/selective pairs with alternating order, all reading the
+same 524,288-byte compressed member prefix. Each CSV round returns the same
+**33 rows for public stop ID 4314**, checksum **24110203**.
+
+| Median of three rounds | Strict parse then filter | Early rejection |
+| --- | ---: | ---: |
+| HTTP body elapsed time | 9,364 ms | 8,783 ms |
+| Compressed body throughput | 54.7 KiB/s | 58.3 KiB/s |
+| Application elapsed poll work | 6,091 ms | 5,182 ms |
+
+This is **14.9% less application poll work** and **6.2% less body time** in this
+sample, not a universal speedup. Poll work includes preemption, not pure CPU
+time. The sample is deliberately truncated; expected decode failure is followed
+by exact HTTP-body draining, without publication or cache writes. Selectivity,
+ID substrings, quoting and network conditions affect the result. Inflation and
+record verification remain substantial costs even when nearly every row is
+irrelevant.
+
+The final normal firmware also completed a **full single table write pass**
+with the device's actual selections. Comparing that pass with the earlier
+strict write pass, independently of the separate duplicate-cold-scan change:
+
+| Same 7,947,239-byte record | Strict | Early rejection |
+| --- | ---: | ---: |
+| Body elapsed time | 182,370 ms | 142,533 ms |
+| Compressed body throughput | 42.6 KiB/s | 54.5 KiB/s |
+| Approximate application poll-work delta | 124,950 ms | 91,020 ms |
+
+That is **21.8% less body time**, **28.0% higher throughput**, and **27.2% less
+application poll work** for this full scan at the same 80 MHz. This is one
+before/after run, not alternating full-table pairs; RF conditions and query UTC
+differ. Phase deltas use the reports immediately before/after the body. The
+complete member validated and the selected query succeeded. Flash readback
+confirmed the resulting **29,414-byte selected payload is byte-identical** to
+the previous correct payload, SHA-256
+`a2b1230630432b1dcbe2179142678bf3a910ec5910e7a91551c0cfaf1e7afa49`.
+Settings were unchanged. Diagnostics are disabled in the installed normal image.
+
+[C3 RAM](benchmarks/device-selective-csv-c3-ram.json) is **275,252 B static**,
+**299,828 B** with the unchanged 24 KiB minimum reserve, and **324,604 B** with
+all **49,352 B** available stack. [C6 landscape RAM](benchmarks/device-selective-csv-c6-landscape-ram.json)
+is **306,764 B static**, **331,340 B** with the minimum reserve, and **397,308 B**
+with all **90,544 B** available stack. This adds **40 B static** over the single
+stop-times cold-fill build, reusing its existing 1 KiB input buffer. All three
+production board builds pass the unchanged guards. The
+[C3](benchmarks/device-selective-csv-c3-stack.json) and
+[C6 landscape](benchmarks/device-selective-csv-c6-landscape-stack.json) scoped
+stack audits retain **40,912 B + 4,096 B** for TLS. The separate ABI display
+query/reserve estimate is **249,528 B**. None is a physical stack high-water
+measurement or a complete call-graph proof.
+
+Host tests compare selected records against the strict parser across chunk sizes,
+quoted identities/headsigns, CR/LF/CRLF, escaped quotes, multiline fields and
+permissive quote syntax. They also cover conservative false positives, escaped
+identity keys, invalid ignored values, errors in selected rows/headers, and a
+bad member CRC when all rows are rejected. Existing cache/join/cancellation
+regressions continue to pass.

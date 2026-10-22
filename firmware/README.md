@@ -106,8 +106,8 @@ percentage when known, rate and elapsed time every five seconds while reads
 advance. A stalled read is bounded by the transport timeout. Mirror failure
 logs its reason before starting the original-source fallback.
 The 64 KiB heap is unchanged. Two RX/TX queues and disabled aggregation trade
-potential Wi-Fi throughput for certificate headroom; new hardware throughput
-and combined peak RAM remain unmeasured.
+potential Wi-Fi throughput for certificate headroom. The C6 measurements below
+retain these buffer sizes; combined physical peak RAM remains unmeasured.
 
 On the display:
 
@@ -181,6 +181,15 @@ invalidates the connection. Selected table data are decompressed directly into t
 bounded query builder. Stop times still require reading that table, not just
 individual selected rows. There is no full ZIP buffer or temporary file.
 
+Stop-time scans search blocks in the existing 1 KiB CSV input buffer for selected
+stop IDs. A block with no possible match is discarded after a quote-aware
+record-boundary check. Possible matches get an exact `stop_id` check; irrelevant rows are discarded before copying, UTF-8/width
+validation or trip lookup; their unused values are deliberately ignored.
+Potential matches remain in place for full parsing. Ambiguous quoting and
+complex rows use the general parser, preserving embedded newlines and escaped quotes. Headers
+and returned rows remain validated, and the complete ZIP member is still
+inflated and CRC/size checked. The ordinary `gtfs::csv::Reader::next` stays strict.
+
 If any mirror step fails, all staged data are cleared. For Poznań only, the original ZTM listing
 then selects immutable dated ZIPs for the same service window; each distinct
 archive gets three forward passes for calendars, selected trips and departures.
@@ -194,10 +203,12 @@ keys include the selected feed and timezone rules.
 The dedicated flash cache retains selected all-period GTFS tables, with no
 writes on unchanged selected data. A cold boot shows saved absolute times before
 Wi-Fi, then re-queries at synchronized UTC before checking the mirror. See [persistent cache](../docs/persistent-cache.md)
-for partition migration, transactional recovery and capacity fallback. A first
-fill or changed selection scans each required table twice: read-only comparison
-and validation, then writing. The active query and all-period recording share
-each scan. An unchanged snapshot needs only directory/coverage checks and
+for partition migration, transactional recovery and capacity fallback. With an
+empty cache, metadata/trip bounds are checked first, then stop times are scanned
+once into an uncommitted bank. The complete stream and selected query must
+validate before commit. A changed existing cache still uses read-only comparison
+and validation, then writing; unchanged selected data cause no writes. The
+active query and all-period recording share each scan. An unchanged snapshot needs only directory/coverage checks and
 replay, with no flash writes.
 A successful refresh builds six hours of departures in RAM and waits three hours.
 Always-on failures retry after 30 seconds (clock) or a minute (other errors);
@@ -235,19 +246,21 @@ time and signature verification. See [the reproducible comparison](../PERFORMANC
 The ZIP dictionary supplies directory scratch while no inflater is active.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The static-plus-minimum-stack regression account is **299,988 B**,
+excluded. The C3 static-plus-minimum-stack regression account is **299,828 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 49,192 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 49,352 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
 available stack, with 4 KiB headroom. The original binary fails this check.
 `STACK.json` records the scoped audit, including the network selection, update,
-mirror and transport callers. Its TLS bound is 44,768 B plus 4,096 B headroom; it is not a complete call-graph proof or
+mirror and transport callers. Its C3 TLS bound is 40,912 B plus 4,096 B headroom; it is not a complete call-graph proof or
 physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
-Physical screen/radio/touch behaviour still requires the board. No hardware test has been
-performed as part of this implementation. Serial logs report allocator current,
+HTTPS, inflation, CSV parsing and cached refresh were exercised on a physical
+C6 in landscape at 80 MHz; see [measurements](../PERFORMANCE.md#c6-http-wake-isolation).
+C3 hardware, physical stack high-water, touch and battery behaviour remain
+unverified by that exercise. Serial logs report allocator current,
 peak-since-boot and total bytes after startup and refresh attempts, including
 allocations already freed by the TLS handshake. `Scheduler (session)` logs
 cumulative elapsed poll work and longest poll for the verified HTTP/query
@@ -259,6 +272,29 @@ cooperatively polled runner. TLS records, inflater calls and flash operations
 still contain synchronous work; these logs distinguish them from simply waiting
 for remote data. Session counters reset when each radio session starts. Keep the full heap allowance
 until these logs and physical stack measurements justify reducing it.
+
+The runner and update use separate wake gates. Two small Embassy relay tasks
+provide native task wakers, preserving the integrated timer queue while avoiding
+runner polls on every CSV yield and empty-read loops caused by shared wakeups.
+The gates retain the session's cancellation and radio lifetimes. Cache
+publication is outlined separately so its large moves do not occupy the TLS
+verification call stack.
+
+For the opt-in hardware diagnostic, build from `firmware/` with:
+
+```sh
+cargo build --locked --release --no-default-features --features firmware,c6-landscape,http-probe --target riscv32imac-unknown-none-elf
+```
+
+When flashing an ELF, include `--partition-table partitions.csv` to retain the
+settings/cache layout. The diagnostic runs after NTP, downloading the same
+512 KiB prefix of a fixed public `stop_times.txt` ZIP member eight times: raw,
+inflate, then three CSV pairs alternating strict and selective parsing order,
+filtering public stop ID `4314`. Each pair must return the same selected-row
+count and checksum. Partial
+member decode errors are expected; these probes never publish or cache their
+results. Normal verified refresh follows. `PROBE` and `GATE` logs include
+timings, row counts and actual child polls. Disable `http-probe` for normal use.
 
 The fixed app limits are four groups, four choices each, 1,024 active trips in a
 16 KiB exact ID pool, 64 distinct service IDs across the date window (including

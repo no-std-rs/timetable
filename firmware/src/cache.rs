@@ -790,6 +790,7 @@ async fn build<H: crate::download::Http, F: Storage>(
     workspace: &mut zip::Workspace,
     config: &Config,
     recording: (&mut Writer<'_, F>, &mut [u8]),
+    departures: bool,
 ) -> Result<(), crate::download::Error> {
     let (writer, bits) = recording;
     builder.begin(writer.now)?;
@@ -852,20 +853,22 @@ async fn build<H: crate::download::Http, F: Storage>(
             })
             .await?;
         writer.end(Table::Trips);
-        writer.start(Table::StopTimes)?;
-        builder
-            .departures_from_recording(&mut source, config, workspace, |row, selection| {
-                if selection.stop(row.get(C::StopId).unwrap_or(""))
-                    && bloom(bits, row.get(C::TripId).unwrap_or(""), false)
-                {
-                    // Bloom hits can be unrelated. The exact join validates
-                    // real selected rows during this same read-only pass.
-                    writer.row(row)?;
-                }
-                Ok(())
-            })
-            .await?;
-        writer.end(Table::StopTimes);
+        if departures {
+            writer.start(Table::StopTimes)?;
+            builder
+                .departures_from_recording(&mut source, config, workspace, |row, selection| {
+                    if selection.stop(row.get(C::StopId).unwrap_or(""))
+                        && bloom(bits, row.get(C::TripId).unwrap_or(""), false)
+                    {
+                        // Bloom hits can be unrelated. The exact join validates
+                        // real selected rows during this provisional pass.
+                        writer.row(row)?;
+                    }
+                    Ok(())
+                })
+                .await?;
+            writer.end(Table::StopTimes);
+        }
         writer.count += 1;
         remaining &= !mask;
         if remaining == 0 {
@@ -922,6 +925,8 @@ async fn matches<H: crate::download::Http>(
 /// A changed active cache is compared without writes, then streamed a second
 /// time into the inactive bank. Unchanged selected bytes cause zero erases and
 /// writes even when unrelated rows, ZIP packing or source timestamps change.
+/// With no active bank, preflight only metadata/trip bounds, then stream stop
+/// times once into an uncommitted bank. Complete validation still precedes use.
 pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
     http: &H,
     snapshots: &crate::download::Snapshots,
@@ -952,7 +957,12 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
     }
     let bits = &mut bits[..FILTER_BYTES];
     {
-        http.stage("cache: validating and comparing selected tables; one scan per table");
+        let compare_departures = writer.active.is_some();
+        http.stage(if compare_departures {
+            "cache: validating and comparing selected tables; one scan per table"
+        } else {
+            "cache: empty; checking metadata/trip bounds before single stop_times scan"
+        });
         build(
             http,
             snapshots,
@@ -960,6 +970,7 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
             workspace,
             config,
             (&mut writer, bits),
+            compare_departures,
         )
         .await?;
         if writer.unchanged()? {
@@ -986,6 +997,7 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
         workspace,
         config,
         (&mut writer, bits),
+        true,
     )
     .await?;
     // Verify the complete selected query before committing the new generation.
