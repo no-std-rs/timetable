@@ -49,6 +49,13 @@ pub trait Storage {
     fn checked_at(&self) -> Option<i64> {
         None
     }
+    /// Consume approval for replacing this recently committed bank. Called
+    /// after read-only validation/comparison and before any erase or program.
+    /// The caller can handle `CacheUpdateRequired` outside the HTTP session,
+    /// then retry with approval bound to the previous commit timestamp.
+    fn approve_update(&self, _previous: i64) -> bool {
+        false
+    }
 }
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Block {
@@ -987,6 +994,17 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
             fresh.checked_at = Some(writer.now);
             return Ok(fresh);
         }
+    }
+    if let Some(bank) = writer.active
+        && writer.now.saturating_sub(bank.checked_at()) < 24 * 3600
+        && !flash.approve_update(bank.checked_at())
+    {
+        return Err(crate::download::Error::CacheUpdateRequired(
+            bank.checked_at(),
+        ));
+    }
+    if !flash.current().await {
+        return Err(Error::InvalidField("obsolete cache update").into());
     }
     http.stage("cache: selected contents changed; streaming inactive bank");
     writer = Writer::new(flash, writer.active, false, writer.now);

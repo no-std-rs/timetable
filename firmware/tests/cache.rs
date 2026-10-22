@@ -41,6 +41,9 @@ struct Memory {
     checked_at: Cell<Option<i64>>,
     pause_commit: Cell<bool>,
     commit_waiting: Cell<bool>,
+    approval: Cell<bool>,
+    approval_requests: Cell<usize>,
+    approval_previous: Cell<Option<i64>>,
 }
 impl Memory {
     fn new() -> Self {
@@ -60,6 +63,10 @@ impl Memory {
             checked_at: Cell::new(None),
             pause_commit: Cell::new(false),
             commit_waiting: Cell::new(false),
+            // Existing power-loss/CRC tests explicitly permit repeated writes.
+            approval: Cell::new(true),
+            approval_requests: Cell::new(0),
+            approval_previous: Cell::new(None),
         }
     }
     fn from(bytes: &[u8]) -> Self {
@@ -171,6 +178,11 @@ impl Storage for Memory {
     }
     fn checked_at(&self) -> Option<i64> {
         self.checked_at.get()
+    }
+    fn approve_update(&self, previous: i64) -> bool {
+        self.approval_requests.set(self.approval_requests.get() + 1);
+        self.approval_previous.set(Some(previous));
+        self.approval.get()
     }
 }
 struct Body<'a>(&'a [u8]);
@@ -378,6 +390,109 @@ fn cold_boot_replays_full_period_and_unchanged_checks_do_not_write() {
         counters,
         "walking, grouping, direction and duplicate choices do not change stored coverage"
     );
+}
+
+#[test]
+fn frequent_changed_cache_requires_approval_before_any_flash_write() {
+    let initial = Memory::new();
+    let config = settings();
+    initial.checked_at.set(Some(NOW + 10));
+    update(&initial, &Client::new(ORIGINAL), &config, NOW)
+        .1
+        .unwrap();
+    assert_eq!(
+        initial.approval_requests.get(),
+        0,
+        "first fill is automatic"
+    );
+    let saved = initial.bytes.borrow().clone();
+    for age in [-1, 0, 1, 86399, 86400, 86401] {
+        let flash = Memory::from(&saved);
+        flash.approval.set(false);
+        let client = Client::new(CHANGED);
+        let (builder, result) = update(&flash, &client, &config, NOW + 10 + age);
+        if age < 86400 {
+            assert!(
+                matches!(result, Err(download::Error::CacheUpdateRequired(previous)) if previous == NOW + 10)
+            );
+            assert_eq!(flash.approval_requests.get(), 1);
+            assert_eq!(flash.approval_previous.get(), Some(NOW + 10));
+            assert_eq!(flash.counters(), (0, 0));
+            assert_eq!(*flash.bytes.borrow(), saved);
+            assert!(
+                builder.events.is_empty(),
+                "unapproved results stay provisional"
+            );
+            assert_eq!(
+                client.stop_requests.get(),
+                1,
+                "no write pass or official fallback"
+            );
+        } else {
+            result.unwrap();
+            assert_eq!(flash.approval_requests.get(), 0);
+            assert!(flash.writes.get() > 0);
+        }
+    }
+    let flash = Memory::from(&saved);
+    flash.approval.set(false);
+    for data in [ORIGINAL, UNRELATED] {
+        update(&flash, &Client::new(data), &config, NOW + 60)
+            .1
+            .unwrap();
+    }
+    assert_eq!(
+        flash.approval_requests.get(),
+        0,
+        "unchanged selected data never prompts"
+    );
+    assert_eq!(flash.counters(), (0, 0));
+    flash.approval.set(true);
+    update(&flash, &Client::new(CHANGED), &config, NOW + 60)
+        .1
+        .unwrap();
+    assert_eq!(flash.approval_requests.get(), 1);
+    assert_eq!(
+        run(cache::load(&flash)).unwrap().unwrap().checked_at(),
+        NOW + 60
+    );
+    assert!(flash.writes.get() > 0);
+}
+
+#[test]
+fn clockless_boot_shows_flash_board_while_background_update_waits_for_approval() {
+    use timetable_display::{App, model::Status};
+    let flash = Memory::new();
+    let config = settings();
+    update(&flash, &Client::new(ORIGINAL), &config, NOW)
+        .1
+        .unwrap();
+    let counters = flash.counters();
+    let bank = run(cache::load(&flash)).unwrap().unwrap();
+    let mut builder = restore(&flash, &config, bank.checked_at());
+    let mut app = App::default();
+    app.publish(
+        core::mem::take(&mut builder.events),
+        core::mem::take(&mut builder.headsigns),
+        builder.now,
+    );
+    app.status = Status::Loading;
+    let saved: Vec<_> = app.board_departures().collect();
+    let freshness = app.freshness;
+    assert!(!saved.is_empty());
+    assert!(
+        app.clock.is_none(),
+        "replay does not manufacture current UTC"
+    );
+    flash.approval.set(false);
+    let client = Client::new(CHANGED);
+    assert!(matches!(
+        update(&flash, &client, &config, NOW + 60).1,
+        Err(download::Error::CacheUpdateRequired(_))
+    ));
+    assert_eq!(app.board_departures().collect::<Vec<_>>(), saved);
+    assert_eq!(app.freshness, freshness);
+    assert_eq!(flash.counters(), counters);
 }
 #[test]
 fn unrelated_source_rows_are_compared_without_wearing_flash() {

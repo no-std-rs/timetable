@@ -90,7 +90,7 @@ fn every_rectangular_screen_tiles_exactly_and_clips_right_edge() {
     let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
     let mut app = App::default();
     app.draft = Some(config.groups[0].picks[0].clone());
-    for screen in [
+    for (screen, pending) in [
         Screen::Board,
         Screen::Groups,
         Screen::Picks,
@@ -98,8 +98,17 @@ fn every_rectangular_screen_tiles_exactly_and_clips_right_edge() {
         Screen::Stops,
         Screen::Walk,
         Screen::Freshness,
-    ] {
+    ]
+    .into_iter()
+    .map(|screen| (screen, false))
+    .chain([(Screen::Board, true)])
+    {
         app.screen = screen;
+        app.cache_update = if pending {
+            timetable_display::model::CacheUpdate::Pending
+        } else {
+            timetable_display::model::CacheUpdate::None
+        };
         let mut frame = Frame(vec![Rgb565::BLACK; WIDTH * HEIGHT]);
         render::draw_animated(&mut frame, &app, &config, &catalog, 3).unwrap();
         for y in (0..HEIGHT as u16).step_by(TILE_ROWS) {

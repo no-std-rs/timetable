@@ -55,6 +55,9 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
 ) -> Result<(), D::Error> {
     base(d)?;
     let profile = catalog.profile();
+    if app.cache_update == CacheUpdate::Pending {
+        return cache_confirmation(d, profile, 320);
+    }
     let Some(group) = config.groups.get(app.group) else {
         return setup(d);
     };

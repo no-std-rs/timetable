@@ -20,6 +20,10 @@ pub enum Error {
     Http,
     Clock,
     MissingArchive,
+    /// Read-only comparison found changed content needing a frequent write.
+    CacheUpdateRequired(i64),
+    /// The user kept the saved cache instead of approving another daily write.
+    CacheUpdateDeclined,
     Feed(gtfs::Error),
 }
 impl From<gtfs::Error> for Error {
@@ -666,6 +670,10 @@ pub async fn refresh(
     }
     match mirror(http, builder, workspace, config).await {
         Ok(freshness) => Ok(freshness),
+        Err(error @ (Error::CacheUpdateRequired(_) | Error::CacheUpdateDeclined)) => {
+            builder.begin(now)?;
+            Err(error)
+        }
         Err(error) => {
             if http.feed_id() != "mdb-982" {
                 builder.begin(now)?;

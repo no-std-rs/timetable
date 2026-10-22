@@ -72,6 +72,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => Screen::Stops,
         };
+    } else if mode == "cache-update" {
+        app.cache_update = timetable_display::model::CacheUpdate::Pending;
     } else if mode == "saved" {
         app.clock = None;
         app.status = Status::Connecting;

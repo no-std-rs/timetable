@@ -47,6 +47,14 @@ fn board() -> (Config, App) {
     }
     (c, app)
 }
+
+#[test]
+fn pending_cache_confirmation_keeps_the_screen_awake() {
+    let (_, mut app) = board();
+    assert!(battery::can_sleep(&app, false, 1000, false));
+    app.cache_update = timetable_display::model::CacheUpdate::Pending;
+    assert!(!battery::can_sleep(&app, false, 1000, false));
+}
 fn image(app: &App) -> [u8; RETAINED_BYTES] {
     let mut image = [0; RETAINED_BYTES];
     battery::save(

@@ -58,6 +58,34 @@ A storage read error prevents choosing any write target, preserving unknown bank
 Flash and settings share one serialized storage owner. Replay and validation
 yield to the Embassy executor; physical flash program/erase calls are synchronous.
 
+The saved board remains visible while the background refresh downloads and
+validates updates. Before replacing a bank saved less than **24 hours** ago,
+the device warns that additional writes wear flash and asks **Keep** or
+**Update**. This uses the persisted last content commit time, including across
+reboots; background checks do not reset the interval. First fills and changed
+content at least 24 hours after the last commit save automatically. Unchanged
+selected data never prompt or write. A clock that moved behind the saved time
+also requires confirmation.
+
+The warning appears after read-only comparison and before any flash erase or
+program. The HTTP session closes while awaiting a decision; **Update** grants
+one replacement of that bank and starts a fresh, fully validated download.
+**Keep**, no answer within 60 seconds, cancellation or shutdown preserve the
+saved cache and displayed board. A declined update does not run an official
+fallback or advance its successful-check time. The next ordinary background
+check remains scheduled three hours later. A sleeping screen wakes for the
+question; editor state is preserved underneath it. Headless storage consumers
+deny frequent writes by default and can explicitly supply approval.
+
+The production confirmation builds add 40 bytes of linked static RAM. Static
+plus the 24 KiB minimum stack reserve is 299,868 bytes on C3 and 331,380 bytes
+on both C6 layouts, within the unchanged 300,000/332,000-byte regression limits.
+The [C3](../benchmarks/device-cache-confirmation-c3-ram.json) and
+[C6 landscape](../benchmarks/device-cache-confirmation-c6-landscape-ram.json)
+reports include the separate complete linked RAM account; adjacent stack reports
+retain the scoped audit and 4 KiB headroom. These are compiler/linker checks,
+not physical high-water measurements.
+
 Successful check times update in RAM every refresh. Flash stores the actual
 successful completion time only when committing changed content; a cold boot
 shows that persisted time until the next successful check. This avoids writing

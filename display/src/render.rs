@@ -3,7 +3,7 @@ use crate::{
     App, Config, Screen,
     catalog::Catalog,
     clock,
-    model::{Status, leave_in, walking_chance},
+    model::{CacheUpdate, Status, leave_in, walking_chance},
 };
 use core::fmt::Write;
 use embedded_graphics::{
@@ -347,6 +347,49 @@ pub fn draw<D: DrawTarget<Color = Rgb565>>(
     )
 }
 
+// All native layouts share the same decision and finger-sized button regions.
+fn cache_confirmation<D: DrawTarget<Color = Rgb565>>(
+    d: &mut D,
+    profile: crate::profile::Profile<'_>,
+    width: i32,
+) -> Result<(), D::Error> {
+    let (title, top, height, margin) = match width {
+        172 => (72, 230, 48, 8),
+        320 => (18, 116, 44, 12),
+        _ => (40, 156, 36, 28),
+    };
+    let center = width / 2;
+    for (value, y, color) in [
+        ("Save update?", title, CHILLI),
+        ("Cache saved <24h ago.", title + 30, INK),
+        ("More writes wear flash.", title + 46, MUTED),
+        ("Update saved data?", title + 70, INK),
+    ] {
+        label_with_profile(profile, d, value, center, y, color, true)?;
+    }
+    let button_width = center - margin - 4;
+    pill(d, margin, top, button_width as u32, height, GOLD)?;
+    pill(d, center + 4, top, button_width as u32, height, CHILLI)?;
+    label_with_profile(
+        profile,
+        d,
+        "Keep",
+        margin + button_width / 2,
+        top + height as i32 / 2 - 5,
+        INK,
+        true,
+    )?;
+    label_with_profile(
+        profile,
+        d,
+        "Update",
+        center + 4 + button_width / 2,
+        top + height as i32 / 2 - 5,
+        PORCELAIN,
+        true,
+    )
+}
+
 /// The UI task supplies a monotonic phase so connection/NTP activity animates
 /// even before UTC is known. Cached countdowns continue to use synchronized UTC.
 pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
@@ -358,6 +401,9 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
 ) -> Result<(), D::Error> {
     let profile = catalog.profile();
     background(d)?;
+    if app.cache_update == CacheUpdate::Pending {
+        return cache_confirmation(d, profile, 240);
+    }
     let Some(group) = config.groups.get(app.group) else {
         return setup(d);
     };
