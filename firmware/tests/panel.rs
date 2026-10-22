@@ -35,7 +35,7 @@ fn shared_settings_scratch_renders_every_screen_like_a_full_framebuffer() {
     let mut settings = config::decode(&mut scratch).unwrap().0;
     let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
     let mut app = App::default();
-    for (screen, status, minutes) in [
+    for ((screen, status, minutes), pending) in [
         (Screen::Board, Status::Ready, None),
         (Screen::Board, Status::Ready, Some(1)),
         (Screen::Board, Status::Offline, Some(12)),
@@ -47,8 +47,17 @@ fn shared_settings_scratch_renders_every_screen_like_a_full_framebuffer() {
         (Screen::Walk, Status::Ready, None),
         (Screen::Freshness, Status::Ready, None),
         (Screen::Freshness, Status::Failed, None),
-    ] {
+    ]
+    .into_iter()
+    .map(|case| (case, false))
+    .chain([((Screen::Board, Status::Loading, None), true)])
+    {
         app.screen = screen;
+        app.cache_update = if pending {
+            timetable_display::model::CacheUpdate::Pending
+        } else {
+            timetable_display::model::CacheUpdate::None
+        };
         app.status = status;
         settings.groups[0].picks[0].line = if minutes == Some(360) { "N12345" } else { "4" }
             .try_into()

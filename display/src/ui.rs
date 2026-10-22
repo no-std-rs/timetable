@@ -1,11 +1,43 @@
 //! Touch state machine. Editing remains provisional until Save is pressed.
-use crate::{App, Config, Pick, Screen, catalog::Catalog, model::Status};
+use crate::{
+    App, Config, Pick, Screen,
+    catalog::Catalog,
+    model::{CacheUpdate, Status},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     None,
     Refresh,
     Save { refresh: bool },
+}
+
+fn cache_update_tap(
+    app: &mut App,
+    x: u16,
+    y: u16,
+    held: bool,
+    width: u16,
+    buttons: core::ops::Range<u16>,
+) -> bool {
+    if app.cache_update != CacheUpdate::Pending {
+        return false;
+    }
+    let margin = if width == 240 {
+        28
+    } else if width == 172 {
+        8
+    } else {
+        12
+    };
+    if !held && buttons.contains(&y) && (margin..width - margin).contains(&x) {
+        if x < width / 2 - 4 {
+            app.cache_update = CacheUpdate::Declined;
+        } else if x >= width / 2 + 4 {
+            app.cache_update = CacheUpdate::Accepted;
+        }
+    }
+    true
 }
 
 fn draft_route(app: &App, catalog: &Catalog<'_>) -> Option<usize> {
@@ -51,6 +83,9 @@ fn stop_page(app: &App, catalog: &Catalog<'_>) -> usize {
 }
 
 pub fn swipe(app: &mut App, config: &Config, catalog: &Catalog<'_>, dx: i16, dy: i16) {
+    if app.cache_update == CacheUpdate::Pending {
+        return;
+    }
     if app.screen == Screen::Board && dx.unsigned_abs() > 35 {
         let n = config.groups.len();
         if n != 0 {
@@ -82,6 +117,9 @@ pub fn tap(
     y: u16,
     held: bool,
 ) -> Action {
+    if cache_update_tap(app, x, y, held, 240, 156..192) {
+        return Action::None;
+    }
     let Some(group) = config.groups.get_mut(app.group) else {
         return Action::None;
     };
@@ -311,6 +349,9 @@ pub fn tap_portrait(
     if x >= 172 || y >= 320 {
         return Action::None;
     }
+    if cache_update_tap(app, x, y, held, 172, 230..278) {
+        return Action::None;
+    }
     let logical_y = match app.screen {
         Screen::Board => {
             if y < 32 {
@@ -374,6 +415,9 @@ pub fn tap_portrait(
 
 /// Two readable list choices per page; group/pick cards use a 2×2 grid.
 pub fn swipe_landscape(app: &mut App, config: &Config, catalog: &Catalog<'_>, dx: i16, dy: i16) {
+    if app.cache_update == CacheUpdate::Pending {
+        return;
+    }
     if matches!(app.screen, Screen::Routes | Screen::Stops) && dy.unsigned_abs() > 35 {
         let count = if app.screen == Screen::Routes {
             catalog.route_count()
@@ -403,6 +447,9 @@ pub fn tap_landscape(
     held: bool,
 ) -> Action {
     if x >= 320 || y >= 172 {
+        return Action::None;
+    }
+    if cache_update_tap(app, x, y, held, 320, 116..160) {
         return Action::None;
     }
     let previous = app.screen;

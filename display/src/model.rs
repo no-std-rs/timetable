@@ -81,6 +81,16 @@ pub enum Status {
     Capacity,
 }
 
+/// One pending cache-write decision. Approval is consumed by that update only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CacheUpdate {
+    #[default]
+    None,
+    Pending,
+    Accepted,
+    Declined,
+}
+
 pub struct App {
     pub screen: Screen,
     pub group: usize,
@@ -93,6 +103,7 @@ pub struct App {
     pub status: Status,
     pub save_failed: bool,
     pub sleep_failed: bool,
+    pub cache_update: CacheUpdate,
     pub clock: Option<i64>,
     pub loaded_at: Option<i64>,
     pub freshness: crate::freshness::Freshness,
@@ -114,6 +125,7 @@ impl Default for App {
             status: Status::Connecting,
             save_failed: false,
             sleep_failed: false,
+            cache_update: CacheUpdate::None,
             clock: None,
             loaded_at: None,
             freshness: crate::freshness::Freshness::default(),

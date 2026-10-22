@@ -211,6 +211,13 @@ and validation, then writing; unchanged selected data cause no writes. The
 active query and all-period recording share each scan. An unchanged snapshot needs only directory/coverage checks and
 replay, with no flash writes.
 A successful refresh builds six hours of departures in RAM and waits three hours.
+
+Boots show validated flash departures before Wi-Fi, then check for updates in
+the background. If changed content would replace a cache saved less than 24
+hours ago, the screen warns about flash wear and asks **Keep** or **Update**
+before any erase or write. Keeping it, waiting 60 seconds, or cancelling leaves
+the saved data untouched. Approval applies to one update; unchanged checks do
+not prompt. See [persistent cache](../docs/persistent-cache.md).
 Always-on failures retry after 30 seconds (clock) or a minute (other errors);
 battery mode uses five minutes. Between sessions the controller, sockets and
 network runner are dropped, deinitializing the radio while the screen and touch
@@ -246,16 +253,16 @@ time and signature verification. See [the reproducible comparison](../PERFORMANC
 The ZIP dictionary supplies directory scratch while no inflater is active.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The C3 static-plus-minimum-stack regression account is **299,828 B**,
+excluded. The C3 static-plus-minimum-stack regression account is **299,868 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 49,352 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 49,312 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
 available stack, with 4 KiB headroom. The original binary fails this check.
 `STACK.json` records the scoped audit, including the network selection, update,
-mirror and transport callers. Its C3 TLS bound is 40,912 B plus 4,096 B headroom; it is not a complete call-graph proof or
+mirror and transport callers. Its C3 TLS bound is 40,896 B plus 4,096 B headroom; it is not a complete call-graph proof or
 physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
 HTTPS, inflation, CSV parsing and cached refresh were exercised on a physical
 C6 in landscape at 80 MHz; see [measurements](../PERFORMANCE.md#c6-http-wake-isolation).

@@ -70,6 +70,7 @@ pub fn refresh_due(
 
 pub fn can_sleep(app: &App, busy: bool, idle_seconds: u64, touching: bool) -> bool {
     app.screen == timetable_display::Screen::Board
+        && app.cache_update != timetable_display::model::CacheUpdate::Pending
         && app.draft.is_none()
         && !app.save_failed
         && !busy

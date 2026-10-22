@@ -13,7 +13,7 @@ mod tls_memory;
 mod transport;
 mod wake_gate;
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
 use embassy_net::{Runner, Stack, StackResources};
@@ -52,7 +52,12 @@ use esp_radio::wifi::{
 use esp_storage::FlashStorage;
 use log::{info, warn};
 use static_cell::{ConstStaticCell, StaticCell};
-use timetable_display::{App, Config, config, feed::Builder, model::Status, render, ui};
+use timetable_display::{
+    App, Config, config,
+    feed::Builder,
+    model::{CacheUpdate, Status},
+    render, ui,
+};
 use timetable_firmware::{battery, cache, panel, power, settings};
 use transport::{Error, Http};
 
@@ -79,6 +84,7 @@ struct CacheFlash {
     flash: &'static FlashMutex,
     shared: &'static Shared,
     revision: u32,
+    approval: Cell<Option<i64>>,
 }
 impl CacheFlash {
     fn bounds(offset: u32, length: usize) -> Result<(), gtfs::Error> {
@@ -131,6 +137,44 @@ impl cache::Storage for CacheFlash {
     }
     fn checked_at(&self) -> Option<i64> {
         transport::now()
+    }
+    fn approve_update(&self, previous: i64) -> bool {
+        self.approval.take() == Some(previous)
+    }
+}
+
+impl CacheFlash {
+    // The HTTP session has returned before this wait: do not keep TLS buffers
+    // or an idle persistent connection alive while the user makes a choice.
+    async fn confirm_update(&self) -> bool {
+        {
+            let mut state = self.shared.lock().await;
+            if state.revision != self.revision || state.powering_down {
+                return false;
+            }
+            state.app.cache_update = CacheUpdate::Pending;
+        }
+        warn!("Cache: flash was updated less than 24 hours ago; asking before another write");
+        let accepted = with_timeout(Duration::from_secs(60), async {
+            loop {
+                {
+                    let state = self.shared.lock().await;
+                    if state.revision != self.revision || state.powering_down {
+                        return false;
+                    }
+                    match state.app.cache_update {
+                        CacheUpdate::Accepted => return true,
+                        CacheUpdate::Pending => {}
+                        _ => return false,
+                    }
+                }
+                Timer::after_millis(50).await;
+            }
+        })
+        .await
+        .unwrap_or(false);
+        self.shared.lock().await.app.cache_update = CacheUpdate::None;
+        accepted
     }
 }
 
@@ -450,8 +494,22 @@ async fn main(spawner: Spawner) -> ! {
     let mut animation = 0_u8;
     let mut redraw = Instant::now();
     let mut last_activity = redraw;
+    let mut confirming_cache = false;
     loop {
         let now = Instant::now();
+        let pending = shared.lock().await.app.cache_update == CacheUpdate::Pending;
+        if pending != confirming_cache {
+            // A gesture must start and finish on the same screen, including
+            // when a prompt times out or is cancelled while a finger is down.
+            down_at = None;
+            suppress_touch = true;
+        }
+        if pending && !confirming_cache {
+            // Wake a battery-mode screen so the question is visible.
+            visible = true;
+            redraw = now;
+        }
+        confirming_cache = pending;
         #[cfg(not(feature = "board-waveshare-c6"))]
         let sample = {
             let mut data = [0; 5];
@@ -836,7 +894,7 @@ async fn network_service(
         // Cancelling the entire session drops the runner, sockets and controller
         // before RADIO_OFF can acknowledge shutdown. The owned WIFI token is
         // safely reborrowed for the next session; no stolen peripheral handles.
-        let delay = match power::session(
+        let result = power::session(
             network_session(
                 wifi.reborrow(),
                 resources,
@@ -848,8 +906,10 @@ async fn network_service(
             ),
             POWER_DOWN.wait(),
         )
-        .await
-        {
+        .await;
+        // Also clear a prompt when shutdown cancels its future mid-decision.
+        shared.lock().await.app.cache_update = CacheUpdate::None;
+        let delay = match result {
             Either::Second(delay) => delay,
             Either::First(()) => break,
         };
@@ -939,6 +999,7 @@ async fn restore_saved_board(
         flash: cache.flash,
         shared,
         revision,
+        approval: Cell::new(None),
     };
     if let Ok(Some(bank)) = cache::load(&storage).await {
         let reference = transport::now().unwrap_or(bank.checked_at());
@@ -1116,6 +1177,7 @@ async fn update_once(
         flash: cache.flash,
         shared,
         revision,
+        approval: Cell::new(None),
     };
     if cache.enabled
         && let Ok(Some(bank)) = cache::load(&storage).await
@@ -1149,23 +1211,43 @@ async fn update_once(
         flash: &storage,
         enabled: cache.enabled,
     };
-    let result = select(
-        timetable_firmware::download::refresh(
-            &cached,
-            builder,
-            workspace,
-            query_config,
-            transport::now().unwrap(),
-        ),
-        REFRESH.wait(),
-    )
-    .await;
-    log_heap();
-    let result = match result {
-        Either::First(r) => r,
-        Either::Second(()) => return 0,
+    let mut confirmed = false;
+    let result = loop {
+        let result = select(
+            timetable_firmware::download::refresh(
+                &cached,
+                builder,
+                workspace,
+                query_config,
+                transport::now().unwrap(),
+            ),
+            REFRESH.wait(),
+        )
+        .await;
+        let result = match result {
+            Either::First(r) => r,
+            Either::Second(()) => return 0,
+        };
+        let Err(Error::CacheUpdateRequired(previous)) = result else {
+            break result;
+        };
+        if confirmed {
+            break Err(Error::CacheUpdateDeclined);
+        }
+        let decision = select(storage.confirm_update(), REFRESH.wait()).await;
+        shared.lock().await.app.cache_update = CacheUpdate::None;
+        match decision {
+            Either::First(true) => {
+                storage.approval.set(Some(previous));
+                confirmed = true;
+            }
+            Either::First(false) => break Err(Error::CacheUpdateDeclined),
+            Either::Second(()) => return 0,
+        }
     };
+    log_heap();
     let successful = result.is_ok();
+    let kept_cache = matches!(result, Err(Error::CacheUpdateDeclined));
     {
         let mut s = shared.lock().await;
         if s.revision != revision {
@@ -1179,6 +1261,14 @@ async fn update_once(
                 publish_departures(&mut s.app, builder);
                 s.app.freshness = freshness;
             }
+            Err(Error::CacheUpdateDeclined) => {
+                info!("Cache: keeping saved data; no flash writes; retry at next scheduled check");
+                s.app.status = if s.app.loaded_at.is_some() {
+                    Status::Ready
+                } else {
+                    Status::Failed
+                };
+            }
             Err(Error::Feed(gtfs::Error::IndexFull | gtfs::Error::IdTooLong)) => {
                 s.app.status = Status::Capacity
             }
@@ -1188,7 +1278,7 @@ async fn update_once(
             }
         }
     }
-    if successful {
+    if successful || kept_cache {
         battery::REFRESH_SECONDS as u32
     } else {
         60
