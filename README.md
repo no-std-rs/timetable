@@ -67,6 +67,14 @@ TLS, stack, tile and retained-app reserves. The benchmark checks that parsing
 allocates no heap memory. Normal tests
 use synthetic fixtures and need no live transit feeds.
 
+CI runs once per pull request and again on `main`. The device workflow runs
+Android, firmware and installer/browser checks concurrently, then assembles their
+checked artifacts in the existing `C3 firmware and installer` gate. Rust caches
+are separate per job and include each standalone Cargo workspace; main caches
+also seed pull requests. Superseded PR runs are cancelled, while main device
+builds and publishing stay ordered. Browser tests use four independent workers
+on CI and one locally.
+
 For the device and installer checks, see [firmware](firmware/README.md) and
 [web](web/README.md). Preview the actual Rust renderer without hardware:
 

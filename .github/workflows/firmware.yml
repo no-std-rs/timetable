@@ -8,7 +8,7 @@ permissions:
   contents: read
 concurrency:
   group: device-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   android:
     name: Android APK without SDK or NDK
@@ -23,6 +23,13 @@ jobs:
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt
           rustup default 1.95.0
           rustup target add armv7-linux-androideabi aarch64-linux-android
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        with:
+          workspaces: |
+            . -> target
+            android/provisioner -> target
+          cache-bin: 'false'
+          cache-workspace-crates: 'true'
       - name: Cache checksum-pinned Android tools
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -42,9 +49,8 @@ jobs:
           path: android/dist/
           if-no-files-found: error
           retention-days: 14
-  build:
-    name: C3 firmware and installer
-    needs: android
+  firmware:
+    name: Firmware for all boards
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -54,14 +60,27 @@ jobs:
       - name: Install the pinned firmware toolchain
         working-directory: firmware
         run: rustup show
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        with:
+          workspaces: |
+            firmware -> target
+            checks/device-cpu -> target
+          cache-bin: 'false'
+          cache-workspace-crates: 'true'
       - name: Cache the pinned image builder
         id: image-builder
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cargo/bin/espflash
           key: espflash-linux-4.4.0
-      - if: steps.image-builder.outputs.cache-hit != 'true'
-        run: cargo install espflash --version 4.4.0 --locked
+      - name: Download the checksum-pinned image builder
+        if: steps.image-builder.outputs.cache-hit != 'true'
+        run: |
+          curl --fail --location --silent --show-error --retry 3 https://github.com/esp-rs/espflash/releases/download/v4.4.0/espflash-x86_64-unknown-linux-gnu.zip -o "$RUNNER_TEMP/espflash.zip"
+          printf '%s  %s\n' ac2031bd1f04c9107d9ba0e977535daa885a9f533f937dc369debd77f83665cd "$RUNNER_TEMP/espflash.zip" | sha256sum --check
+          unzip -p "$RUNNER_TEMP/espflash.zip" espflash > "$HOME/.cargo/bin/espflash"
+          chmod +x "$HOME/.cargo/bin/espflash"
+          test "$(espflash --version)" = 'espflash 4.4.0'
       - name: Check the firmware
         working-directory: firmware
         run: |
@@ -95,33 +114,101 @@ jobs:
           (cd dist/firmware && sha256sum --check SHA256SUMS)
           (cd dist/firmware/devices/waveshare-c6 && sha256sum --check SHA256SUMS)
           (cd dist/firmware/devices/waveshare-c6-landscape && sha256sum --check SHA256SUMS)
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: timetable-firmware
+          path: dist/firmware/
+          if-no-files-found: error
+          retention-days: 1
+  web:
+    name: Installer build and browser tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install the pinned WebAssembly target
-        run: rustup target add wasm32-unknown-unknown --toolchain 1.95.0
+        run: rustup toolchain install 1.95.0 --profile minimal --target wasm32-unknown-unknown --no-self-update
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        with:
+          workspaces: |
+            . -> target
+            android/provisioner -> target
+          cache-bin: 'false'
+          cache-workspace-crates: 'true'
       - name: Cache the pinned WebAssembly bindings generator
         id: wasm-bindgen
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cargo/bin/wasm-bindgen
           key: wasm-bindgen-linux-0.2.129
-      - if: steps.wasm-bindgen.outputs.cache-hit != 'true'
-        run: cargo +1.95.0 install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Download the checksum-pinned WebAssembly bindings generator
+        if: steps.wasm-bindgen.outputs.cache-hit != 'true'
+        run: |
+          curl --fail --location --silent --show-error --retry 3 https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz -o "$RUNNER_TEMP/wasm-bindgen.tar.gz"
+          printf '%s  %s\n' 82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e "$RUNNER_TEMP/wasm-bindgen.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/wasm-bindgen.tar.gz" -C "$RUNNER_TEMP" --strip-components=1 wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen
+          install "$RUNNER_TEMP/wasm-bindgen" "$HOME/.cargo/bin/wasm-bindgen"
+          test "$(wasm-bindgen --version)" = 'wasm-bindgen 0.2.129'
+      - name: Install the web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Build the installer and WebAssembly modules
+        working-directory: web
+        run: npm run build
+      - name: Test the installer units
+        working-directory: web
+        run: npm test
+      - name: Install Chromium and its system dependencies
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Test desktop and mobile browsers
+        working-directory: web
+        run: npm run test:browser
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: timetable-web
+          path: web/dist/
+          if-no-files-found: error
+          retention-days: 1
+  # Preserve the existing required check, and fail it if any prerequisite fails.
+  build:
+    name: C3 firmware and installer
+    needs: [android, firmware, web]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all builds and tests to pass
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['JOB_RESULTS'])
+          assert all(job['result'] == 'success' for job in results.values()), results
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: timetable-android
           path: android/dist
-      - name: Build and test the installer
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
-          npm test
-          npx playwright install --with-deps chromium
-          npm run test:browser
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: timetable-firmware
+          path: dist/firmware
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: timetable-web
+          path: web/dist
       - name: Assemble the static installer
         run: python3 tools/assemble-installer.py dist/firmware dist/installer
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
