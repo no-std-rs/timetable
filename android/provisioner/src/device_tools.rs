@@ -15,6 +15,20 @@ pub struct App {
     pub blocked: bool,
     pub reason: String,
 }
+/// Keep explicit shell commands isolated so `exit` cannot suppress the ADB status.
+/// Root uses the tablet's existing `su`; it does not change adbd or install root.
+pub fn shell_command(command: &str, root: bool) -> Result<String, &'static str> {
+    if command.trim().is_empty() || command.len() > 4096 || command.contains('\0') {
+        return Err("Enter a command of at most 4096 bytes without NUL characters");
+    }
+    let command = format!("(\n{command}\n)");
+    Ok(if root {
+        format!("su -c {}", super::protocol::shell_quote(&command))
+    } else {
+        command
+    })
+}
+
 pub fn package_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 255
@@ -76,6 +90,17 @@ pub fn wifi(ssid: &str, password: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_shell_keeps_exit_and_root_arguments_inside_the_command() {
+        assert_eq!(shell_command("exit 7", false).unwrap(), "(\nexit 7\n)");
+        assert_eq!(
+            shell_command("printf '%s' done", true).unwrap(),
+            "su -c '(\nprintf '\"'\"'%s'\"'\"' done\n)'"
+        );
+        assert!(shell_command(" \n", false).is_err());
+        assert!(shell_command("id\0; reboot", false).is_err());
+        assert!(shell_command(&"x".repeat(4097), true).is_err());
+    }
     #[test]
     fn protected_packages_and_shell_arguments_are_checked() {
         let mut app = App {

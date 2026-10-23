@@ -27,7 +27,7 @@ export function supportsTablet(caps) { return Number.isInteger(caps?.sdk) && cap
 export class AndroidInstaller {
   constructor(panel, source) {
     this.panel = panel; this.source = source; this.busy = false; this.client = null; this.raw = null; this.cancelled = false; this.stopping = false; this.closing = null;
-    this.identity = new HostIdentity(); this.appSelection = new Set(); this.appReport = null; this.diagnostics = null;
+    this.identity = new HostIdentity(); this.appSelection = new Set(); this.appReport = null; this.diagnostics = null; this.ownerReport = null; this.dangerous = false;
     this.keyStatus = "The ADB host key is saved only in this browser and is never uploaded.";
     this.$ = id => panel.querySelector(`#android-${id}`);
     this.message("Open this section to prepare Android setup.");
@@ -35,6 +35,17 @@ export class AndroidInstaller {
     this.$("connect").addEventListener("click", () => void this.connect());
     this.$("disconnect").addEventListener("click", () => void this.stop());
     this.$("forget-key").addEventListener("click", () => this.forgetKey());
+    this.$("dangerous").checked = false;
+    this.$("dangerous").addEventListener("change", () => {
+      this.dangerous = this.$("dangerous").checked;
+      if (!this.dangerous) this.$("root").checked = false;
+      this.controls();
+    });
+    this.$("policy").addEventListener("click", () => void this.readOwnership());
+    this.$("existing-owner").addEventListener("change", () => this.controls());
+    this.$("take-owner").addEventListener("click", () => void this.takeOwnership());
+    this.$("run-command").addEventListener("click", () => void this.runCommand());
+    this.$("command").addEventListener("input", () => this.controls());
     this.$("battery").addEventListener("click", () => void this.readBattery());
     this.$("save-report").addEventListener("click", () => this.saveReport());
     this.$("apps").addEventListener("click", () => void this.readApps());
@@ -57,19 +68,32 @@ export class AndroidInstaller {
     this.$("disconnect").disabled = !this.raw || closing;
     this.$("forget-key").disabled = this.busy || closing || !!this.client;
     for (const id of ["battery", "apps"]) this.$(id).disabled = this.busy || closing || !this.client;
+    this.$("policy").disabled = this.busy || closing || !this.client;
+    const commandsLocked = !this.dangerous || this.busy || closing || !this.client;
+    this.$("danger-controls").hidden = !this.dangerous;
+    this.$("existing-owner").disabled = commandsLocked || !this.ownerReport;
+    const selectedOwner = this.ownerReport?.owners.find(owner => owner.user === 0 && owner.component === this.$("existing-owner").value);
+    const needsRemoval = selectedOwner && !(selectedOwner.kind === "device" && selectedOwner.component.startsWith("org.nostdrs.timetable/"));
+    this.removalUnsupported = !!needsRemoval && !this.ownerReport.can_remove_owner;
+    this.$("owner-support").textContent = this.removalUnsupported ? t("Replacing an existing owner requires Android 7.0 or newer. Owner inspection and the command console remain available.") : "";
+    this.$("take-owner").disabled = commandsLocked || !this.ownerReport || this.removalUnsupported;
+    this.$("command").disabled = commandsLocked;
+    this.$("run-command").disabled = commandsLocked || !this.$("command").value.trim();
     this.$("save-report").disabled = !this.diagnostics;
     this.$("disable-apps").disabled = this.busy || closing || !this.client || !this.appReport?.apps.some(a => this.appSelection.has(a.package) && a.enabled && !a.blocked);
     this.$("enable-apps").disabled = this.busy || closing || !this.client || !this.appReport?.apps.some(a => this.appSelection.has(a.package) && !a.enabled);
     this.$("charge-apply").disabled = this.busy || closing || !this.client || !this.diagnostics?.limits?.some(a => a.writable);
     this.$("charge-node").disabled = this.busy || closing || !this.client;
     for (const input of this.panel.querySelectorAll("input")) input.disabled = this.busy || closing || input.dataset.protected === "true";
+    this.$("dangerous").disabled = this.busy || closing || !this.client;
+    this.$("root").disabled = commandsLocked;
   }
   async load() {
     if (this.module || this.loading) return;
     if (!navigator.usb || !window.isSecureContext) { this.message("Android USB setup needs desktop Chrome or Edge over HTTPS or localhost."); return; }
     this.loading = true; this.message("Preparing Android USB setup…");
     try {
-      const module = await import("./android-adb/timetable_web_adb.js?v=2"); await module.default({ module_or_path: new URL("./android-adb/timetable_web_adb_bg.wasm?v=2", import.meta.url) });
+      const module = await import("./android-adb/timetable_web_adb.js?v=4"); await module.default({ module_or_path: new URL("./android-adb/timetable_web_adb_bg.wasm?v=4", import.meta.url) });
       const response = await fetch("./android/latest.json"); if (!response.ok) throw new Error("Android build is unavailable.");
       this.release = checkAndroidRelease(await response.json()); this.module = module;
       this.$("download").href = `./android/${this.release.file}`; this.$("download").hidden = false;
@@ -80,6 +104,8 @@ export class AndroidInstaller {
   }
   async connect() {
     if (!this.module || this.busy || this.client || this.stopping || this.closing) return;
+    // Browser-restored form values must not opt a new USB connection into commands.
+    this.dangerous = false; this.$("dangerous").checked = false; this.$("root").checked = false;
     // Call the picker before the first await to retain the click's activation.
     let selection; try { selection = this.module.request(); } catch(e) { this.message(String(e.message ?? e), {}, true); return; }
     this.busy = true; this.cancelled = false; this.controls(); this.message("Approve USB debugging on the tablet…");
@@ -127,7 +153,12 @@ export class AndroidInstaller {
       }
       if (this.cancelled) return;
       this.$("wifi-status").textContent = wifi ? t("Wi-Fi settings sent. Check the connection on the tablet; saving a network does not confirm internet access.") : "";
-      this.message(result.home === "choose_on_tablet" ? "Installed and configured. Choose Timetable as Home on the tablet if its firmware allows it." : "Installed and configured. The timetable is ready on your tablet.");
+      if (result.owner_error) {
+        this.$("adb").open = true;
+        this.$("command-output").hidden = false;
+        this.$("command-output").textContent = `${result.owner_error}\n\n${result.owner_report ?? ""}`;
+        this.message("App installed and configured. Device ownership is blocked: {reason}. Inspect the current owner in Advanced ADB controls.", { reason: result.owner_error }, true);
+      } else this.message(result.home === "choose_on_tablet" ? "Installed and configured. Choose Timetable as Home on the tablet if its firmware allows it." : "Installed and configured. The timetable is ready on your tablet.");
     } catch(e) { if (!this.cancelled) this.message("Setup stopped: {reason}", { reason: String(e.message ?? e) }, true); }
     finally { this.download = null; this.busy = false; if (this.cancelled) await this.close(); this.controls(); }
   }
@@ -138,6 +169,62 @@ export class AndroidInstaller {
     try { await work(); }
     catch (e) { if (!this.cancelled) this.message("Device action failed: {reason}", { reason: String(e.message ?? e) }, true); }
     finally { this.busy = false; if (this.cancelled) await this.close(); this.controls(); }
+  }
+  async readOwnership() {
+    await this.deviceTask(async () => {
+      this.ownerReport = null;
+      const report = await this.client.ownership_report();
+      if (this.cancelled) return;
+      this.ownerReport = JSON.parse(report);
+      this.$("command-output").hidden = false;
+      this.$("command-output").textContent = this.ownerReport.report;
+      const owners = this.ownerReport.owners.filter(owner => owner.user === 0);
+      this.$("existing-owner").replaceChildren(...(owners.length ? owners : [{component:"",kind:t("No owner on main user")}]).map(owner => {
+        const option = document.createElement("option"); option.value = owner.component;
+        option.textContent = owner.component ? `${owner.kind} · ${owner.component} · user 0` : owner.kind;
+        return option;
+      }));
+      this.message("Device ownership report ready.");
+    });
+  }
+  async takeOwnership() {
+    if (!this.dangerous || !this.ownerReport || this.removalUnsupported) return;
+    const previous = this.$("existing-owner").value, root = this.$("root").checked;
+    await this.deviceTask(async () => {
+      // Clear the snapshot even on refusal; a partial takeover may have removed the old owner.
+      this.ownerReport = null;
+      this.$("command-output").hidden = false;
+      this.$("command-output").textContent = "";
+      try {
+        const output = await this.client.take_ownership(previous, root);
+        if (this.cancelled) return;
+        this.$("command-output").textContent = output;
+        this.message("Timetable is now the device owner.");
+      } catch (e) {
+        if (!this.cancelled) this.$("command-output").textContent = String(e.message ?? e);
+        throw e;
+      }
+    });
+  }
+  async runCommand() {
+    if (!this.dangerous) return;
+    const command = this.$("command").value, root = this.$("root").checked;
+    if (!command.trim() || command.length > 4096 || command.includes("\0")) return;
+    await this.deviceTask(async () => {
+      this.ownerReport = null;
+      this.$("command-output").hidden = false;
+      this.$("command-output").textContent = "";
+      this.message("Running ADB command…");
+      try {
+        const output = await this.client.shell(command, root);
+        if (this.cancelled) return;
+        this.$("command-output").textContent = output;
+        this.message("ADB command completed.");
+      } catch (e) {
+        if (!this.cancelled) this.$("command-output").textContent = String(e.message ?? e);
+        throw e;
+      }
+    });
   }
   async readBattery() {
     await this.deviceTask(async () => {
@@ -221,6 +308,9 @@ export class AndroidInstaller {
     if (this.closing) return this.closing;
     const client = this.client;
     this.client = null; this.raw = null; this.caps = null; this.appReport = null; this.appSelection.clear(); this.diagnostics = null;
+    this.dangerous = false; this.$("dangerous").checked = false;
+    this.ownerReport = null; this.$("existing-owner").replaceChildren();
+    this.$("command-output").hidden = true; this.$("command-output").textContent = ""; this.$("root").checked = false;
     this.$("battery-output").hidden = true; this.$("battery-output").textContent = ""; this.$("charge-controls").hidden = true; this.$("charge-status").textContent = ""; this.renderApps();
     // Cancellation and the operation's finally block share one cleanup. Keep
     // the WASM client alive until its asynchronous disconnect releases its borrow.

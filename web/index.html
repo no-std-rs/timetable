@@ -159,6 +159,24 @@
       <p id="android-wifi-status" class="fine-print" role="status"></p>
       <p id="android-key-status" class="fine-print">The ADB host key is saved only in this browser and is never uploaded.</p>
       <button type="button" id="android-forget-key" class="text-button">Forget ADB key</button>
+      <details id="android-adb" class="download-details">
+        <summary>Advanced ADB controls</summary>
+        <p>Run commands directly on the connected tablet. Root uses an existing su installation and may ask for approval on the tablet.</p>
+        <button type="button" id="android-policy" class="text-button" disabled>Inspect device and profile owners</button>
+        <label><input id="android-dangerous" type="checkbox" autocomplete="off"> Enable dangerous ADB commands</label>
+        <p class="fine-print">Commands can change security settings or erase tablet data. Review every command, including AI-generated commands, before running it.</p>
+        <div id="android-danger-controls" hidden>
+        <label>Existing owner<select id="android-existing-owner" disabled><option value="">Inspect ownership first</option></select></label>
+        <p id="android-owner-support" class="fine-print" role="status"></p>
+        <button type="button" id="android-take-owner" class="text-button" disabled>Replace selected owner with Timetable</button>
+        <p class="fine-print">Replacement removes the selected administrator before assigning Timetable. Android can refuse removal of a production administrator. Accounts, profiles and device data are kept.</p>
+        <label for="android-command">ADB shell command</label>
+        <textarea id="android-command" rows="3" maxlength="4096" spellcheck="false" placeholder="dumpsys device_policy"></textarea>
+        <label><input id="android-root" type="checkbox"> Run as root using su</label>
+        <button type="button" id="android-run-command" class="text-button" disabled>Run command</button>
+        </div>
+        <pre id="android-command-output" class="log-output" tabindex="0" hidden></pre>
+      </details>
       <details id="android-tools" class="download-details">
         <summary>Battery and background apps</summary>
         <p>Diagnostics stay on this page. Charging controls appear only when Android exposes a real writable battery threshold.</p>
