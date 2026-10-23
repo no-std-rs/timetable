@@ -44,10 +44,107 @@ impl Error {
 pub trait Operation {
     async fn read<R: Read>(&mut self, body: R) -> Result<(), Error>;
 }
+/// A bounded server validator, retained with the validated archive identity.
+#[derive(Clone, Copy)]
+pub struct Validator {
+    bytes: [u8; 64],
+    len: u8,
+    kind: u8,
+}
+impl Default for Validator {
+    fn default() -> Self {
+        Self {
+            bytes: [0; 64],
+            len: 0,
+            kind: 0,
+        }
+    }
+}
+impl Validator {
+    pub const BYTES: usize = 66;
+    pub fn new(name: &str, value: &[u8]) -> Self {
+        let kind = if name.eq_ignore_ascii_case("etag") {
+            1
+        } else if name.eq_ignore_ascii_case("last-modified") {
+            2
+        } else {
+            0
+        };
+        let quoted = value.strip_prefix(b"W/").unwrap_or(value);
+        if kind == 0
+            || value.is_empty()
+            || value.len() > 64
+            || !value.iter().all(|b| (32..=126).contains(b))
+            || kind == 1
+                && (quoted.len() < 2
+                    || quoted.first() != Some(&b'"')
+                    || quoted.last() != Some(&b'"')
+                    || quoted[1..quoted.len() - 1].contains(&b'"'))
+        {
+            return Self::default();
+        }
+        let mut result = Self::default();
+        result.bytes[..value.len()].copy_from_slice(value);
+        result.len = value.len() as u8;
+        result.kind = kind;
+        result
+    }
+    pub fn header(&self) -> Option<(&str, &str)> {
+        (self.len != 0).then(|| {
+            (
+                if self.kind == 1 {
+                    "If-None-Match"
+                } else {
+                    "If-Modified-Since"
+                },
+                core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap(),
+            )
+        })
+    }
+    /// Byte-range identity requires a strong ETag. Weak ETags and dates may
+    /// support whole-representation revalidation, but do not pin ZIP offsets.
+    pub fn for_ranges(self) -> Self {
+        if self.kind == 1 && !self.bytes[..self.len as usize].starts_with(b"W/") {
+            self
+        } else {
+            Self::default()
+        }
+    }
+    pub fn verify(&self, actual: &Self) -> Result<(), Error> {
+        let Some(expected) = self.header() else {
+            return Ok(());
+        };
+        if self.for_ranges().header().is_some() && actual.for_ranges().header() == Some(expected) {
+            Ok(())
+        } else {
+            Err(Error::Http)
+        }
+    }
+    pub fn encode(&self, out: &mut [u8]) {
+        out[0] = self.len;
+        out[1] = self.kind;
+        out[2..Self::BYTES].copy_from_slice(&self.bytes);
+    }
+    pub fn decode(bytes: &[u8]) -> Self {
+        let len = bytes[0] as usize;
+        if len > 64 {
+            return Self::default();
+        }
+        Self::new(
+            match bytes[1] {
+                1 => "etag",
+                2 => "last-modified",
+                _ => "",
+            },
+            &bytes[2..2 + len],
+        )
+    }
+}
 #[derive(Default)]
 pub struct Metadata {
     pub length: Option<u64>,
     pub modified: Option<i64>,
+    pub validator: Validator,
 }
 #[allow(async_fn_in_trait)]
 pub trait Http {
@@ -62,6 +159,10 @@ pub trait Http {
         range: Option<(ByteRange, Option<u64>)>,
         operation: &mut impl Operation,
     ) -> Result<Metadata, Error>;
+    /// True only for a solicited 304 against this exact validated object.
+    async fn unchanged(&self, _url: &str, _validator: &Validator) -> Result<bool, Error> {
+        Ok(false)
+    }
     /// Transports can scope one authenticated connection around all file ranges.
     /// The default keeps simple stateless transports and offline fixtures usable.
     async fn mirror_tables(
@@ -206,14 +307,16 @@ struct Range<'a, H> {
     http: &'a H,
     url: &'a str,
     length: u64,
+    validator: &'a Validator,
 }
 impl<H: Http> RangeFetch for Range<'_, H> {
     async fn fetch(&mut self, range: ByteRange, out: &mut [u8]) -> Result<(), gtfs::Error> {
-        self.http
+        let meta = self
+            .http
             .fetch(self.url, Some((range, Some(self.length))), &mut Fill(out))
             .await
             .map_err(Error::feed)?;
-        Ok(())
+        self.validator.verify(&meta.validator).map_err(Error::feed)
     }
 }
 struct Payload<'a, V, F> {
@@ -292,6 +395,7 @@ pub struct Mirror<'a, H> {
     snapshot: MirrorSnapshot,
     length: u64,
     directory: zip::Directory,
+    validator: Validator,
 }
 impl<'a, H: Http> Mirror<'a, H> {
     pub async fn open(
@@ -301,35 +405,48 @@ impl<'a, H: Http> Mirror<'a, H> {
     ) -> Result<Self, Error> {
         let mut url = [0; URL_BYTES];
         let url = snapshot.url(&mut url);
-        let meta = http
-            .fetch(
-                url,
-                Some((ByteRange::new(0, 0)?, None)),
-                &mut Fill(&mut [0]),
-            )
-            .await?;
-        let length = meta.length.ok_or(Error::Http)?;
-        let fetcher = Range { http, url, length };
+        let (length, validator) = {
+            let meta = http
+                .fetch(
+                    url,
+                    Some((ByteRange::new(0, 0)?, None)),
+                    &mut Fill(&mut [0]),
+                )
+                .await?;
+            (meta.length.ok_or(Error::Http)?, meta.validator.for_ranges())
+        };
+        let fetcher = Range {
+            http,
+            url,
+            length,
+            validator: &validator,
+        };
         let (cache, scratch) = workspace.scratch()[..3072].split_at_mut(2048);
         let mut reader = RangeReader::new(fetcher, length, cache)?;
         let directory = zip::Directory::read(&mut reader, scratch).await?;
         if let Some(range) = directory.frequencies_range() {
-            http.fetch(
-                url,
-                Some((range, Some(length))),
-                &mut Frequencies {
-                    directory: &directory,
-                    workspace,
-                },
-            )
-            .await?;
+            let meta = http
+                .fetch(
+                    url,
+                    Some((range, Some(length))),
+                    &mut Frequencies {
+                        directory: &directory,
+                        workspace,
+                    },
+                )
+                .await?;
+            validator.verify(&meta.validator)?;
         }
         Ok(Self {
             http,
             snapshot,
             length,
             directory,
+            validator,
         })
+    }
+    pub fn validator(&self) -> Validator {
+        self.validator
     }
     async fn table(
         &mut self,
@@ -352,7 +469,8 @@ impl<'a, H: Http> Mirror<'a, H> {
             .ok_or(gtfs::Error::MissingTable(table))?;
         self.http.stage(table.filename());
         let mut url = [0; URL_BYTES];
-        self.http
+        let meta = self
+            .http
             .fetch(
                 self.snapshot.url(&mut url),
                 Some((member.record_range(), Some(self.length))),
@@ -364,7 +482,7 @@ impl<'a, H: Http> Mirror<'a, H> {
                 },
             )
             .await?;
-        Ok(())
+        self.validator.verify(&meta.validator)
     }
     pub async fn coverage(
         &mut self,

@@ -60,6 +60,7 @@ impl Http for World {
         Ok(Metadata {
             length: Some(bytes.len() as u64),
             modified: None,
+            ..Metadata::default()
         })
     }
 }

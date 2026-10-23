@@ -113,6 +113,7 @@ impl Http for Client {
         Ok(Metadata {
             length: Some(data.len() as u64),
             modified: Some(NOW),
+            ..Metadata::default()
         })
     }
 }
@@ -407,6 +408,7 @@ fn mirror_decoded_work_yields_even_with_an_always_ready_http_source() {
             Ok(Metadata {
                 length: Some(ZIP.len() as u64),
                 modified: None,
+                ..Metadata::default()
             })
         }
     }

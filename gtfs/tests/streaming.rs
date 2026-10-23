@@ -1335,6 +1335,18 @@ fn worldwide_snapshot_links_roundtrip_and_stream_across_every_byte() {
     let url =
         format!("https://files.mobilitydatabase.org/{id}/{id}-202610170128/{id}-202610170128.zip");
     let snapshot: Snapshot = url.parse().unwrap();
+    assert_eq!(
+        Snapshot::from_parts(snapshot.feed_id(), snapshot.timestamp()).unwrap(),
+        snapshot
+    );
+    for (id, stamp) in [
+        ("bad/id", "202610170128"),
+        ("valid", "202613010000"),
+        ("valid", "202610172400"),
+        ("valid", "20261017016x"),
+    ] {
+        assert!(Snapshot::from_parts(id, stamp).is_err());
+    }
     assert_eq!(snapshot.feed_id(), id);
     assert_eq!(snapshot.url(&mut [0; URL_BYTES]), url);
     for chunk in 1..=40 {

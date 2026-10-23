@@ -93,18 +93,40 @@ pub async fn send_get_connection<S: Write>(
     range: Option<&str>,
     persistent: bool,
 ) -> Result<(), reqwless::Error> {
-    let headers = [
+    send_get_conditional(stream, path, host, range, persistent, None).await
+}
+
+pub async fn send_get_conditional<S: Write>(
+    stream: &mut S,
+    path: &str,
+    host: &str,
+    range: Option<&str>,
+    persistent: bool,
+    validator: Option<&timetable_firmware::download::Validator>,
+) -> Result<(), reqwless::Error> {
+    let conditional = validator.and_then(|v| v.header());
+    let mut headers = [
         ("Accept-Encoding", "identity"),
         (
             "Connection",
             if persistent { "keep-alive" } else { "close" },
         ),
         ("User-Agent", "timetable/0.1"),
-        ("Range", range.unwrap_or("")),
+        ("Range", ""),
+        ("If-None-Match", ""),
     ];
+    let mut count = 3;
+    if let Some(range) = range {
+        headers[count] = ("Range", range);
+        count += 1;
+    }
+    if let Some(header) = conditional {
+        headers[count] = header;
+        count += 1;
+    }
     Request::get(path)
         .host(host)
-        .headers(&headers[..if range.is_some() { 4 } else { 3 }])
+        .headers(&headers[..count])
         .build()
         .write_header(stream)
         .await?;
@@ -126,7 +148,14 @@ pub fn validate<'a>(
     let mut content_range = None;
     let mut length = None;
     let mut encoding = false;
+    let mut etag = None;
+    let mut modified = None;
     for (name, value) in headers {
+        if name.eq_ignore_ascii_case("etag") && etag.replace(value).is_some()
+            || name.eq_ignore_ascii_case("last-modified") && modified.replace(value).is_some()
+        {
+            return Err(Error::Http);
+        }
         if name.eq_ignore_ascii_case("content-encoding") {
             if encoding || value != b"identity" {
                 return Err(Error::Http);
@@ -149,6 +178,14 @@ pub fn validate<'a>(
             }
         }
     }
+    let mut validator = etag
+        .map(|v| timetable_firmware::download::Validator::new("etag", v))
+        .unwrap_or_default();
+    if validator.header().is_none() {
+        validator = modified
+            .map(|v| timetable_firmware::download::Validator::new("last-modified", v))
+            .unwrap_or_default();
+    }
     if let Some((range, expected)) = range {
         let total = range.validate_content_range(content_range.ok_or(Error::Http)?)?;
         if expected.is_some_and(|n| n != total) || length.is_some_and(|n| n != range.len()) {
@@ -157,6 +194,7 @@ pub fn validate<'a>(
         Ok(Metadata {
             length: Some(total),
             modified: None,
+            validator,
         })
     } else {
         if content_range.is_some() {
@@ -165,6 +203,7 @@ pub fn validate<'a>(
         Ok(Metadata {
             length,
             modified: None,
+            validator,
         })
     }
 }

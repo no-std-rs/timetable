@@ -99,6 +99,16 @@ impl CacheFlash {
     }
 }
 impl cache::Storage for CacheFlash {
+    fn metadata(&self) -> Result<impl AsMut<[cache::Metadata]>, gtfs::Error> {
+        // Bounded metadata inside the existing 64 KiB heap, after verifier
+        // allocations have been freed. Allocation failure uses normal streaming.
+        let mut metadata = alloc::vec::Vec::new();
+        metadata
+            .try_reserve_exact(1)
+            .map_err(|_| gtfs::Error::BufferTooSmall)?;
+        metadata.push(cache::Metadata::default());
+        Ok(metadata)
+    }
     fn identity(&self) -> &[u8] {
         catalog_slot::profile().identity()
     }

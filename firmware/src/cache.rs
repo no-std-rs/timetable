@@ -19,7 +19,9 @@ pub const SIZE: u32 = 0xf0000;
 pub const BANK_SIZE: u32 = SIZE / 2;
 pub const FILTER_BYTES: usize = 16 * 1024;
 const SECTOR: u32 = 4096;
-const HEADER: usize = 528;
+const SOURCE_BYTES: usize = 352;
+const HEADER: usize = 48 + SOURCES * SOURCE_BYTES;
+const LEGACY_HEADER: usize = 528;
 const SOURCES: usize = 3;
 const COMMIT: u32 = 0x434f4d54;
 const EMPTY: i64 = i64::MIN;
@@ -35,6 +37,12 @@ pub trait Storage {
     fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), Error>;
     fn write(&self, offset: u32, bytes: &[u8]) -> Result<(), Error>;
     fn erase(&self, start: u32, end: u32) -> Result<(), Error>;
+    /// Bounded source metadata, acquired only for comparing/writing a bank.
+    /// Device adapters may place it in their existing reserved heap after TLS
+    /// verification; the cache library itself never allocates.
+    fn metadata(&self) -> Result<impl AsMut<[Metadata]>, Error> {
+        Ok([Metadata::default()])
+    }
     /// Temporary caller-owned filter. The device acquires this inside its
     /// verified session, after certificate-verification allocations are freed.
     /// Returning an error disables cache writes and uses the ordinary query.
@@ -71,6 +79,21 @@ struct Source {
     updated: i64,
     original: [[u32; 2]; Table::COUNT],
     tables: [Block; Table::COUNT],
+    snapshot: Option<gtfs::mobility::Snapshot>,
+    validator: crate::download::Validator,
+}
+/// Caller-owned scratch for three source identities and one 256-byte write buffer.
+pub struct Metadata {
+    sources: [Source; SOURCES],
+    buffer: [u8; 256],
+}
+impl Default for Metadata {
+    fn default() -> Self {
+        Self {
+            sources: [Source::default(); SOURCES],
+            buffer: [0; 256],
+        }
+    }
 }
 impl Source {
     fn mask(&self, dates: [Date; 3]) -> u8 {
@@ -103,6 +126,13 @@ impl Source {
         }))
     }
     fn encode(&self, out: &mut [u8]) {
+        if let Some(snapshot) = self.snapshot {
+            out[160..172].copy_from_slice(snapshot.timestamp().as_bytes());
+            let id = snapshot.feed_id().as_bytes();
+            out[172] = id.len() as u8;
+            out[173..173 + id.len()].copy_from_slice(id);
+        }
+        self.validator.encode(&mut out[253..319]);
         put(out, 0, self.start);
         put(out, 4, self.end);
         put(out, 8, self.present);
@@ -134,6 +164,18 @@ impl Source {
                 crc: get(bytes, 84 + i * 12),
             };
         }
+        if bytes.len() >= SOURCE_BYTES {
+            let len = bytes[172] as usize;
+            if len <= gtfs::mobility::MAX_ID {
+                s.snapshot = core::str::from_utf8(&bytes[173..173 + len])
+                    .ok()
+                    .zip(core::str::from_utf8(&bytes[160..172]).ok())
+                    .and_then(|(id, stamp)| gtfs::mobility::Snapshot::from_parts(id, stamp).ok());
+                if s.snapshot.is_some() {
+                    s.validator = crate::download::Validator::decode(&bytes[253..319]).for_ranges();
+                }
+            }
+        }
         s
     }
 }
@@ -157,6 +199,7 @@ pub struct Bank {
     key_length: u32,
     count: u32,
     checked: i64,
+    version: u32,
 }
 impl Bank {
     /// Query reference for a clearly labelled saved-board preview. This is not
@@ -168,9 +211,10 @@ impl Bank {
         if i >= self.count as usize {
             return Err(Error::InvalidZip);
         }
-        let mut b = [0; 160];
-        flash.read(self.offset + 48 + i as u32 * 160, &mut b)?;
-        Ok(Source::decode(&b))
+        let mut b = [0; SOURCE_BYTES];
+        let size = if self.version == 1 { 160 } else { SOURCE_BYTES };
+        flash.read(self.offset + 48 + (i * size) as u32, &mut b[..size])?;
+        Ok(Source::decode(&b[..size]))
     }
     fn fresh(&self, flash: &impl Storage, builder: &Builder, now: i64) -> Result<Freshness, Error> {
         let mut times = timetable_display::freshness::SourceTimes::default();
@@ -196,17 +240,21 @@ impl Bank {
 async fn validate(flash: &impl Storage, offset: u32) -> Result<Bank, Error> {
     let mut b = [0; HEADER];
     flash.read(offset, &mut b)?;
-    if &b[..4] != b"TTFC" || get(&b, 4) != 1 || get(&b, 44) != COMMIT {
+    if &b[..4] != b"TTFC" || !matches!(get(&b, 4), 1 | 2) || get(&b, 44) != COMMIT {
         return Err(Error::InvalidZip);
     }
+    let version = get(&b, 4);
+    let size = if version == 1 { 160 } else { SOURCE_BYTES };
+    let header = if version == 1 { LEGACY_HEADER } else { HEADER };
     let expected = get(&b, 40);
     b[40..48].fill(0);
-    if crc32fast::hash(&b) != expected {
+    if crc32fast::hash(&b[..header]) != expected {
         return Err(Error::CrcMismatch);
     }
     let bank = Bank {
         offset,
         generation: get(&b, 8),
+        version,
         length: get(&b, 12),
         key_length: get(&b, 24),
         count: get(&b, 20),
@@ -222,7 +270,7 @@ async fn validate(flash: &impl Storage, offset: u32) -> Result<Bank, Error> {
         return Err(Error::InvalidZip);
     }
     for i in 0..bank.count as usize {
-        let s = Source::decode(&b[48 + i * 160..48 + (i + 1) * 160]);
+        let s = Source::decode(&b[48 + i * size..48 + (i + 1) * size]);
         if !valid_date(s.start)
             || !valid_date(s.end)
             || s.start > s.end
@@ -481,15 +529,23 @@ struct Writer<'a, F> {
     different: bool,
     pos: u32,
     used: usize,
-    buffer: [u8; 256],
+    buffer: &'a mut [u8; 256],
     hash: crc32fast::Hasher,
     table_hash: crc32fast::Hasher,
-    sources: [Source; SOURCES],
+    sources: &'a mut [Source; SOURCES],
     count: u8,
     now: i64,
 }
 impl<'a, F: Storage> Writer<'a, F> {
-    fn new(flash: &'a F, active: Option<Bank>, compare: bool, now: i64) -> Self {
+    fn new(
+        flash: &'a F,
+        active: Option<Bank>,
+        compare: bool,
+        now: i64,
+        sources: &'a mut [Source; SOURCES],
+        buffer: &'a mut [u8; 256],
+    ) -> Self {
+        sources.fill(Source::default());
         Self {
             flash,
             active,
@@ -497,10 +553,10 @@ impl<'a, F: Storage> Writer<'a, F> {
             different: false,
             pos: 0,
             used: 0,
-            buffer: [0; 256],
+            buffer,
             hash: crc32fast::Hasher::new(),
             table_hash: crc32fast::Hasher::new(),
-            sources: [Source::default(); SOURCES],
+            sources,
             count: 0,
             now,
         }
@@ -652,6 +708,7 @@ impl<'a, F: Storage> Writer<'a, F> {
             length: self.pos,
             key_length: self.key_length(),
             count: self.count as u32,
+            version: 2,
             checked: self
                 .flash
                 .checked_at()
@@ -660,7 +717,7 @@ impl<'a, F: Storage> Writer<'a, F> {
         };
         let mut h = [0; HEADER];
         h[..4].copy_from_slice(b"TTFC");
-        put(&mut h, 4, 1);
+        put(&mut h, 4, 2);
         put(&mut h, 8, bank.generation);
         put(&mut h, 12, bank.length);
         put(&mut h, 16, self.hash.clone().finalize());
@@ -668,7 +725,7 @@ impl<'a, F: Storage> Writer<'a, F> {
         put(&mut h, 24, bank.key_length);
         h[32..40].copy_from_slice(&bank.checked.to_le_bytes());
         for (i, s) in self.sources[..self.count as usize].iter().enumerate() {
-            s.encode(&mut h[48 + i * 160..48 + (i + 1) * 160]);
+            s.encode(&mut h[48 + i * SOURCE_BYTES..48 + (i + 1) * SOURCE_BYTES]);
         }
         let crc = crc32fast::hash(&h);
         put(&mut h, 40, crc);
@@ -817,6 +874,8 @@ async fn build<H: crate::download::Http, F: Storage>(
                     .unwrap_or(EMPTY),
                 ..Source::default()
             };
+            info.snapshot = Some(snapshot);
+            info.validator = source.validator();
             let mask = info.mask(builder.dates) & remaining;
             if mask == 0 {
                 continue;
@@ -895,6 +954,40 @@ async fn matches<H: crate::download::Http>(
 ) -> Result<bool, crate::download::Error> {
     let mut remaining = builder.day_mask();
     for &snapshot in &snapshots.0 {
+        let mut url = [0; gtfs::mobility::URL_BYTES];
+        let url = snapshot.url(&mut url);
+        let mut unchanged_mask = 0;
+        for i in 0..bank.count as usize {
+            let stored = bank.source(flash, i)?;
+            if stored.snapshot == Some(snapshot)
+                && stored.validator.header().is_some()
+                && http.unchanged(url, &stored.validator).await?
+            {
+                let mask = stored.mask(builder.dates) & remaining;
+                // A different earlier stored source must not win any of these days.
+                for day in 0..3 {
+                    if mask & (1 << day) != 0 {
+                        for winner in 0..=i {
+                            if bank.source(flash, winner)?.mask(builder.dates) & (1 << day) != 0 {
+                                if winner != i {
+                                    return Ok(false);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                unchanged_mask = mask;
+                break;
+            }
+        }
+        if unchanged_mask != 0 {
+            remaining &= !unchanged_mask;
+            if remaining == 0 {
+                return Ok(true);
+            }
+            continue;
+        }
         let mut source = crate::download::Mirror::open(http, snapshot, workspace).await?;
         let (start, end) = source.coverage_dates(workspace).await?;
         let mask = builder.dates.iter().enumerate().fold(0, |m, (i, d)| {
@@ -942,8 +1035,8 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
     config: &Config,
     flash: &F,
 ) -> Result<Freshness, crate::download::Error> {
-    let mut writer = {
-        let active = load(flash).await?;
+    let active = load(flash).await?;
+    {
         if let Some(bank) = active
             && same_key(bank, flash, config)?
             && matches(http, snapshots, flash, bank, builder, workspace).await?
@@ -953,8 +1046,20 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
             fresh.checked_at = Some(builder.now);
             return Ok(fresh);
         }
-        Writer::new(flash, active, true, builder.now)
-    };
+    }
+    let mut allocation = flash.metadata()?;
+    let metadata = allocation
+        .as_mut()
+        .first_mut()
+        .ok_or(Error::BufferTooSmall)?;
+    let mut writer = Writer::new(
+        flash,
+        active,
+        true,
+        builder.now,
+        &mut metadata.sources,
+        &mut metadata.buffer,
+    );
     // This operation is scoped inside the already verified TLS session. The
     // caller can reuse heap space freed by certificate verification here.
     let mut scratch = flash.scratch()?;
@@ -1007,7 +1112,14 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
         return Err(Error::InvalidField("obsolete cache update").into());
     }
     http.stage("cache: selected contents changed; streaming inactive bank");
-    writer = Writer::new(flash, writer.active, false, writer.now);
+    let mut writer = Writer::new(
+        flash,
+        writer.active,
+        false,
+        writer.now,
+        writer.sources,
+        writer.buffer,
+    );
     build(
         http,
         snapshots,
@@ -1057,6 +1169,13 @@ impl<H: crate::download::Http, F: Storage> crate::download::Http for Http<'_, H,
         op: &mut impl crate::download::Operation,
     ) -> Result<crate::download::Metadata, crate::download::Error> {
         self.inner.fetch(url, range, op).await
+    }
+    async fn unchanged(
+        &self,
+        url: &str,
+        validator: &crate::download::Validator,
+    ) -> Result<bool, crate::download::Error> {
+        self.inner.unchanged(url, validator).await
     }
     async fn mirror_tables(
         &self,

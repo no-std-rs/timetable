@@ -128,7 +128,11 @@ def audit(frames, stack):
     if cached:
         # Cache profile: refresh/session are inlined into update_once and
         # download::mirror. These are real retained callers in the pinned ELF.
-        update = frame('timetable_display11update_once', 'closure')
+        # LLVM may inline update_once completely into the task/session polls
+        # already counted above. Count every surviving coroutine/poll boundary;
+        # an absent outline contributes no additional stack frame.
+        update = max((size for name, size in frames
+                      if 'timetable_display11update_once' in name and 'closure' in name), default=0)
         worker = task + session + update + max(scoped, default=0)
         base = worker + frame('download6mirror', 'closure')
         transport = frame('transport', 'mirror_tables', 'closure')
@@ -143,12 +147,22 @@ def audit(frames, stack):
             raise ValueError('missing audited normal mirror query frame')
         normal = sum(normal_frames)
         coverage = frame('download', 'coverage_dates', 'closure')
-        http = (frame('transport', 'Timed', '5fetch', 'closure')
-                + frame('http_session', 'Connection', '5fetch', 'closure'))
+        timed = frame('transport', 'Timed', '5fetch', 'closure')
+        timed = max(timed, max((size for name, size in frames
+                               if all(p in name for p in ('transport', 'Timed', '9unchanged', 'closure'))), default=0))
+        client_frames = []
+        for method in ('5fetch', '11fetch_inner', '9unchanged'):
+            outlined = [size for name, size in frames
+                        if all(p in name for p in ('http_session', 'Connection', method, 'closure'))]
+            if outlined:
+                client_frames.append(max(outlined))
+        if not client_frames:
+            raise ValueError('missing audited HTTP session frame')
+        http = timed + sum(client_frames)
         table_worker = max(max(cached), transport + normal)
-        mirror_open = max((size for name, size in frames
-                           if all(part in name for part in ('download', 'Mirror', '4open', 'closure'))),
-                          default=0)
+        mirror_open = sum(max((size for name, size in frames
+                               if all(part in name for part in ('download', 'Mirror', method, 'closure'))), default=0)
+                          for method in ('4open', '19open_with_validator'))
         outlined_open = [size for name, size in frames
                          if all(part in name for part in ('embedded_tls', 'TlsConnection', '4open'))]
         stages = max(frame('feed', 'Builder', stage) for stage in
@@ -181,6 +195,9 @@ def audit(frames, stack):
             'runtime_settings_copy': worker + frame('copy_query') + frame('config', 'Config', '10clone_from'),
             'runtime_mirror_record': base + http + table_worker + scan_context + frame('gtfs', 'zip', '6record', 'closure'),
             'runtime_http_headers': base + http + table_worker + scan_context + frame('response', 'Response', '7headers'),
+            'runtime_conditional_headers': base + http + frame('response', 'Response', '7headers') + sum(
+                max((size for name, size in frames if part in name and 'closure' in name), default=0)
+                for part in ('cache7matches', 'cache13mirror_tables')),
             # Optional frequencies are decoded during Mirror::open, before
             # coverage/calendar scans. Keep HTTP outlines in this conservative
             # envelope even when that specialization is inlined into open.
@@ -218,7 +235,14 @@ def audit(frames, stack):
         })
     else:
         # Legacy connection-per-request profile remains covered for regressions.
-        update = frame('timetable_display11update_once', 'closure')
+        update_frames = []
+        for parts in [('timetable_display11update_once', 'closure'), ('timetable_display11poll_update',)]:
+            outlined = [size for name, size in frames if all(p in name for p in parts)]
+            if outlined:
+                update_frames.append(max(outlined))
+        if not update_frames:
+            raise ValueError('missing audited update poll frame')
+        update = sum(update_frames)
         worker = session + update
         mirror = frame('timetable_firmware', 'download6mirror', 'closure')
         fetch = frame('transport', 'download', '5fetch', 'closure')

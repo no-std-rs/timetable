@@ -36,6 +36,16 @@ impl core::str::FromStr for Snapshot {
             .strip_prefix(id)
             .and_then(|s| s.strip_prefix('-'))
             .ok_or(bad)?;
+        Self::from_parts(id, stamp)
+    }
+}
+impl Snapshot {
+    /// Rebuild a pinned identity stored as a feed ID and YYYYMMDDhhmm token.
+    pub fn from_parts(id: &str, stamp: &str) -> Result<Self, Error> {
+        let bad = Error::InvalidArchiveName;
+        if !valid_id(id) {
+            return Err(bad);
+        }
         if stamp.len() != 12 || !stamp.bytes().all(|b| b.is_ascii_digit()) {
             return Err(bad);
         }
@@ -54,8 +64,9 @@ impl core::str::FromStr for Snapshot {
         value.id[..id.len()].copy_from_slice(id.as_bytes());
         Ok(value)
     }
-}
-impl Snapshot {
+    pub fn timestamp(&self) -> &str {
+        core::str::from_utf8(&self.stamp).unwrap()
+    }
     pub fn feed_id(&self) -> &str {
         core::str::from_utf8(&self.id[..usize::from(self.len)]).unwrap()
     }

@@ -996,4 +996,4 @@ networkPicker.load(false,state.feed.id).then(()=>{
 });
 loadRelease();
 
-new AndroidInstaller($("android-panel"), () => ({ feed_id: state.feed.id, timezone: state.catalog?.timezone, groups: state.groups, automatic: state.automatic }));
+new AndroidInstaller($("android-panel"), () => ({ feed_id: state.feed.id, timezone: state.catalog?.timezone, groups: state.groups, automatic: state.automatic, wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value }));
