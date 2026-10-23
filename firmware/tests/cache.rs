@@ -293,7 +293,9 @@ impl Http for Client {
             modified: None,
             validator: download::Validator::new(
                 "etag",
-                if self.drift == 1 && r.start() != 0
+                if self.drift == 4 {
+                    b"W/\"fixture-v1\""
+                } else if self.drift == 1 && r.start() != 0
                     || self.drift == 2 && bytes.get(30..44) == Some(b"stop_times.txt")
                 {
                     b"\"fixture-v2\""
@@ -1165,4 +1167,21 @@ fn validator_changes_in_directory_or_table_ranges_cannot_replace_the_validated_b
         assert_eq!(*flash.bytes.borrow(), saved);
         assert!(!events(&mut restore(&flash, &c, NOW)).is_empty());
     }
+}
+
+#[test]
+fn weak_etag_sources_keep_normal_archive_validation_without_a_304_shortcut() {
+    let flash = Memory::new();
+    let c = settings();
+    let mut weak = Client::new(ORIGINAL);
+    weak.drift = 4;
+    update(&flash, &weak, &c, NOW).1.unwrap();
+    let counters = flash.counters();
+    let mut refresh = Client::new(ORIGINAL);
+    refresh.drift = 4;
+    refresh.conditional = true;
+    update(&flash, &refresh, &c, NOW + 60).1.unwrap();
+    assert_eq!(refresh.checks.get(), 0);
+    assert!(refresh.bytes.get() > 0);
+    assert_eq!(flash.counters(), counters);
 }

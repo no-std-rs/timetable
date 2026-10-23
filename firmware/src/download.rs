@@ -101,18 +101,20 @@ impl Validator {
             )
         })
     }
+    /// Byte-range identity requires a strong ETag. Weak ETags and dates may
+    /// support whole-representation revalidation, but do not pin ZIP offsets.
+    pub fn for_ranges(self) -> Self {
+        if self.kind == 1 && !self.bytes[..self.len as usize].starts_with(b"W/") {
+            self
+        } else {
+            Self::default()
+        }
+    }
     pub fn verify(&self, actual: &Self) -> Result<(), Error> {
-        let Some((_, expected)) = self.header() else {
+        let Some(expected) = self.header() else {
             return Ok(());
         };
-        let (_, value) = actual.header().ok_or(Error::Http)?;
-        let equal = if self.kind == 1 {
-            expected.strip_prefix("W/").unwrap_or(expected)
-                == value.strip_prefix("W/").unwrap_or(value)
-        } else {
-            expected == value
-        };
-        if self.kind == actual.kind && equal {
+        if self.for_ranges().header().is_some() && actual.for_ranges().header() == Some(expected) {
             Ok(())
         } else {
             Err(Error::Http)
@@ -411,7 +413,7 @@ impl<'a, H: Http> Mirror<'a, H> {
                     &mut Fill(&mut [0]),
                 )
                 .await?;
-            (meta.length.ok_or(Error::Http)?, meta.validator)
+            (meta.length.ok_or(Error::Http)?, meta.validator.for_ranges())
         };
         let fetcher = Range {
             http,

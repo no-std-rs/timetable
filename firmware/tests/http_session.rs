@@ -214,3 +214,19 @@ fn unsolicited_or_mismatched_304_is_rejected_without_reusing_the_connection() {
         Some(("If-Modified-Since", "Wed, 21 Oct 2015 07:28:00 GMT"))
     );
 }
+
+#[test]
+fn range_identity_never_uses_weak_etags_or_last_modified_dates() {
+    use timetable_firmware::download::Validator;
+    let strong = Validator::new("etag", b"\"same\"");
+    let weak = Validator::new("etag", b"W/\"same\"");
+    let date = Validator::new("last-modified", b"Wed, 21 Oct 2015 07:28:00 GMT");
+    assert!(strong.verify(&strong).is_ok());
+    for (expected, actual) in [(strong, weak), (weak, strong), (weak, weak), (date, date)] {
+        assert!(expected.verify(&actual).is_err());
+    }
+    assert!(weak.for_ranges().header().is_none());
+    assert!(date.for_ranges().header().is_none());
+    let empty = Validator::default();
+    assert!(empty.verify(&empty).is_ok());
+}

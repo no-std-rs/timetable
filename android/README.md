@@ -187,8 +187,10 @@ replace a physical Fire OS test of Home policies, camera behavior, TLS and start
 
 Embedded refreshes retain bounded selected tables in their two flash banks,
 rather than storing full ZIPs. New cache headers retain URL-bound server
-validators, so an unchanged pinned source can return 304 without archive range
-reads or flash writes. Original v1 banks remain readable and use their existing
+strong ETags, checked against every directory/table range, so an unchanged
+pinned source can return 304 without archive range
+reads or flash writes. Weak ETags and Last-Modified dates cannot prove byte identity for ZIP ranges;
+these sources use the existing archive comparison instead. Original v1 banks remain readable and use their existing
 manifest comparison until a real content change warrants a new bank. Metadata
 changes alone never cause a flash rewrite; the less-than-one-day warning and
 explicit confirmation still guard frequent content updates.

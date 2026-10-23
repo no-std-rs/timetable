@@ -172,7 +172,7 @@ impl Source {
                     .zip(core::str::from_utf8(&bytes[160..172]).ok())
                     .and_then(|(id, stamp)| gtfs::mobility::Snapshot::from_parts(id, stamp).ok());
                 if s.snapshot.is_some() {
-                    s.validator = crate::download::Validator::decode(&bytes[253..319]);
+                    s.validator = crate::download::Validator::decode(&bytes[253..319]).for_ranges();
                 }
             }
         }
