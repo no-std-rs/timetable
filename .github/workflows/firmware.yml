@@ -165,9 +165,12 @@ jobs:
       - name: Test the installer units
         working-directory: web
         run: npm test
+      # The Azure mirror took 7m31s for 23 MB before falling back upstream.
+      - name: Use the upstream Ubuntu package mirror
+        run: printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
       - name: Install Chromium and its system dependencies
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --no-shell chromium
       - name: Test desktop and mobile browsers
         working-directory: web
         run: npm run test:browser
