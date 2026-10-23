@@ -104,7 +104,8 @@ public final class MainActivity extends Activity {
     static final int[] ORIENTATIONS={ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
         ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT,ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE};
     int rotationIndex() {
-        String value=options==null?"system":options.optString("rotation","system");
+        String configured=options==null?"system":options.optString("rotation","system");
+        String value=getSharedPreferences("platform",0).getString("rotation",configured);
         for(int i=0;i<ROTATIONS.length;i++)if(ROTATIONS[i].equals(value))return i;
         return 0;
     }
@@ -113,15 +114,10 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Screen rotation")
             .setSingleChoiceItems(ROTATION_LABELS,rotationIndex(),new DialogInterface.OnClickListener(){
                 public void onClick(DialogInterface dialog,int which){
-                    try {
-                        if(settingsBytes==null)throw new IOException("Configure this tablet over USB first.");
-                        JSONObject changed=new JSONObject(new String(settingsBytes,"UTF-8"));
-                        changed.put("rotation",ROTATIONS[which]);
-                        byte[] bytes=changed.toString().getBytes("UTF-8");
-                        if(Native.validate(SettingsStore.buffer(bytes))!=1)throw new IOException("Invalid settings");
-                        SettingsStore.atomic(SettingsStore.config(MainActivity.this),bytes);
-                        loadSettings();applyRotation();board.invalidate();dialog.dismiss();
-                    }catch(Exception e){Toast.makeText(MainActivity.this,e.getMessage(),Toast.LENGTH_LONG).show();}
+                    // Rotation is platform state: keep settings/snapshot identities,
+                    // selected group and the running query intact.
+                    getSharedPreferences("platform",0).edit().putString("rotation",ROTATIONS[which]).apply();
+                    applyRotation();board.invalidate();dialog.dismiss();
                 }
             }).setNegativeButton("Close",null)
             .setNeutralButton("Android settings",new DialogInterface.OnClickListener(){public void onClick(DialogInterface dialog,int which){
@@ -209,8 +205,13 @@ public final class MainActivity extends Activity {
         for(String action:actions())menu.add(action);return true;
     }
     boolean isPinned() { return ((ActivityManager)getSystemService(ACTIVITY_SERVICE)).isInLockTaskMode(); }
+    boolean ownerKioskActive() {
+        DevicePolicyManager policy=(DevicePolicyManager)getSystemService(DEVICE_POLICY_SERVICE);
+        return settings!=null && !getSharedPreferences("platform",0).getBoolean("kioskPaused",false)
+            && policy!=null && policy.isDeviceOwnerApp(getPackageName());
+    }
     String[] actions() {
-        return new String[]{"Refresh timetable","Settings","Choose Home app",isPinned()?"Exit kiosk":"Pin app"};
+        return new String[]{"Refresh timetable","Settings","Choose Home app",isPinned() || ownerKioskActive()?"Exit kiosk":"Pin app"};
     }
     void showActions() {
         final String[] actions=actions();

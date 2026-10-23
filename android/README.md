@@ -108,7 +108,9 @@ is retained. Shell arguments are quoted and legacy shell exit codes are checked.
 
 - **Rotation:** choose Follow Android settings, Portrait, Landscape, or either
   upside-down orientation in the installer or the tablet's **••• → Settings**.
-  The app saves the selection and applies it on subsequent launches. Old
+  The app saves local rotation separately so changing it keeps the current
+  departures, selected group and running query intact. A fresh USB configuration
+  applies the installer's selection. Old
   configurations follow Android settings. Rotation needs neither root nor
   device-owner access; firmware can still override orientation requests.
 - **Stock tablets:** keeping the screen awake, motion dimming, rotation and
@@ -117,6 +119,8 @@ is retained. Shell arguments are quoted and legacy shell exit codes are checked.
   settings. Wi-Fi and individual background-app controls use normal ADB/app
   permissions; firmware can refuse them. The advanced console defaults to the
   ADB shell; select `su` only if the tablet already has root access.
+  Owner-managed installations keep **Exit kiosk** available even if lock task
+  could not start, so their persistent Home preference can still be cleared.
 - **Keep awake:** Android's window flag keeps the display on while the app is
   visible. Turning it off restores the system's usual timeout.
 - **Motion dimming:** opt-in camera permission, foreground only. Rust compares a
