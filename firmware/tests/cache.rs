@@ -208,6 +208,7 @@ impl Read for Body<'_> {
 struct Client {
     data: &'static [u8],
     conditional: bool,
+    drift: u8,
     checks: Cell<usize>,
     bytes: Cell<usize>,
     calls: RefCell<Vec<Option<ByteRange>>>,
@@ -223,6 +224,7 @@ impl Client {
         Self {
             data,
             conditional: false,
+            drift: 0,
             checks: Cell::new(0),
             bytes: Cell::new(0),
             calls: RefCell::new(Vec::new()),
@@ -289,7 +291,16 @@ impl Http for Client {
         Ok(Metadata {
             length: Some(data.len() as u64),
             modified: None,
-            validator: download::Validator::new("etag", b"\"fixture-v1\""),
+            validator: download::Validator::new(
+                "etag",
+                if self.drift == 1 && r.start() != 0
+                    || self.drift == 2 && bytes.get(30..44) == Some(b"stop_times.txt")
+                {
+                    b"\"fixture-v2\""
+                } else {
+                    b"\"fixture-v1\""
+                },
+            ),
         })
     }
 }
@@ -1133,4 +1144,25 @@ fn conditional_refresh_uses_no_archive_ranges_or_flash_writes_and_legacy_cache_s
     assert_eq!(client.checks.get(), 0);
     assert!(client.bytes.get() > 0);
     assert_eq!(flash.counters(), counters);
+}
+
+#[test]
+fn validator_changes_in_directory_or_table_ranges_cannot_replace_the_validated_bank() {
+    for drift in [1, 2] {
+        let flash = Memory::new();
+        let c = settings();
+        update(&flash, &Client::new(ORIGINAL), &c, NOW).1.unwrap();
+        let saved = flash.bytes.borrow().clone();
+        let counters = flash.counters();
+        let mut client = Client::new(CHANGED);
+        client.drift = drift;
+        let result = update(&flash, &client, &c, NOW + 1).1;
+        assert!(
+            result.is_err(),
+            "A changed range validator must abort the cache update"
+        );
+        assert_eq!(flash.counters(), counters);
+        assert_eq!(*flash.bytes.borrow(), saved);
+        assert!(!events(&mut restore(&flash, &c, NOW)).is_empty());
+    }
 }

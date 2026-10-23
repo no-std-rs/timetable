@@ -41,7 +41,7 @@ export class HostIdentity {
   forget() {
     if (this.pending) throw new Error("Wait for the USB operation to finish.");
     try { this.storage().removeItem(ADB_KEY_STORAGE); }
-    catch { throw new Error("Could not remove the saved ADB key from this browser."); }
+    catch { if (this.cached?.persistent !== false) throw new Error("Could not remove the saved ADB key from this browser."); }
     this.cached = null;
   }
 }

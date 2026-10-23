@@ -861,8 +861,7 @@ async fn build<H: crate::download::Http, F: Storage>(
     key(config, writer.flash.identity(), |b| writer.append(b))?;
     let mut remaining = builder.day_mask();
     for &snapshot in &snapshots.0 {
-        let (mut source, validator) =
-            crate::download::Mirror::open_with_validator(http, snapshot, workspace).await?;
+        let mut source = crate::download::Mirror::open(http, snapshot, workspace).await?;
         let mask = {
             let (start, end) = source.coverage_dates(workspace).await?;
             let manifest = source.manifest();
@@ -876,7 +875,7 @@ async fn build<H: crate::download::Http, F: Storage>(
                 ..Source::default()
             };
             info.snapshot = Some(snapshot);
-            info.validator = validator;
+            info.validator = source.validator();
             let mask = info.mask(builder.dates) & remaining;
             if mask == 0 {
                 continue;

@@ -24,5 +24,12 @@ test("blocked storage keeps one session identity and reports it as temporary", a
   const identity = new HostIdentity({ storage: () => { throw new Error("blocked"); }, crypto: webcrypto });
   const first = await identity.get(); assert.equal(first.persistent,false);
   assert.equal((await identity.get()).pem,first.pem);
-  assert.throws(() => identity.forget(),/Could not remove/);
+  identity.forget();
+  assert.notEqual((await identity.get()).pem,first.pem);
+});
+
+test("a saved identity is retained when persistent removal fails", async () => {
+  const store=storage(),identity=new HostIdentity({storage:()=>store,crypto:webcrypto});
+  const first=await identity.get();store.removeItem=()=>{throw new Error("denied");};
+  assert.throws(()=>identity.forget(),/Could not remove/);assert.equal((await identity.get()).pem,first.pem);
 });

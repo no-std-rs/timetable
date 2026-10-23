@@ -101,6 +101,23 @@ impl Validator {
             )
         })
     }
+    pub fn verify(&self, actual: &Self) -> Result<(), Error> {
+        let Some((_, expected)) = self.header() else {
+            return Ok(());
+        };
+        let (_, value) = actual.header().ok_or(Error::Http)?;
+        let equal = if self.kind == 1 {
+            expected.strip_prefix("W/").unwrap_or(expected)
+                == value.strip_prefix("W/").unwrap_or(value)
+        } else {
+            expected == value
+        };
+        if self.kind == actual.kind && equal {
+            Ok(())
+        } else {
+            Err(Error::Http)
+        }
+    }
     pub fn encode(&self, out: &mut [u8]) {
         out[0] = self.len;
         out[1] = self.kind;
@@ -288,14 +305,16 @@ struct Range<'a, H> {
     http: &'a H,
     url: &'a str,
     length: u64,
+    validator: &'a Validator,
 }
 impl<H: Http> RangeFetch for Range<'_, H> {
     async fn fetch(&mut self, range: ByteRange, out: &mut [u8]) -> Result<(), gtfs::Error> {
-        self.http
+        let meta = self
+            .http
             .fetch(self.url, Some((range, Some(self.length))), &mut Fill(out))
             .await
             .map_err(Error::feed)?;
-        Ok(())
+        self.validator.verify(&meta.validator).map_err(Error::feed)
     }
 }
 struct Payload<'a, V, F> {
@@ -374,6 +393,7 @@ pub struct Mirror<'a, H> {
     snapshot: MirrorSnapshot,
     length: u64,
     directory: zip::Directory,
+    validator: Validator,
 }
 impl<'a, H: Http> Mirror<'a, H> {
     pub async fn open(
@@ -381,15 +401,6 @@ impl<'a, H: Http> Mirror<'a, H> {
         snapshot: MirrorSnapshot,
         workspace: &mut zip::Workspace,
     ) -> Result<Self, Error> {
-        Self::open_with_validator(http, snapshot, workspace)
-            .await
-            .map(|(source, _)| source)
-    }
-    pub async fn open_with_validator(
-        http: &'a H,
-        snapshot: MirrorSnapshot,
-        workspace: &mut zip::Workspace,
-    ) -> Result<(Self, Validator), Error> {
         let mut url = [0; URL_BYTES];
         let url = snapshot.url(&mut url);
         let (length, validator) = {
@@ -402,30 +413,38 @@ impl<'a, H: Http> Mirror<'a, H> {
                 .await?;
             (meta.length.ok_or(Error::Http)?, meta.validator)
         };
-        let fetcher = Range { http, url, length };
+        let fetcher = Range {
+            http,
+            url,
+            length,
+            validator: &validator,
+        };
         let (cache, scratch) = workspace.scratch()[..3072].split_at_mut(2048);
         let mut reader = RangeReader::new(fetcher, length, cache)?;
         let directory = zip::Directory::read(&mut reader, scratch).await?;
         if let Some(range) = directory.frequencies_range() {
-            http.fetch(
-                url,
-                Some((range, Some(length))),
-                &mut Frequencies {
-                    directory: &directory,
-                    workspace,
-                },
-            )
-            .await?;
+            let meta = http
+                .fetch(
+                    url,
+                    Some((range, Some(length))),
+                    &mut Frequencies {
+                        directory: &directory,
+                        workspace,
+                    },
+                )
+                .await?;
+            validator.verify(&meta.validator)?;
         }
-        Ok((
-            Self {
-                http,
-                snapshot,
-                length,
-                directory,
-            },
+        Ok(Self {
+            http,
+            snapshot,
+            length,
+            directory,
             validator,
-        ))
+        })
+    }
+    pub fn validator(&self) -> Validator {
+        self.validator
     }
     async fn table(
         &mut self,
@@ -448,7 +467,8 @@ impl<'a, H: Http> Mirror<'a, H> {
             .ok_or(gtfs::Error::MissingTable(table))?;
         self.http.stage(table.filename());
         let mut url = [0; URL_BYTES];
-        self.http
+        let meta = self
+            .http
             .fetch(
                 self.snapshot.url(&mut url),
                 Some((member.record_range(), Some(self.length))),
@@ -460,7 +480,7 @@ impl<'a, H: Http> Mirror<'a, H> {
                 },
             )
             .await?;
-        Ok(())
+        self.validator.verify(&meta.validator)
     }
     pub async fn coverage(
         &mut self,
