@@ -79,18 +79,25 @@ npm run build
 npm run test:browser
 ```
 
-The Android panel uses the site's existing network and groups. It does not need
-or transmit the ESP32 Wi-Fi fields: connect the tablet to Wi-Fi in Android's
-settings. In desktop Chrome/Edge over HTTPS or localhost, enable USB debugging,
+The Android panel uses the site's existing network and groups. Wi-Fi provisioning is optional: tick **Configure tablet Wi-Fi** to send the
+SSID and password above directly over ADB. They are excluded from timetable
+settings and HTTP requests. The app uses Android’s Wi-Fi adapter under its API28 compatibility rules.
+Vendor restrictions are reported; system Wi-Fi settings remain available. A saved network or
+connection request does not prove association or internet access. In desktop Chrome/Edge over HTTPS or localhost, enable USB debugging,
 connect, approve the computer on the tablet, and choose Install and configure.
 Linux may require the usual Android USB/udev permissions; on Windows a competing
 ADB driver may prevent WebUSB from claiming the interface. Stop other ADB clients
-before connecting. The browser generates an ephemeral ADB key locally; it is
-never uploaded or persisted, so a later page session may need authorization again.
+before connecting. The browser generates an ADB key locally and retains it in localStorage across
+reconnects and reloads. **Forget ADB key** removes it; the next connection needs
+authorization again. Blocked browser storage uses one key for the page session
+and displays that limitation. The private key is never uploaded.
 
 `provisioner` pins the WebUSB implementation from
 [adb_client PR222](https://github.com/cocool97/adb_client/pull/222) to commit
-`66ce40c6588f1f103d7db0f9209d7471a0309dd5`. It checks tablet API/ABI, verifies the
+`dc349ffcf50487cfadf5c6286623e15c1b1d2ad9` on a separate correction branch.
+This adds bounded draining of repeated terminal CLSE packets belonging to the
+last confirmed closed stream, fixing old-adbd failures during Connect without
+ignoring rejected OPENs or unknown stream IDs. It checks tablet API/ABI, verifies the
 APK SHA256, sends it using ADB sync, installs with `pm install -r`, and sends
 Rust-validated settings to a receiver protected by `android.permission.DUMP`
 (held by the ADB shell). It checks installation/configuration responses before
@@ -115,16 +122,34 @@ is retained. Shell arguments are quoted and legacy shell exit codes are checked.
   never factory-resets a tablet. An accepted owner allows persistent Home and
   lock-task mode. The app's visible **••• → Exit kiosk and open settings** stops
   lock task and clears its persistent Home preference. Reprovision to re-enable.
-- **80% charging:** unsupported through ordinary Android app/ADB controls. A
-  real cap needs a vendor feature, privileged/root control, or external charging
-  hardware. The UI states this limitation; it does not fake a cap using Android's
-  battery simulation commands. No root or sysfs writes are performed.
+- **Battery diagnostics:** read real `dumpsys battery`, power/wake locks, shell
+  permissions and readable power-supply nodes. Save the report locally. A cap
+  control appears only for a writable standard battery
+  `charge_control_end_threshold`; an explicit action writes 50–100% and reads
+  back the actual value (hardware may round). There is no automatic root access,
+  vendor-node guessing or simulated battery state. Most old stock tablets will
+  need vendor support, root or an external controller for a real cap.
+- **Background apps:** after installing the current app, list packages and
+  explicitly select which to disable or re-enable. System apps are hidden by
+  default; nothing is selected automatically. `pm disable-user` keeps app data.
+  The native report protects Android core/shared system UIDs, persistent apps,
+  Home handlers, Settings, keyboards, device admins and Timetable. The Rust ADB
+  adapter fetches that policy again before each change and verifies the result.
+  Disabled packages remain listed for recovery; no uninstall or data clearing.
 
 ## Cached data and network limits
 
 A matching CRC-checked departure snapshot is drawn before any networking. A
 background worker queries a memory-mapped cached ZIP, then downloads an update
-when the ZIP is three hours old (or Refresh is tapped). Failed downloads/parses
+when its last successful server check is three hours old (or Refresh is tapped).
+Full ZIPs are retained per feed, allowing a different stop/group query to reuse
+all cached files. An ETag (preferred) or Last-Modified validator is bound to the
+exact response URL and SHA256 of the validated ZIP. A 304 updates check metadata
+and re-queries the cached file without downloading or rewriting it. Redirects
+never receive another URL’s validators; corrupt/missing caches fetch afresh.
+New bodies are staged, validated by Rust, then atomically renamed. If the ZIP
+rename succeeds but metadata publication is interrupted, the digest mismatch
+forces an unconditional check next time. Failed downloads/parses
 keep the previously validated data; a provisional ZIP is never published. The
 same full-archive structure validation and selected-table CRC checks as the
 shared Rust parser apply. Parsing still uses the embedded explicit capacities;
@@ -152,7 +177,18 @@ cargo run -p timetable-tablet --example preview
 
 JNI smoke tests load the actual native implementation into a host JVM, query the
 synthetic GTFS fixture, render both orientations, select a group, and reject
-aliased/non-direct buffers. Browser tests mock the USB boundary and check settings,
-opt-ins, failures and stopping. The SVG example uses the same Rust layout with
+aliased/non-direct buffers. Host JVM cache tests exercise 200/304, redirects, truncation, validation,
+cancellation and corrupt-sidecar recovery. Browser tests cover persistent keys,
+Wi-Fi, battery readback, guarded/reversible app changes, failures and stopping.
+A USB peer also runs the actual pinned WASM transport through three shell
+commands with repeated terminal closes. The SVG example uses the same Rust layout with
 sample departures and writes `/tmp/timetable-tablet-*.svg`. These checks do not
 replace a physical Fire OS test of Home policies, camera behavior, TLS and startup.
+
+Embedded refreshes retain bounded selected tables in their two flash banks,
+rather than storing full ZIPs. New cache headers retain URL-bound server
+validators, so an unchanged pinned source can return 304 without archive range
+reads or flash writes. Original v1 banks remain readable and use their existing
+manifest comparison until a real content change warrants a new bank. Metadata
+changes alone never cause a flash rewrite; the less-than-one-day warning and
+explicit confirmation still guard frequent content updates.

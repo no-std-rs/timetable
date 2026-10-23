@@ -44,10 +44,88 @@ impl Error {
 pub trait Operation {
     async fn read<R: Read>(&mut self, body: R) -> Result<(), Error>;
 }
+/// A bounded server validator, retained with the validated archive identity.
+#[derive(Clone, Copy)]
+pub struct Validator {
+    bytes: [u8; 96],
+    len: u8,
+    kind: u8,
+}
+impl Default for Validator {
+    fn default() -> Self {
+        Self {
+            bytes: [0; 96],
+            len: 0,
+            kind: 0,
+        }
+    }
+}
+impl Validator {
+    pub const BYTES: usize = 98;
+    pub fn new(name: &str, value: &[u8]) -> Self {
+        let kind = if name.eq_ignore_ascii_case("etag") {
+            1
+        } else if name.eq_ignore_ascii_case("last-modified") {
+            2
+        } else {
+            0
+        };
+        let quoted = value.strip_prefix(b"W/").unwrap_or(value);
+        if kind == 0
+            || value.is_empty()
+            || value.len() > 96
+            || !value.iter().all(|b| (32..=126).contains(b))
+            || kind == 1
+                && (quoted.len() < 2
+                    || quoted.first() != Some(&b'"')
+                    || quoted.last() != Some(&b'"')
+                    || quoted[1..quoted.len() - 1].contains(&b'"'))
+        {
+            return Self::default();
+        }
+        let mut result = Self::default();
+        result.bytes[..value.len()].copy_from_slice(value);
+        result.len = value.len() as u8;
+        result.kind = kind;
+        result
+    }
+    pub fn header(&self) -> Option<(&str, &str)> {
+        (self.len != 0).then(|| {
+            (
+                if self.kind == 1 {
+                    "If-None-Match"
+                } else {
+                    "If-Modified-Since"
+                },
+                core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap(),
+            )
+        })
+    }
+    pub fn encode(&self, out: &mut [u8]) {
+        out[0] = self.len;
+        out[1] = self.kind;
+        out[2..Self::BYTES].copy_from_slice(&self.bytes);
+    }
+    pub fn decode(bytes: &[u8]) -> Self {
+        let len = bytes[0] as usize;
+        if len > 96 {
+            return Self::default();
+        }
+        Self::new(
+            match bytes[1] {
+                1 => "etag",
+                2 => "last-modified",
+                _ => "",
+            },
+            &bytes[2..2 + len],
+        )
+    }
+}
 #[derive(Default)]
 pub struct Metadata {
     pub length: Option<u64>,
     pub modified: Option<i64>,
+    pub validator: Validator,
 }
 #[allow(async_fn_in_trait)]
 pub trait Http {
@@ -62,6 +140,10 @@ pub trait Http {
         range: Option<(ByteRange, Option<u64>)>,
         operation: &mut impl Operation,
     ) -> Result<Metadata, Error>;
+    /// True only for a solicited 304 against this exact validated object.
+    async fn unchanged(&self, _url: &str, _validator: &Validator) -> Result<bool, Error> {
+        Ok(false)
+    }
     /// Transports can scope one authenticated connection around all file ranges.
     /// The default keeps simple stateless transports and offline fixtures usable.
     async fn mirror_tables(
@@ -292,6 +374,7 @@ pub struct Mirror<'a, H> {
     snapshot: MirrorSnapshot,
     length: u64,
     directory: zip::Directory,
+    validator: Validator,
 }
 impl<'a, H: Http> Mirror<'a, H> {
     pub async fn open(
@@ -329,7 +412,11 @@ impl<'a, H: Http> Mirror<'a, H> {
             snapshot,
             length,
             directory,
+            validator: meta.validator,
         })
+    }
+    pub fn validator(&self) -> Validator {
+        self.validator
     }
     async fn table(
         &mut self,

@@ -66,6 +66,36 @@ impl<S: Read + Write, O: Observe> Http for Connection<'_, S, O> {
         range: Option<(ByteRange, Option<u64>)>,
         operation: &mut impl Operation,
     ) -> Result<Metadata, Error> {
+        self.fetch_inner(url, range, operation, None)
+            .await
+            .map(|(meta, _)| meta)
+    }
+    async fn unchanged(
+        &self,
+        url: &str,
+        validator: &timetable_firmware::download::Validator,
+    ) -> Result<bool, Error> {
+        if validator.header().is_none() {
+            return Ok(false);
+        }
+        self.fetch_inner(
+            url,
+            Some((ByteRange::new(0, 0)?, None)),
+            &mut timetable_firmware::download::Fill(&mut [0]),
+            Some(validator),
+        )
+        .await
+        .map(|(_, unchanged)| unchanged)
+    }
+}
+impl<S: Read + Write, O: Observe> Connection<'_, S, O> {
+    async fn fetch_inner(
+        &self,
+        url: &str,
+        range: Option<(ByteRange, Option<u64>)>,
+        operation: &mut impl Operation,
+        validator: Option<&timetable_firmware::download::Validator>,
+    ) -> Result<(Metadata, bool), Error> {
         let endpoint = crate::http_request::endpoint(url)?;
         if endpoint.host != self.host {
             return Err(Error::Http);
@@ -76,7 +106,17 @@ impl<S: Read + Write, O: Observe> Http for Connection<'_, S, O> {
         self.observe.request(url, range);
         let mut text = [0; 64];
         let header = range.map(|(r, _)| r.header(&mut text)).transpose()?;
-        let sent = if self.persistent {
+        let sent = if validator.is_some() {
+            crate::http_request::send_get_conditional(
+                &mut stream,
+                endpoint.path,
+                self.host,
+                header,
+                self.persistent,
+                validator,
+            )
+            .await
+        } else if self.persistent {
             crate::http_request::send_get_connection(
                 &mut stream,
                 endpoint.path,
@@ -96,6 +136,47 @@ impl<S: Read + Write, O: Observe> Http for Connection<'_, S, O> {
             .await
             .map_err(|_| Error::Http)?;
         self.observe.status(response.status.0);
+        if response.status.0 == 304 {
+            let expected = validator.and_then(|v| v.header()).ok_or(Error::Http)?;
+            let mut seen = false;
+            let mut reusable = self.persistent;
+            for (name, value) in response.headers() {
+                if name.eq_ignore_ascii_case("etag") {
+                    if seen {
+                        return Err(Error::Http);
+                    }
+                    seen = true;
+                    if expected.0 == "If-None-Match"
+                        && value.strip_prefix(b"W/").unwrap_or(value)
+                            != expected
+                                .1
+                                .as_bytes()
+                                .strip_prefix(b"W/")
+                                .unwrap_or(expected.1.as_bytes())
+                    {
+                        return Err(Error::Http);
+                    }
+                }
+                if name.eq_ignore_ascii_case("connection")
+                    && value
+                        .split(|b| *b == b',')
+                        .any(|v| v.trim_ascii().eq_ignore_ascii_case(b"close"))
+                {
+                    reusable = false;
+                }
+                if name.eq_ignore_ascii_case("transfer-encoding") {
+                    return Err(Error::Http);
+                }
+            }
+            // RFC 9110: a 304 ends after its headers. Content-Length describes
+            // the selected representation, never a 304 response body.
+            drop(response);
+            if reusable {
+                self.stream.set(Some(stream));
+            }
+            self.observe.complete(0, 0);
+            return Ok((Metadata::default(), true));
+        }
         let mut meta = crate::http_request::validate(response.status.0, response.headers(), range)?;
         meta.modified = self
             .observe
@@ -144,6 +225,6 @@ impl<S: Read + Write, O: Observe> Http for Connection<'_, S, O> {
         if reusable {
             self.stream.set(Some(stream));
         }
-        Ok(meta)
+        Ok((meta, false))
     }
 }

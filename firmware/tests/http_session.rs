@@ -172,3 +172,45 @@ fn close_delimited_or_explicit_close_cannot_be_reused_and_origin_cannot_change()
     assert!(run(client.fetch("https://mobilitydatabase.org/", None, &mut Fill(&mut []))).is_err());
     assert_eq!(peer.borrow().flushes, 0);
 }
+
+#[test]
+fn conditional_304_has_no_body_even_with_content_length_and_connection_is_reusable() {
+    let validator = timetable_firmware::download::Validator::new("etag", b"\"old\"");
+    let (client, peer) = setup(&[
+        b"HTTP/1.1 304 Not Modified\r\nContent-Length: 9000000\r\nETag: W/\"old\"\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none",
+    ]);
+    assert!(run(client.unchanged(URL, &validator)).unwrap());
+    let mut bytes = [0; 3];
+    run(client.fetch(URL, None, &mut Fill(&mut bytes))).unwrap();
+    assert_eq!(&bytes, b"one");
+    let peer = peer.borrow();
+    let sent = std::str::from_utf8(&peer.sent).unwrap();
+    assert!(sent.contains("If-None-Match: \"old\""));
+    assert!(sent.contains("Range: bytes=0-0"));
+}
+#[test]
+fn unsolicited_or_mismatched_304_is_rejected_without_reusing_the_connection() {
+    let validator = timetable_firmware::download::Validator::new("etag", b"\"old\"");
+    for response in [
+        b"HTTP/1.1 304 Not Modified\r\nETag: \"new\"\r\n\r\n".as_slice(),
+        b"HTTP/1.1 304 Not Modified\r\nETag: \"old\"\r\nETag: \"old\"\r\n\r\n",
+    ] {
+        let (client, peer) = setup(&[response]);
+        assert!(run(client.unchanged(URL, &validator)).is_err());
+        assert!(run(client.fetch(URL, None, &mut Fill(&mut [0]))).is_err());
+        assert_eq!(peer.borrow().flushes, 1);
+    }
+    let (client, _) = setup(&[b"HTTP/1.1 304 Not Modified\r\n\r\n"]);
+    assert!(run(client.fetch(URL, None, &mut Fill(&mut [0]))).is_err());
+    let bad = timetable_firmware::download::Validator::new("etag", b"\"bad\"\r\nInjected: yes");
+    assert!(bad.header().is_none());
+    let date = timetable_firmware::download::Validator::new(
+        "last-modified",
+        b"Wed, 21 Oct 2015 07:28:00 GMT",
+    );
+    assert_eq!(
+        date.header(),
+        Some(("If-Modified-Since", "Wed, 21 Oct 2015 07:28:00 GMT"))
+    );
+}

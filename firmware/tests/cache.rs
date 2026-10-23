@@ -199,6 +199,8 @@ impl Read for Body<'_> {
 }
 struct Client {
     data: &'static [u8],
+    conditional: bool,
+    checks: Cell<usize>,
     bytes: Cell<usize>,
     calls: RefCell<Vec<Option<ByteRange>>>,
     late_error: bool,
@@ -212,6 +214,8 @@ impl Client {
     fn new(data: &'static [u8]) -> Self {
         Self {
             data,
+            conditional: false,
+            checks: Cell::new(0),
             bytes: Cell::new(0),
             calls: RefCell::new(Vec::new()),
             late_error: false,
@@ -224,6 +228,19 @@ impl Client {
     }
 }
 impl Http for Client {
+    async fn unchanged(
+        &self,
+        url: &str,
+        validator: &download::Validator,
+    ) -> Result<bool, download::Error> {
+        assert_eq!(url, URL);
+        assert_eq!(
+            validator.header(),
+            Some(("If-None-Match", "\"fixture-v1\""))
+        );
+        self.checks.set(self.checks.get() + 1);
+        Ok(self.conditional)
+    }
     async fn fetch(
         &self,
         url: &str,
@@ -264,6 +281,7 @@ impl Http for Client {
         Ok(Metadata {
             length: Some(data.len() as u64),
             modified: None,
+            validator: download::Validator::new("etag", b"\"fixture-v1\""),
         })
     }
 }
@@ -1060,4 +1078,45 @@ fn identical_selection_ids_from_different_networks_cannot_restore_each_others_da
     assert!(builder.events.is_empty());
     flash.identity.set(b"feed A / timezone rules A");
     assert!(run(cache::restore(&flash, bank, &mut builder, &mut ws, &c, NOW)).is_ok());
+}
+
+#[test]
+fn conditional_refresh_uses_no_archive_ranges_or_flash_writes_and_legacy_cache_still_restores() {
+    let flash = Memory::new();
+    let c = settings();
+    let (mut original, result) = update(&flash, &Client::new(ORIGINAL), &c, NOW);
+    result.unwrap();
+    let expected = events(&mut original);
+    let counters = flash.counters();
+    let mut client = Client::new(ORIGINAL);
+    client.conditional = true;
+    let (mut fresh, result) = update(&flash, &client, &c, NOW + 60);
+    assert_eq!(result.unwrap().checked_at, Some(NOW + 60));
+    assert_eq!(events(&mut fresh), expected);
+    assert_eq!(client.checks.get(), 1);
+    assert_eq!(client.bytes.get(), 0);
+    assert_eq!(flash.counters(), counters);
+    // Convert only the header to the original v1 format. Payload offsets and
+    // committed bytes are deliberately unchanged: upgrades must preserve it.
+    {
+        let mut bytes = flash.bytes.borrow_mut();
+        assert_eq!(&bytes[..4], b"TTFC");
+        let sources: Vec<_> = (0..3)
+            .map(|i| bytes[48 + i * 580..48 + i * 580 + 160].to_vec())
+            .collect();
+        for (i, source) in sources.iter().enumerate() {
+            bytes[48 + i * 160..48 + (i + 1) * 160].copy_from_slice(source);
+        }
+        bytes[4..8].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[40..48].fill(0);
+        let crc = crc32fast::hash(&bytes[..528]);
+        bytes[40..44].copy_from_slice(&crc.to_le_bytes());
+        bytes[44..48].copy_from_slice(&0x434f4d54_u32.to_le_bytes());
+    }
+    assert_eq!(events(&mut restore(&flash, &c, NOW)), expected);
+    let client = Client::new(ORIGINAL);
+    update(&flash, &client, &c, NOW + 120).1.unwrap();
+    assert_eq!(client.checks.get(), 0);
+    assert!(client.bytes.get() > 0);
+    assert_eq!(flash.counters(), counters);
 }

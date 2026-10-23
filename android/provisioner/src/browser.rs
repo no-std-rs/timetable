@@ -1,4 +1,4 @@
-use super::protocol;
+use super::{device_tools, protocol};
 use adb_client::webusb::{ADBWebUSBDevice, WebUSBKey};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
@@ -54,6 +54,87 @@ impl Client {
         })
         .map_err(error)
     }
+    pub async fn battery_report(&mut self) -> Result<String, JsValue> {
+        let battery = self
+            .command("dumpsys battery")
+            .await
+            .map_err(|_| error("Android did not provide battery status"))?;
+        let power = self
+            .command("dumpsys power")
+            .await
+            .unwrap_or_else(|_| "Power report unavailable".into());
+        let charging = self
+            .command(device_tools::CHARGING_REPORT)
+            .await
+            .unwrap_or_else(|_| "Charging nodes unavailable".into());
+        let identity = self.command("id").await.unwrap_or_default();
+        serde_json::to_string(&serde_json::json!({"battery":battery,"power":power,"charging":charging,"identity":identity,"limits":device_tools::limits(&charging)})).map_err(error)
+    }
+    pub async fn set_charge_limit(&mut self, path: String, value: u8) -> Result<u8, JsValue> {
+        let command = device_tools::set_limit(&path, value).map_err(error)?;
+        let actual=self.command(&command).await.map_err(|_|error("Android refused the real charging threshold. Root or vendor support may be required."))?;
+        let actual = actual
+            .trim()
+            .parse::<u8>()
+            .map_err(|_| error("Cannot verify the actual charging threshold"))?;
+        if actual > 100 {
+            return Err(error("Invalid charging threshold returned by Android"));
+        }
+        Ok(actual)
+    }
+    pub async fn apps(&mut self) -> Result<String, JsValue> {
+        serde_json::to_string(&self.app_report(None).await?).map_err(error)
+    }
+    pub async fn set_app_enabled(&mut self, package: String, enabled: bool) -> Result<(), JsValue> {
+        if !device_tools::package_name(&package) {
+            return Err(error("Invalid application identity"));
+        }
+        let report = self.app_report(Some(&package)).await?;
+        let app = report
+            .apps
+            .iter()
+            .find(|a| a.package == package)
+            .ok_or_else(|| error("Application is not installed"))?;
+        let command = device_tools::package_command(app, report.user, enabled).map_err(error)?;
+        self.command(&command).await?;
+        let updated = self.app_report(Some(&package)).await?;
+        if !updated
+            .apps
+            .iter()
+            .any(|a| a.package == package && a.enabled == enabled)
+        {
+            return Err(error(
+                "Android did not confirm the requested application state",
+            ));
+        }
+        Ok(())
+    }
+    pub async fn configure_wifi(
+        &mut self,
+        ssid: String,
+        password: String,
+    ) -> Result<String, JsValue> {
+        device_tools::wifi(&ssid, &password).map_err(error)?;
+        let payload = STANDARD.encode(
+            serde_json::to_vec(&serde_json::json!({"ssid":ssid,"password":password}))
+                .map_err(error)?,
+        );
+        let command = format!(
+            "am broadcast --receiver-foreground -a org.nostdrs.timetable.WIFI -n org.nostdrs.timetable/.ProvisionReceiver --es payload {}",
+            protocol::shell_quote(&payload)
+        );
+        let result = self.command(&command).await.map_err(|_| {
+            error("Android refused Wi-Fi setup; use system settings or device-owner mode")
+        })?;
+        let bytes = device_tools::report(&result).map_err(|_| {
+            error("Wi-Fi setup needs the latest app and permission from the tablet firmware.")
+        })?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(error)?;
+        if value["saved"] != true || value["connection_requested"] != true {
+            return Err(error("Android did not confirm Wi-Fi setup"));
+        }
+        Ok("Wi-Fi saved and connection requested. Check the tablet for connection status.".into())
+    }
     pub async fn provision(
         &mut self,
         apk: js_sys::Uint8Array,
@@ -101,6 +182,16 @@ impl Client {
     }
 }
 impl Client {
+    async fn app_report(&mut self, package: Option<&str>) -> Result<device_tools::Apps, JsValue> {
+        let mut command="am broadcast --receiver-foreground -a org.nostdrs.timetable.APPS -n org.nostdrs.timetable/.ProvisionReceiver".to_string();
+        if let Some(package) = package {
+            command.push_str(" --es package ");
+            command.push_str(&protocol::shell_quote(package));
+        }
+        let result = self.command(&command).await?;
+        let bytes = device_tools::report(&result).map_err(error)?;
+        serde_json::from_slice(&bytes).map_err(error)
+    }
     async fn command(&mut self, command: &str) -> Result<String, JsValue> {
         let device = self.device.as_mut().ok_or_else(|| error("Not connected"))?;
         let mut output = Vec::new();

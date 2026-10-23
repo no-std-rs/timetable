@@ -117,31 +117,37 @@ public final class MainActivity extends Activity {
         busy=true; status=1; board.invalidate();
         nextRefresh=SystemClock.elapsedRealtime()+3*3600*1000L;
         worker.execute(new Runnable() { public void run() {
-            File archive=new File(getFilesDir(),feed+".zip"), temporary=null;
+            final File archive=new File(getFilesDir(),feed+".zip"), metadata=new File(getFilesDir(),feed+".http");
+            final String origin="https://files.mobilitydatabase.org/"+feed+"/latest.zip";
             try {
                 // Cached data is queried and shown before opening any socket.
+                FeedCache.State cachedState=FeedCache.state(archive,metadata,origin);
                 boolean cached=false;
-                if(archive.exists())try{publish(querySettings,archive);cached=true;}catch(IOException invalidCache){ /* Fetch a replacement; keep any validated departure snapshot. */ }
-                if(!force && cached && System.currentTimeMillis()-archive.lastModified()<3*3600*1000L) {
+                if(archive.exists())try{saveAndPublish(querySettings,query(querySettings,archive,cachedState==null?archive.lastModified()/1000:cachedState.checkedAt()));cached=true;}catch(IOException invalidCache){ /* Fetch a replacement; keep any validated departure snapshot. */ }
+                if(!force && cached && cachedState!=null && System.currentTimeMillis()/1000-cachedState.checkedAt()>=0 && System.currentTimeMillis()/1000-cachedState.checkedAt()<3*3600) {
                     finish(querySettings,null);return;
                 }
-                temporary=File.createTempFile("timetable-", ".download", getFilesDir());
-                download(feed,temporary);
-                ByteBuffer result=query(querySettings,temporary);
-                if(destroyed || Thread.currentThread().isInterrupted())throw new IOException("Cancelled");
-                if(!temporary.renameTo(archive))throw new IOException("Cannot save timetable ZIP");
-                saveAndPublish(querySettings,result);
+                long checked=FeedCache.refresh(archive,metadata,origin,cached?cachedState:null,new FeedCache.Transport(){
+                    public void check() throws IOException {if(destroyed || Thread.currentThread().isInterrupted())throw new IOException("Cancelled");}
+                    public HttpURLConnection open(URL url) throws Exception {
+                        check();
+                        if(!"https".equals(url.getProtocol()) || !"files.mobilitydatabase.org".equals(url.getHost()) || url.getPort()!=-1 || url.getUserInfo()!=null)throw new IOException("Unsupported timetable redirect");
+                        HttpsURLConnection request=(HttpsURLConnection)url.openConnection();connection=request;
+                        request.setSSLSocketFactory(TransportTLS.factory(MainActivity.this));return request;
+                    }
+                },new FeedCache.Validate(){public void check(File file,long checkedAt) throws Exception {query(querySettings,file,checkedAt);}});
+                connection=null;
+                saveAndPublish(querySettings,query(querySettings,archive,checked));
                 finish(querySettings,null);
-            } catch(final Exception e) { if(temporary!=null)temporary.delete(); finish(querySettings,e.getMessage()); }
+            } catch(final Exception e) { connection=null; finish(querySettings,e.getMessage()); }
         }});
     }
-    ByteBuffer query(ByteBuffer config,File archive) throws IOException {
+    ByteBuffer query(ByteBuffer config,File archive,long checkedAt) throws IOException {
         ByteBuffer result=ByteBuffer.allocateDirect(16384).order(ByteOrder.LITTLE_ENDIAN);
-        int n=Native.query(config,SettingsStore.mapped(archive),result,System.currentTimeMillis()/1000,archive.lastModified()/1000);
+        int n=Native.query(config,SettingsStore.mapped(archive),result,System.currentTimeMillis()/1000,checkedAt);
         if(n<=0)throw new IOException("Timetable data is unsupported or exceeds the current device limits.");
         result.limit(n);return result;
     }
-    void publish(ByteBuffer config,File archive) throws IOException { saveAndPublish(config,query(config,archive)); }
     File snapshotFile(ByteBuffer config) throws IOException {
         try {
             java.security.MessageDigest digest=java.security.MessageDigest.getInstance("SHA-256");
@@ -163,38 +169,6 @@ public final class MainActivity extends Activity {
         if(error!=null)nextRefresh=SystemClock.elapsedRealtime()+5*60*1000;
         board.invalidate();
     }}); }
-    void download(String feed,File destination) throws Exception {
-        URL url=new URL("https://files.mobilitydatabase.org/"+feed+"/latest.zip");
-        for(int redirects=0;redirects<=5;redirects++) {
-            if(destroyed || Thread.currentThread().isInterrupted())throw new IOException("Cancelled");
-            if(!"https".equals(url.getProtocol()) || !"files.mobilitydatabase.org".equals(url.getHost()))throw new IOException("Unsupported timetable redirect");
-            HttpsURLConnection request=(HttpsURLConnection)url.openConnection();connection=request;
-            request.setSSLSocketFactory(TransportTLS.factory(this));
-            request.setInstanceFollowRedirects(false);request.setConnectTimeout(15000);request.setReadTimeout(30000);
-            request.setRequestProperty("Accept-Encoding","identity");
-            int code=request.getResponseCode();
-            if(code>=300 && code<=399) {String location=request.getHeaderField("Location");request.disconnect();if(location==null)throw new IOException("Invalid redirect");url=new URL(url,location);continue;}
-            try {
-                if(code!=200)throw new IOException("Timetable server returned HTTP "+code);
-                String encoding=request.getHeaderField("Content-Encoding");
-                if(encoding!=null && !"identity".equalsIgnoreCase(encoding))throw new IOException("Unsupported response encoding");
-                long expected=-1;String length=request.getHeaderField("Content-Length");if(length!=null)expected=Long.parseLong(length);
-                if(expected>512L*1024*1024)throw new IOException("Timetable ZIP too large");
-                InputStream in=request.getInputStream();FileOutputStream out=new FileOutputStream(destination);
-                long total=0;
-                try {byte[] bytes=new byte[32768];int n;
-                    while((n=in.read(bytes))!=-1){
-                        if(destroyed || Thread.currentThread().isInterrupted())throw new IOException("Cancelled");
-                        total+=n;if(total>512L*1024*1024)throw new IOException("Timetable ZIP too large");out.write(bytes,0,n);
-                    }
-                    if(expected>=0 && total!=expected)throw new IOException("Truncated timetable download");
-                    out.getFD().sync();
-                } finally {in.close();out.close();}
-                return;
-            } finally {request.disconnect();connection=null;}
-        }
-        throw new IOException("Too many timetable redirects");
-    }
     @Override public boolean onCreateOptionsMenu(Menu menu) {
         menu.add("Refresh timetable");menu.add("Choose Home app");menu.add("Exit kiosk");menu.add("Device capabilities");return true;
     }

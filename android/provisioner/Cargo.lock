@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "adb_client"
 version = "3.2.3"
-source = "git+https://github.com/pawelchcki/adb_client?rev=66ce40c6588f1f103d7db0f9209d7471a0309dd5#66ce40c6588f1f103d7db0f9209d7471a0309dd5"
+source = "git+https://github.com/pawelchcki/adb_client?rev=dc349ffcf50487cfadf5c6286623e15c1b1d2ad9#dc349ffcf50487cfadf5c6286623e15c1b1d2ad9"
 dependencies = [
  "base64",
  "byteorder",
