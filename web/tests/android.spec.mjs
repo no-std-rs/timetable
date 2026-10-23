@@ -332,8 +332,15 @@ test('dangerous installer commands require a fresh session opt-in while ownershi
   await page.locator('#android-disconnect').click();
   await expect(page.locator('#android-connect')).toBeEnabled();
   await expect(page.locator('#android-dangerous')).not.toBeChecked();
+  // Simulate form values restored by the browser before the next connection.
+  await page.evaluate(()=>{
+    document.querySelector('#android-dangerous').checked=true;
+    document.querySelector('#android-root').checked=true;
+  });
   await page.locator('#android-connect').click();
   await expect(page.locator('#android-status')).toContainText('Fire 7');
+  await expect(page.locator('#android-dangerous')).not.toBeChecked();
+  await expect(page.locator('#android-root')).not.toBeChecked();
   await expect(page.locator('#android-danger-controls')).toBeHidden();
   await expect(page.locator('#android-run-command')).toBeDisabled();
 });

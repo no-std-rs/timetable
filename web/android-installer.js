@@ -99,6 +99,8 @@ export class AndroidInstaller {
   }
   async connect() {
     if (!this.module || this.busy || this.client || this.stopping || this.closing) return;
+    // Browser-restored form values must not opt a new USB connection into commands.
+    this.dangerous = false; this.$("dangerous").checked = false; this.$("root").checked = false;
     // Call the picker before the first await to retain the click's activation.
     let selection; try { selection = this.module.request(); } catch(e) { this.message(String(e.message ?? e), {}, true); return; }
     this.busy = true; this.cancelled = false; this.controls(); this.message("Approve USB debugging on the tablet…");
