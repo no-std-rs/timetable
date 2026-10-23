@@ -22,7 +22,13 @@ async function prepare(page, { sdk = 22, fail = false, pending = false, corrupt 
         if(window.adbTest.pending)await new Promise((resolve,reject)=>window.adbTest.reject=reject);
         return JSON.stringify({ installed:true, configured:true, home:home?'choose_on_tablet':'unchanged' });
       }
-      async disconnect() {} free() {}
+      async disconnect() {
+        window.adbTest.disconnects=(window.adbTest.disconnects||0)+1;
+        window.adbTest.activeDisconnects=(window.adbTest.activeDisconnects||0)+1;
+        if(window.adbTest.deferDisconnect)await new Promise(resolve=>(window.adbTest.finishDisconnects??=[]).push(resolve));
+        window.adbTest.activeDisconnects--;
+      }
+      free() { window.adbTest.frees=(window.adbTest.frees||0)+1; if(window.adbTest.activeDisconnects)window.adbTest.earlyFree=true; }
     }
   ` }));
   await page.route("**/android/latest.json", r => r.fulfill({ json: release }));
@@ -74,4 +80,23 @@ test("a signing mismatch never triggers destructive recovery", async ({ page }) 
   await prepare(page, { fail: true }); await page.locator("#android-install").click();
   await expect(page.locator("#android-status")).toContainText("INSTALL_FAILED_UPDATE_INCOMPATIBLE");
   expect(await page.evaluate(() => window.adbTest.calls)).toHaveLength(1);
+});
+
+test("repeated disconnects share cleanup and free the client after it finishes", async ({ page }) => {
+  await prepare(page);
+  await page.evaluate(() => {
+    window.adbTest.deferDisconnect = true;
+    document.querySelector("#android-disconnect").click();
+    document.querySelector("#android-disconnect").click();
+  });
+  try {
+    await expect(page.locator("#android-disconnect")).toBeDisabled();
+    await expect.poll(() => page.evaluate(() => window.adbTest.disconnects)).toBe(1);
+    await expect(page.locator("#android-connect")).toBeDisabled();
+    expect(await page.evaluate(() => window.adbTest.frees || 0)).toBe(0);
+  } finally { await page.evaluate(() => window.adbTest.finishDisconnects?.forEach(resolve => resolve())); }
+  await expect(page.locator("#android-connect")).toBeEnabled();
+  const result = await page.evaluate(() => window.adbTest);
+  expect(result.closed).toBe(1); expect(result.disconnects).toBe(1); expect(result.frees).toBe(1);
+  expect(result.earlyFree).toBeFalsy();
 });

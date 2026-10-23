@@ -26,7 +26,7 @@ async function identity() {
 }
 export class AndroidInstaller {
   constructor(panel, source) {
-    this.panel = panel; this.source = source; this.busy = false; this.client = null; this.raw = null; this.cancelled = false;
+    this.panel = panel; this.source = source; this.busy = false; this.client = null; this.raw = null; this.cancelled = false; this.stopping = false; this.closing = null;
     this.$ = id => panel.querySelector(`#android-${id}`);
     this.message("Open this section to prepare Android setup.");
     panel.addEventListener("toggle", () => { if (panel.open) void this.load(); });
@@ -41,10 +41,11 @@ export class AndroidInstaller {
     this.$("status").textContent = t(key, values); this.$("status").classList.toggle("error", error);
   }
   controls() {
-    this.$("connect").disabled = !this.module || this.busy || !!this.client;
-    this.$("install").disabled = this.busy || !this.client || !supportsTablet(this.caps);
-    this.$("disconnect").disabled = !this.raw;
-    for (const input of this.panel.querySelectorAll("input")) input.disabled = this.busy;
+    const closing = this.stopping || !!this.closing;
+    this.$("connect").disabled = !this.module || this.busy || !!this.client || closing;
+    this.$("install").disabled = this.busy || closing || !this.client || !supportsTablet(this.caps);
+    this.$("disconnect").disabled = !this.raw || closing;
+    for (const input of this.panel.querySelectorAll("input")) input.disabled = this.busy || closing;
   }
   async load() {
     if (this.module || this.loading) return;
@@ -61,7 +62,7 @@ export class AndroidInstaller {
     finally { this.loading = false; this.controls(); }
   }
   async connect() {
-    if (!this.module || this.busy || this.client) return;
+    if (!this.module || this.busy || this.client || this.stopping || this.closing) return;
     // Call the picker before the first await to retain the click's activation.
     let selection; try { selection = this.module.request(); } catch(e) { this.message(String(e.message ?? e), {}, true); return; }
     this.busy = true; this.cancelled = false; this.controls(); this.message("Approve USB debugging on the tablet…");
@@ -76,7 +77,7 @@ export class AndroidInstaller {
     finally { this.busy = false; if (this.cancelled) await this.close(); this.controls(); }
   }
   async install() {
-    if (this.busy || !this.client || !supportsTablet(this.caps)) return;
+    if (this.busy || this.stopping || this.closing || !this.client || !supportsTablet(this.caps)) return;
     let settings, home, owner;
     try {
       settings = tabletSettings(this.source(), { keep_awake: this.$("awake").checked, camera_motion: this.$("motion").checked, idle_seconds: Number(this.$("idle").value), launch_on_boot: this.$("boot").checked });
@@ -97,14 +98,25 @@ export class AndroidInstaller {
     finally { this.download = null; this.busy = false; if (this.cancelled) await this.close(); this.controls(); }
   }
   async stop() {
-    this.cancelled = true; this.download?.abort();
-    // Closing USB interrupts an outstanding ADB read without borrowing Client twice.
-    try { await this.raw?.close(); } catch { /* Already unplugged. */ }
-    if (!this.busy) await this.close();
-    this.message("Android USB disconnected. An installed app and its saved data are kept."); this.controls();
+    if (this.stopping) return;
+    this.stopping = true; this.cancelled = true; this.download?.abort(); this.controls();
+    try {
+      // Closing USB interrupts an outstanding ADB read without borrowing Client twice.
+      try { await this.raw?.close(); } catch { /* Already unplugged. */ }
+      if (!this.busy) await this.close();
+      this.message("Android USB disconnected. An installed app and its saved data are kept.");
+    } finally { this.stopping = false; this.controls(); }
   }
-  async close() {
-    try { await this.client?.disconnect(); } catch { /* Unplugged or cancelled. */ }
-    this.client?.free(); this.client = null; this.raw = null; this.caps = null;
+  close() {
+    if (this.closing) return this.closing;
+    const client = this.client;
+    this.client = null; this.raw = null; this.caps = null;
+    // Cancellation and the operation's finally block share one cleanup. Keep
+    // the WASM client alive until its asynchronous disconnect releases its borrow.
+    this.closing = (async () => {
+      try { await client?.disconnect(); } catch { /* Unplugged or cancelled. */ }
+      finally { client?.free(); }
+    })().finally(() => { this.closing = null; this.controls(); });
+    this.controls(); return this.closing;
   }
 }
