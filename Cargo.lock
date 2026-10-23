@@ -477,6 +477,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "jni-sys"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6377a88cb3910bee9b0fa88d4f42e1d2da8e79915598f65fb0c7ee14c878af2"
+dependencies = [
+ "jni-sys-macros",
+]
+
+[[package]]
+name = "jni-sys-macros"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264"
+dependencies = [
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -894,6 +913,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "timetable-android"
+version = "0.1.0"
+dependencies = [
+ "jni-sys",
+ "timetable-display",
+ "timetable-tablet",
+]
+
+[[package]]
 name = "timetable-display"
 version = "0.1.0"
 dependencies = [
@@ -906,6 +934,19 @@ dependencies = [
  "serde-json-core",
  "stats_alloc",
  "time",
+]
+
+[[package]]
+name = "timetable-tablet"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "embedded-io-async",
+ "gtfs",
+ "heapless 0.9.3",
+ "serde",
+ "serde-json-core",
+ "timetable-display",
 ]
 
 [[package]]

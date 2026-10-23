@@ -1,0 +1,283 @@
+package org.nostdrs.timetable;
+
+import android.Manifest;
+import android.app.*;
+import android.app.admin.DevicePolicyManager;
+import android.content.*;
+import android.content.pm.PackageManager;
+import android.graphics.*;
+import android.os.*;
+import android.text.TextUtils;
+import android.view.*;
+import android.widget.*;
+import org.json.JSONObject;
+import java.io.*;
+import java.net.*;
+import java.nio.*;
+import java.util.Arrays;
+import java.util.concurrent.*;
+import javax.net.ssl.HttpsURLConnection;
+
+/** Android lifecycle, Canvas, storage and HTTPS. Timetable/UI/presence logic is Rust. */
+public final class MainActivity extends Activity {
+    final Handler handler = new Handler(Looper.getMainLooper());
+    final ExecutorService worker = Executors.newSingleThreadExecutor();
+    final ByteBuffer state = ByteBuffer.allocateDirect(64).order(ByteOrder.LITTLE_ENDIAN);
+    volatile ByteBuffer settings;
+    ByteBuffer snapshot;
+    byte[] settingsBytes;
+    JSONObject options;
+    BoardView board;
+    CameraMotion camera;
+    volatile boolean destroyed, busy;
+    volatile HttpsURLConnection connection;
+    int status, battery = -1;
+    boolean plugged, resumed, cameraAsked;
+    long nextRefresh;
+    String problem;
+    final Runnable tick = new Runnable() { public void run() {
+        if (!resumed) return;
+        board.invalidate();
+        if (settings != null && !busy && SystemClock.elapsedRealtime() >= nextRefresh) update(false);
+        handler.postDelayed(this, 1000);
+    }};
+    final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
+        public void onReceive(Context context, Intent intent) {
+            int level=intent.getIntExtra(BatteryManager.EXTRA_LEVEL,-1), scale=intent.getIntExtra(BatteryManager.EXTRA_SCALE,100);
+            battery=level>=0 && scale>0 ? level*100/scale : -1;
+            plugged=intent.getIntExtra(BatteryManager.EXTRA_PLUGGED,0)!=0;
+            if (board != null) board.invalidate();
+        }
+    };
+    @Override public void onCreate(Bundle saved) {
+        super.onCreate(saved);
+        getWindow().getDecorView().setSystemUiVisibility(5894);
+        android.widget.FrameLayout container = new android.widget.FrameLayout(this);
+        board = new BoardView(); container.addView(board);
+        camera = new CameraMotion(this, container);
+        setContentView(container);
+        registerReceiver(batteryReceiver,new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+    }
+    @Override public void onResume() {
+        super.onResume(); resumed=true;
+        loadSettings(); Native.activity(state,SystemClock.elapsedRealtime()); applyDeviceOwner(); startCamera();
+        handler.removeCallbacks(tick); handler.post(tick);
+    }
+    @Override public void onPause() {
+        resumed=false; handler.removeCallbacks(tick); camera.stop(); super.onPause();
+    }
+    @Override public void onDestroy() {
+        destroyed=true; handler.removeCallbacksAndMessages(null); camera.stop();
+        HttpsURLConnection current=connection; if (current!=null) current.disconnect();
+        worker.shutdownNow(); unregisterReceiver(batteryReceiver); super.onDestroy();
+    }
+    void loadSettings() {
+        try {
+            byte[] bytes=SettingsStore.read(SettingsStore.config(this),16384);
+            if (Arrays.equals(bytes,settingsBytes)) return;
+            ByteBuffer candidate=SettingsStore.buffer(bytes);
+            if (Native.validate(candidate)!=1) throw new IOException("Invalid settings");
+            options=new JSONObject(new String(bytes,"UTF-8")); settings=candidate; settingsBytes=bytes;
+            for(int i=0;i<state.capacity();i++)state.put(i,(byte)0);
+            snapshot=null;
+            try { snapshot=SettingsStore.buffer(SettingsStore.read(snapshotFile(settings),16384)); }
+            catch(IOException ignored) { }
+            problem=null; nextRefresh=0;
+        } catch(Exception e) { problem="Configure this tablet over USB from the Timetable website."; }
+    }
+    void applyDeviceOwner() {
+        if (settings==null || getSharedPreferences("platform",0).getBoolean("kioskPaused",false)) return;
+        DevicePolicyManager policy=(DevicePolicyManager)getSystemService(DEVICE_POLICY_SERVICE);
+        if (policy==null || !policy.isDeviceOwnerApp(getPackageName())) return;
+        try {
+            ComponentName admin=new ComponentName(this,AdminReceiver.class);
+            IntentFilter home=new IntentFilter(Intent.ACTION_MAIN);
+            home.addCategory(Intent.CATEGORY_HOME); home.addCategory(Intent.CATEGORY_DEFAULT);
+            policy.addPersistentPreferredActivity(admin,home,new ComponentName(this,MainActivity.class));
+            policy.setLockTaskPackages(admin,new String[]{getPackageName()});
+            if (policy.isLockTaskPermitted(getPackageName()) && !((KeyguardManager)getSystemService(KEYGUARD_SERVICE)).isKeyguardLocked()) startLockTask();
+        } catch(RuntimeException e) { Toast.makeText(this,"Device-owner controls are unavailable on this firmware.",Toast.LENGTH_LONG).show(); }
+    }
+    void startCamera() {
+        if (settings==null || !resumed || !options.optBoolean("camera_motion")) { camera.stop(); return; }
+        if (Build.VERSION.SDK_INT>=23 && checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED) {
+            if (!cameraAsked) { cameraAsked=true; requestPermissions(new String[]{Manifest.permission.CAMERA},31); }
+            return;
+        }
+        camera.start();
+    }
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results) {
+        super.onRequestPermissionsResult(request,permissions,results);
+        if(request==31 && results.length>0 && results[0]==PackageManager.PERMISSION_GRANTED)startCamera();
+    }
+    void update(final boolean force) {
+        if (settings==null || busy) return;
+        final ByteBuffer querySettings=settings;
+        final String feed=options.optString("feed_id");
+        busy=true; status=1; board.invalidate();
+        nextRefresh=SystemClock.elapsedRealtime()+3*3600*1000L;
+        worker.execute(new Runnable() { public void run() {
+            File archive=new File(getFilesDir(),feed+".zip"), temporary=null;
+            try {
+                // Cached data is queried and shown before opening any socket.
+                boolean cached=false;
+                if(archive.exists())try{publish(querySettings,archive);cached=true;}catch(IOException invalidCache){ /* Fetch a replacement; keep any validated departure snapshot. */ }
+                if(!force && cached && System.currentTimeMillis()-archive.lastModified()<3*3600*1000L) {
+                    finish(querySettings,null);return;
+                }
+                temporary=File.createTempFile("timetable-", ".download", getFilesDir());
+                download(feed,temporary);
+                ByteBuffer result=query(querySettings,temporary);
+                if(destroyed || Thread.currentThread().isInterrupted())throw new IOException("Cancelled");
+                if(!temporary.renameTo(archive))throw new IOException("Cannot save timetable ZIP");
+                saveAndPublish(querySettings,result);
+                finish(querySettings,null);
+            } catch(final Exception e) { if(temporary!=null)temporary.delete(); finish(querySettings,e.getMessage()); }
+        }});
+    }
+    ByteBuffer query(ByteBuffer config,File archive) throws IOException {
+        ByteBuffer result=ByteBuffer.allocateDirect(16384).order(ByteOrder.LITTLE_ENDIAN);
+        int n=Native.query(config,SettingsStore.mapped(archive),result,System.currentTimeMillis()/1000,archive.lastModified()/1000);
+        if(n<=0)throw new IOException("Timetable data is unsupported or exceeds the current device limits.");
+        result.limit(n);return result;
+    }
+    void publish(ByteBuffer config,File archive) throws IOException { saveAndPublish(config,query(config,archive)); }
+    File snapshotFile(ByteBuffer config) throws IOException {
+        try {
+            java.security.MessageDigest digest=java.security.MessageDigest.getInstance("SHA-256");
+            ByteBuffer source=config.duplicate(); source.position(0); digest.update(source);
+            StringBuilder name=new StringBuilder("snapshot-");
+            for(byte b:digest.digest())name.append(String.format(java.util.Locale.ROOT,"%02x",b));
+            return new File(getFilesDir(),name.append(".bin").toString());
+        } catch(java.security.NoSuchAlgorithmException e) { throw new IOException(e); }
+    }
+    void saveAndPublish(final ByteBuffer config,final ByteBuffer result) throws IOException {
+        byte[] bytes=new byte[result.limit()];result.position(0);result.get(bytes);result.position(0);
+        SettingsStore.atomic(snapshotFile(config),bytes);
+        handler.post(new Runnable(){public void run(){if(!destroyed && settings==config){snapshot=result;board.invalidate();}}});
+    }
+    void finish(final ByteBuffer config,final String error) { handler.post(new Runnable(){public void run(){
+        if(destroyed)return;busy=false;
+        if(settings!=config){nextRefresh=0;board.invalidate();return;}
+        status=error==null?0:2;problem=error;
+        if(error!=null)nextRefresh=SystemClock.elapsedRealtime()+5*60*1000;
+        board.invalidate();
+    }}); }
+    void download(String feed,File destination) throws Exception {
+        URL url=new URL("https://files.mobilitydatabase.org/"+feed+"/latest.zip");
+        for(int redirects=0;redirects<=5;redirects++) {
+            if(destroyed || Thread.currentThread().isInterrupted())throw new IOException("Cancelled");
+            if(!"https".equals(url.getProtocol()) || !"files.mobilitydatabase.org".equals(url.getHost()))throw new IOException("Unsupported timetable redirect");
+            HttpsURLConnection request=(HttpsURLConnection)url.openConnection();connection=request;
+            request.setSSLSocketFactory(TransportTLS.factory(this));
+            request.setInstanceFollowRedirects(false);request.setConnectTimeout(15000);request.setReadTimeout(30000);
+            request.setRequestProperty("Accept-Encoding","identity");
+            int code=request.getResponseCode();
+            if(code>=300 && code<=399) {String location=request.getHeaderField("Location");request.disconnect();if(location==null)throw new IOException("Invalid redirect");url=new URL(url,location);continue;}
+            try {
+                if(code!=200)throw new IOException("Timetable server returned HTTP "+code);
+                String encoding=request.getHeaderField("Content-Encoding");
+                if(encoding!=null && !"identity".equalsIgnoreCase(encoding))throw new IOException("Unsupported response encoding");
+                long expected=-1;String length=request.getHeaderField("Content-Length");if(length!=null)expected=Long.parseLong(length);
+                if(expected>512L*1024*1024)throw new IOException("Timetable ZIP too large");
+                InputStream in=request.getInputStream();FileOutputStream out=new FileOutputStream(destination);
+                long total=0;
+                try {byte[] bytes=new byte[32768];int n;
+                    while((n=in.read(bytes))!=-1){
+                        if(destroyed || Thread.currentThread().isInterrupted())throw new IOException("Cancelled");
+                        total+=n;if(total>512L*1024*1024)throw new IOException("Timetable ZIP too large");out.write(bytes,0,n);
+                    }
+                    if(expected>=0 && total!=expected)throw new IOException("Truncated timetable download");
+                    out.getFD().sync();
+                } finally {in.close();out.close();}
+                return;
+            } finally {request.disconnect();connection=null;}
+        }
+        throw new IOException("Too many timetable redirects");
+    }
+    @Override public boolean onCreateOptionsMenu(Menu menu) {
+        menu.add("Refresh timetable");menu.add("Choose Home app");menu.add("Exit kiosk");menu.add("Device capabilities");return true;
+    }
+    void showActions() {
+        final String[] actions={"Refresh timetable","Choose Home app","Exit kiosk","Device capabilities"};
+        new AlertDialog.Builder(this).setItems(actions,new DialogInterface.OnClickListener(){
+            public void onClick(DialogInterface dialog,int which){performAction(actions[which]);}
+        }).show();
+    }
+    @Override public boolean onOptionsItemSelected(MenuItem item) {performAction(item.getTitle().toString());return true;}
+    void performAction(String title) {
+        if(title.equals("Refresh timetable"))update(true);
+        else if(title.equals("Choose Home app")) {
+            try {startActivity(new Intent("android.settings.HOME_SETTINGS"));}catch(RuntimeException e){startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME));}
+        } else if(title.equals("Exit kiosk")) {
+            getSharedPreferences("platform",0).edit().putBoolean("kioskPaused",true).apply();
+            try{stopLockTask();}catch(RuntimeException ignored){}
+            DevicePolicyManager policy=(DevicePolicyManager)getSystemService(DEVICE_POLICY_SERVICE);
+            if(policy!=null && policy.isDeviceOwnerApp(getPackageName()))try{
+                ComponentName admin=new ComponentName(this,AdminReceiver.class);
+                policy.setLockTaskPackages(admin,new String[0]);
+                policy.clearPackagePersistentPreferredActivities(admin,getPackageName());
+            }catch(RuntimeException ignored){}
+            startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS));
+        }
+        else if(title.equals("Device capabilities"))new AlertDialog.Builder(this).setTitle("This tablet")
+            .setMessage("Android "+Build.VERSION.RELEASE+" (API "+Build.VERSION.SDK_INT+")\nCamera motion: "+(camera.active?"running locally":"off or unavailable")+
+                "\n80% charging cap: unavailable through standard Android APIs. A supported vendor/root integration or external power controller is required."+
+                (problem==null?"":"\n\n"+problem)).setPositiveButton("OK",null).show();
+    }
+    final class BoardView extends View {
+        final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+        final ByteBuffer frame=ByteBuffer.allocateDirect(32768).order(ByteOrder.LITTLE_ENDIAN);
+        BoardView(){super(MainActivity.this);setFocusable(true);setContentDescription("Timetable departure board");}
+        @Override protected void onDraw(Canvas canvas) {
+            float density=getResources().getDisplayMetrics().density;
+            int width=(int)(getWidth()/density),height=(int)(getHeight()/density);
+            canvas.save();canvas.scale(density,density);
+            if(settings==null) {
+                canvas.drawColor(0xfff5f1e8);paint.setColor(0xff252b28);paint.setTextSize(28);canvas.drawText("Timetable",24,54,paint);
+                paint.setTextSize(15);canvas.drawText("Configure this tablet over USB.",24,90,paint);
+                canvas.drawText("no-std-rs.github.io/timetable",24,116,paint);canvas.restore();return;
+            }
+            int n=Native.render(settings,snapshot,state,frame,width,height,System.currentTimeMillis()/1000,SystemClock.elapsedRealtime(),battery,plugged,camera.active,status);
+            if(n<24){
+                canvas.drawColor(0xfff5f1e8);paint.setColor(0xff252b28);paint.setTextSize(24);
+                canvas.drawText("Timetable",24,54,paint);paint.setTextSize(14);
+                canvas.drawText("Check the tablet’s date and time.",24,90,paint);
+                canvas.drawText("Use ••• to open system settings.",24,116,paint);
+                canvas.drawText("•••",width-48,27,paint);canvas.restore();return;
+            }
+            frame.position(12);int flags=frame.getInt();
+            boolean awake=(flags&1)!=0;
+            boolean wasAwake=(getWindow().getAttributes().flags&WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)!=0;
+            // Updating window attributes on every draw can cause a redraw loop.
+            if(awake!=wasAwake){
+                if(awake)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+            WindowManager.LayoutParams window=getWindow().getAttributes();float brightness=(flags&2)!=0?0.02f:-1f;
+            if(window.screenBrightness!=brightness){window.screenBrightness=brightness;getWindow().setAttributes(window);}
+            frame.position(24);
+            try {while(frame.position()<n) {
+                int opcode=frame.getInt();int x=frame.getInt(),y=frame.getInt();
+                if(opcode==1){int w=frame.getInt(),h=frame.getInt(),r=frame.getInt();paint.setColor(frame.getInt());canvas.drawRoundRect(new RectF(x,y,x+w,y+h),r,r,paint);}
+                else if(opcode==2){int size=frame.getInt(),w=frame.getInt(),color=frame.getInt(),style=frame.getInt(),len=frame.getInt();
+                    if(len<0 || len>4096 || frame.position()+len>n)break;
+                    byte[] bytes=new byte[len];frame.get(bytes);frame.position((frame.position()+3)&~3);
+                    String value=new String(bytes,"UTF-8");paint.setColor(color);paint.setTextSize(size);
+                    paint.setTypeface(Typeface.create((style&3)==1?"serif":(style&3)==2?"monospace":"sans-serif",(style&4)!=0?Typeface.BOLD:Typeface.NORMAL));
+                    android.text.TextPaint tp=new android.text.TextPaint(paint);
+                    CharSequence clipped=TextUtils.ellipsize(value,tp,w,TextUtils.TruncateAt.END);
+                    canvas.drawText(clipped.toString(),x,y,paint);
+                } else break;
+            }} catch(Exception ignored){} canvas.restore();
+        }
+        @Override public boolean onTouchEvent(MotionEvent event) {
+            if(event.getAction()==MotionEvent.ACTION_UP && settings!=null){
+                float d=getResources().getDisplayMetrics().density;
+                int action=Native.tap(settings,state,(int)(getWidth()/d),(int)(getHeight()/d),(int)(event.getX()/d),(int)(event.getY()/d),System.currentTimeMillis()/1000,SystemClock.elapsedRealtime());
+                if(action==1)update(true);else if(action==2)showActions();invalidate();performClick();
+            } return true;
+        }
+        @Override public boolean performClick(){super.performClick();return true;}
+    }
+}

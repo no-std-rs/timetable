@@ -141,6 +141,7 @@ See [adapter details and tests](../web-preview/README.md).
 
 ```sh
 rustup target add wasm32-unknown-unknown --toolchain 1.95.0
+cargo +1.95.0 install wasm-bindgen-cli --version 0.2.129 --locked
 npm --prefix web ci
 npm --prefix web run build
 npm --prefix web test
@@ -164,7 +165,10 @@ host an isolated temporary `FONTCONFIG_FILE` was used to avoid a shared font
 cache issue; CI installs Chromium's normal dependencies.
 
 `tools/assemble-installer.py` produces `dist/installer/`, including the exact
-firmware and catalogue. Main builds publish that directory to Pages; PRs retain
+firmware, catalogue, Android APK and browser ADB transport. For local Android
+setup, [build the APK](../android/README.md) first. The Android panel shares the
+network and groups above and uses the tablet’s existing Wi-Fi; its power, Home
+and device-owner options are separate from ESP32 installation. Main builds publish that directory to Pages; PRs retain
 it as an Actions artifact. See [firmware instructions](../firmware/README.md).
 
 References: [ESP Web Tools](https://esphome.github.io/esp-web-tools/),

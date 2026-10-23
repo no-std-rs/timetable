@@ -134,6 +134,30 @@
       </section>
     </form>
 
+    <details id="android-panel" class="card android-card">
+      <summary>Give an old Android tablet a new timetable.</summary>
+      <p>Use the network, lines and groups above. Android 5.0 or newer · ARM tablets, including Fire 7 from 2015. The tablet uses its own Wi-Fi connection.</p>
+      <p class="fine-print">Enable Developer options and USB debugging on the tablet. Close other ADB tools before connecting. Approve the computer on the tablet when asked.</p>
+      <div class="android-options">
+        <label><input id="android-awake" type="checkbox" checked> Keep the screen on while the app is visible</label>
+        <label><input id="android-motion" type="checkbox"> Dim when the camera sees no movement</label>
+        <label>Dim after (seconds)<input id="android-idle" type="number" min="30" max="3600" value="120"></label>
+        <p class="fine-print">Motion dimming uses the front camera locally, about once a second. No images are saved or sent. It detects movement, not people, and dims the screen rather than putting the tablet to sleep. Camera permission is optional.</p>
+        <label><input id="android-boot" type="checkbox"> Open after reboot when Android allows it</label>
+        <label><input id="android-home" type="checkbox"> Make Timetable the Home app</label>
+        <p class="fine-print">Some Fire OS versions block changing Home. Setup opens the tablet’s Home settings when automatic selection is unavailable.</p>
+        <details><summary>Dedicated tablet controls</summary>
+          <label><input id="android-owner" type="checkbox"> Set Timetable as device owner and pin the app</label>
+          <p class="fine-print">Only for a dedicated tablet without accounts or an existing device owner. Android may refuse. Setup never resets the tablet. Use the app’s ••• menu to exit kiosk mode and open system settings.</p>
+        </details>
+        <p class="fine-print">An 80% charging cap needs support from the tablet, root access, or an external charging controller. This app cannot set a charging cap through standard Android controls.</p>
+      </div>
+      <div class="log-actions"><button type="button" id="android-connect" class="button" disabled>Connect Android tablet</button><button type="button" id="android-install" class="button primary" disabled>Install and configure</button><button type="button" id="android-disconnect" class="text-button" disabled>Disconnect / stop</button></div>
+      <p id="android-status" role="status"></p>
+      <p id="android-signing" class="fine-print" hidden>This is a development build. Updating an earlier installation requires the same signing key; setup keeps your data if Android refuses an update.</p>
+      <a id="android-download" class="quiet-link" hidden download="timetable.apk">Download Android app ↗</a>
+    </details>
+
     <section class="aftercare" aria-labelledby="after-title"><span class="little-seal" aria-hidden="true">+</span><div><h2 id="after-title">Less checking. More going.</h2><p>Swipe to change group. Tap the heading to see them all. Hold the screen to add a line, choose its stop or adjust your walk.</p><p class="fine-print">Times are scheduled, rather than live vehicle predictions. “Walk est.” assumes your walking time varies uniformly within the range you set; it isn’t a measured chance of the vehicle arriving on time. Conditional boarding services are marked on the device.</p></div></section>
   </main>
   <footer class="site-footer wrap"><span class="wordmark small">timetable.</span><span>Porcelain, a little gold, a little urgency.</span><a class="quiet-link" href="https://github.com/no-std-rs/timetable">Source &amp; build notes ↗</a></footer>

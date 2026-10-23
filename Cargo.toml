@@ -1,4 +1,4 @@
 [workspace]
-members = ["gtfs", "display", "web-preview"]
+members = ["gtfs", "display", "web-preview", "tablet", "android/native"]
 exclude = ["checks/ram", "firmware"]
 resolver = "3"

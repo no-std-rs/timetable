@@ -9,7 +9,7 @@ http.createServer(async (req, res) => {
   try {
     const pathname = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
     const name = pathname === "/" ? "index.html" : pathname.slice(1);
-    const filename = ["catalog.json", "feeds.json"].includes(name) ? path.join(root, "catalog", name) : ["installer.js", "device-preview.wasm"].includes(name) ? path.join(web, "dist", name) : path.resolve(web, name);
+    const filename = name.startsWith("android/") ? path.resolve(root, "android/dist", name.slice(8)) : name.startsWith("android-adb/") ? path.resolve(web, "dist", name) : ["catalog.json", "feeds.json"].includes(name) ? path.join(root, "catalog", name) : ["installer.js", "device-preview.wasm"].includes(name) ? path.join(web, "dist", name) : path.resolve(web, name);
     if (!filename.startsWith(root + path.sep)) throw new Error("Invalid path");
     let data;
     try {

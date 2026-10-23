@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/config.test.mjs tests/catalog.test.mjs tests/settings-store.test.mjs tests/serial-logs.test.mjs tests/i18n.test.mjs tests/device-preview.test.mjs tests/world.test.mjs",
+    "test": "node --test tests/config.test.mjs tests/catalog.test.mjs tests/settings-store.test.mjs tests/serial-logs.test.mjs tests/i18n.test.mjs tests/device-preview.test.mjs tests/world.test.mjs tests/android.test.mjs",
     "test:browser": "playwright test",
-    "build": "sh ../tools/build-web-preview.sh && esbuild src/installer.js --bundle --format=esm --outfile=dist/installer.js"
+    "build": "sh ../tools/build-web-preview.sh && sh ../tools/build-web-adb.sh && esbuild src/installer.js --bundle --format=esm --outfile=dist/installer.js"
   },
   "dependencies": {
     "esp-web-tools": "10.4.0"

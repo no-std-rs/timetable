@@ -137,7 +137,8 @@ struct Service {
     removed: u8,
 }
 
-pub struct Builder {
+/// Builder with a caller-owned timezone table (for native tablet settings).
+pub struct ZonedBuilder<'zone> {
     services: Vec<Service, MAX_SERVICES>,
     trips: Vec<Trip, MAX_TRIPS>,
     trip_ids: Vec<u8, TRIP_ID_BYTES>,
@@ -148,7 +149,7 @@ pub struct Builder {
     pub dates: [Date; 3],
     pub now: i64,
     pub manifest: Option<zip::Manifest>,
-    pub zone: clock::Zone<'static>,
+    pub zone: clock::Zone<'zone>,
 }
 
 fn service<'a>(
@@ -197,7 +198,10 @@ pub fn route_matches(route: gtfs::Route<'_>, pick: &crate::config::Pick) -> bool
             && (route.short_name.is_empty() || display_label::<8>(route.short_name) == pick.line)
 }
 
-impl Builder {
+/// The embedded builder retains its original static-timezone API.
+pub type Builder = ZonedBuilder<'static>;
+
+impl<'zone> ZonedBuilder<'zone> {
     pub fn new(today: Date) -> Self {
         Self {
             services: Vec::new(),

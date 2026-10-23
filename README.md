@@ -18,6 +18,12 @@ porcelain, gold and chilli-red installer. Its interactive little screen runs
 the same Rust interface through [WebAssembly](web-preview/), with visibly mocked
 Wi-Fi/NTP and sample departures.
 
+The [Android tablet app](android/) reuses the same Rust timetable with a responsive
+native layout and browser WebUSB/ADB provisioning. It targets Android 5.0+ ARM
+tablets, including older Fire 7 models. A JDK and a small set of pinned standalone
+tools build the APK without an SDK/NDK installation; see its build and device-policy
+notes before using Home, kiosk, or optional camera motion dimming.
+
 The [`gtfs`](gtfs/) crate streams GTFS ZIP archives, lists routes and stops, and
 filters departures with caller-owned buffers. Poznań is the first verified
 provider, with MobilityDatabase range requests and a direct official-source
@@ -48,6 +54,7 @@ rustup target add riscv32imac-unknown-none-elf
 cargo check -p gtfs --lib --locked --target riscv32imac-unknown-none-elf
 cargo check -p timetable-display --lib --locked --target riscv32imac-unknown-none-elf
 cargo check -p timetable-web-preview --lib --locked --target riscv32imac-unknown-none-elf
+cargo check -p timetable-tablet --lib --locked --target riscv32imac-unknown-none-elf
 cargo fmt --manifest-path checks/ram/Cargo.toml --check
 python3 checks/check_ram.py
 cargo run -p gtfs --release --example bench_stream -- gtfs/tests/fixtures/gtfs.zip 4 20261017 S1 1
