@@ -37,6 +37,7 @@ public final class ProvisionReceiver extends BroadcastReceiver {
             JSONObject settings = new JSONObject(new String(bytes, "UTF-8"));
             SettingsStore.atomic(SettingsStore.config(context), bytes);
             context.getSharedPreferences("platform", 0).edit()
+                .remove("rotation") // A fresh USB configuration supplies the new default.
                 .putBoolean("kioskPaused",false)
                 .putBoolean("boot", settings.getBoolean("launch_on_boot"))
                 .putBoolean("camera_motion", settings.getBoolean("camera_motion")).apply();

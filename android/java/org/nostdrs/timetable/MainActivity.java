@@ -5,6 +5,7 @@ import android.app.*;
 import android.app.admin.DevicePolicyManager;
 import android.content.*;
 import android.content.pm.PackageManager;
+import android.content.pm.ActivityInfo;
 import android.graphics.*;
 import android.os.*;
 import android.text.TextUtils;
@@ -60,7 +61,7 @@ public final class MainActivity extends Activity {
     }
     @Override public void onResume() {
         super.onResume(); resumed=true;
-        loadSettings(); Native.activity(state,SystemClock.elapsedRealtime()); applyDeviceOwner(); startCamera();
+        loadSettings(); applyRotation(); Native.activity(state,SystemClock.elapsedRealtime()); applyDeviceOwner(); startCamera();
         handler.removeCallbacks(tick); handler.post(tick);
     }
     @Override public void onPause() {
@@ -97,6 +98,33 @@ public final class MainActivity extends Activity {
             policy.setLockTaskPackages(admin,new String[]{getPackageName()});
             if (policy.isLockTaskPermitted(getPackageName()) && !((KeyguardManager)getSystemService(KEYGUARD_SERVICE)).isKeyguardLocked()) startLockTask();
         } catch(RuntimeException e) { Toast.makeText(this,"Device-owner controls are unavailable on this firmware.",Toast.LENGTH_LONG).show(); }
+    }
+    static final String[] ROTATIONS={"system","portrait","landscape","reverse_portrait","reverse_landscape"};
+    static final String[] ROTATION_LABELS={"Follow Android settings","Portrait","Landscape","Portrait upside down","Landscape upside down"};
+    static final int[] ORIENTATIONS={ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+        ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT,ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE};
+    int rotationIndex() {
+        String configured=options==null?"system":options.optString("rotation","system");
+        String value=getSharedPreferences("platform",0).getString("rotation",configured);
+        for(int i=0;i<ROTATIONS.length;i++)if(ROTATIONS[i].equals(value))return i;
+        return 0;
+    }
+    void applyRotation() { setRequestedOrientation(ORIENTATIONS[rotationIndex()]); }
+    void showSettings() {
+        new AlertDialog.Builder(this).setTitle("Screen rotation")
+            .setSingleChoiceItems(ROTATION_LABELS,rotationIndex(),new DialogInterface.OnClickListener(){
+                public void onClick(DialogInterface dialog,int which){
+                    // Rotation is platform state: keep settings/snapshot identities,
+                    // selected group and the running query intact.
+                    getSharedPreferences("platform",0).edit().putString("rotation",ROTATIONS[which]).apply();
+                    applyRotation();board.invalidate();dialog.dismiss();
+                }
+            }).setNegativeButton("Close",null)
+            .setNeutralButton("Android settings",new DialogInterface.OnClickListener(){public void onClick(DialogInterface dialog,int which){
+                try{startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS));}
+                catch(RuntimeException e){Toast.makeText(MainActivity.this,"Android settings are unavailable.",Toast.LENGTH_LONG).show();}
+            }})
+            .setPositiveButton("Device info",new DialogInterface.OnClickListener(){public void onClick(DialogInterface dialog,int which){performAction("Device capabilities");}}).show();
     }
     void startCamera() {
         if (settings==null || !resumed || !options.optBoolean("camera_motion")) { camera.stop(); return; }
@@ -170,10 +198,23 @@ public final class MainActivity extends Activity {
         board.invalidate();
     }}); }
     @Override public boolean onCreateOptionsMenu(Menu menu) {
-        menu.add("Refresh timetable");menu.add("Choose Home app");menu.add("Exit kiosk");menu.add("Device capabilities");return true;
+        return true;
+    }
+    @Override public boolean onPrepareOptionsMenu(Menu menu) {
+        menu.clear();
+        for(String action:actions())menu.add(action);return true;
+    }
+    boolean isPinned() { return ((ActivityManager)getSystemService(ACTIVITY_SERVICE)).isInLockTaskMode(); }
+    boolean ownerKioskActive() {
+        DevicePolicyManager policy=(DevicePolicyManager)getSystemService(DEVICE_POLICY_SERVICE);
+        return settings!=null && !getSharedPreferences("platform",0).getBoolean("kioskPaused",false)
+            && policy!=null && policy.isDeviceOwnerApp(getPackageName());
+    }
+    String[] actions() {
+        return new String[]{"Refresh timetable","Settings","Choose Home app",isPinned() || ownerKioskActive()?"Exit kiosk":"Pin app"};
     }
     void showActions() {
-        final String[] actions={"Refresh timetable","Choose Home app","Exit kiosk","Device capabilities"};
+        final String[] actions=actions();
         new AlertDialog.Builder(this).setItems(actions,new DialogInterface.OnClickListener(){
             public void onClick(DialogInterface dialog,int which){performAction(actions[which]);}
         }).show();
@@ -181,6 +222,10 @@ public final class MainActivity extends Activity {
     @Override public boolean onOptionsItemSelected(MenuItem item) {performAction(item.getTitle().toString());return true;}
     void performAction(String title) {
         if(title.equals("Refresh timetable"))update(true);
+        else if(title.equals("Settings"))showSettings();
+        else if(title.equals("Pin app")) {
+            try{startLockTask();}catch(RuntimeException e){Toast.makeText(this,"Screen pinning is unavailable on this tablet.",Toast.LENGTH_LONG).show();}
+        }
         else if(title.equals("Choose Home app")) {
             try {startActivity(new Intent("android.settings.HOME_SETTINGS"));}catch(RuntimeException e){startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME));}
         } else if(title.equals("Exit kiosk")) {

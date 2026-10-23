@@ -16,6 +16,17 @@ pub const FRAME_BYTES: usize = 32768;
 pub const STATE_BYTES: usize = 64;
 pub const SNAPSHOT_BYTES: usize = 16384;
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rotation {
+    #[default]
+    System,
+    Portrait,
+    Landscape,
+    ReversePortrait,
+    ReverseLandscape,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -28,6 +39,8 @@ pub struct Settings {
     pub camera_motion: bool,
     pub idle_seconds: u16,
     pub launch_on_boot: bool,
+    #[serde(default)]
+    pub rotation: Rotation,
 }
 impl Settings {
     pub fn decode(bytes: &[u8]) -> Result<Self, &'static str> {

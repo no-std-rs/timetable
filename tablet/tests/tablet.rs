@@ -1,5 +1,5 @@
 use timetable_display::{App, Departure};
-use timetable_tablet::{DisplayList, Settings, State, board, feed, motion, snapshot};
+use timetable_tablet::{DisplayList, Rotation, Settings, State, board, feed, motion, snapshot};
 const SETTINGS: &[u8] = include_bytes!("fixtures/settings.json");
 const NOW: i64 = 1792216800; // 2026-10-17 06:00 UTC / 08:00 fixed fixture zone.
 
@@ -18,6 +18,29 @@ fn settings_reject_bad_versions_and_unknown_fields() {
         1,
     );
     assert!(Settings::decode(changed.as_bytes()).is_err());
+}
+#[test]
+fn rotation_accepts_old_settings_and_all_display_directions() {
+    assert_eq!(
+        Settings::decode(SETTINGS).unwrap().rotation,
+        Rotation::System
+    );
+    let original = std::str::from_utf8(SETTINGS).unwrap();
+    for (name, expected) in [
+        ("system", Rotation::System),
+        ("portrait", Rotation::Portrait),
+        ("landscape", Rotation::Landscape),
+        ("reverse_portrait", Rotation::ReversePortrait),
+        ("reverse_landscape", Rotation::ReverseLandscape),
+    ] {
+        let changed = original.replacen('{', &format!("{{\"rotation\":\"{name}\","), 1);
+        assert_eq!(
+            Settings::decode(changed.as_bytes()).unwrap().rotation,
+            expected
+        );
+    }
+    let invalid = original.replacen('{', "{\"rotation\":\"sideways\",", 1);
+    assert!(Settings::decode(invalid.as_bytes()).is_err());
 }
 fn populated() -> App {
     let mut app = App::default();

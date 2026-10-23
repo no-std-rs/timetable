@@ -139,20 +139,26 @@
       <p>Use the network, lines and groups above. Android 5.0 or newer · ARM tablets, including Fire 7 from 2015. The tablet uses its own Wi-Fi connection.</p>
       <p class="fine-print">Enable Developer options and USB debugging on the tablet. Close other ADB tools before connecting. Approve the computer on the tablet when asked.</p>
       <div class="android-options">
-        <label><input id="android-wifi" type="checkbox"> Configure tablet Wi-Fi using the name and password above</label>
-        <p class="fine-print">Optional. Wi-Fi credentials go directly over USB to the app. Android or Fire OS may restrict network changes; setup reports refusals.</p>
         <label><input id="android-awake" type="checkbox" checked> Keep the screen on while the app is visible</label>
+        <label>Screen rotation<select id="android-rotation"><option value="system">Follow Android settings</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option><option value="reverse_portrait">Portrait upside down</option><option value="reverse_landscape">Landscape upside down</option></select></label>
+        <details id="android-display-options"><summary>Motion dimming and startup</summary>
         <label><input id="android-motion" type="checkbox"> Dim when the camera sees no movement</label>
+        <div id="android-dimming" hidden>
         <label>Dim after (seconds)<input id="android-idle" type="number" min="30" max="3600" value="120"></label>
         <p class="fine-print">Motion dimming uses the front camera locally, about once a second. No images are saved or sent. It detects movement, not people, and dims the screen rather than putting the tablet to sleep. Camera permission is optional.</p>
+        </div>
         <label><input id="android-boot" type="checkbox"> Open after reboot when Android allows it</label>
         <label><input id="android-home" type="checkbox"> Make Timetable the Home app</label>
         <p class="fine-print">Some Fire OS versions block changing Home. Setup opens the tablet’s Home settings when automatic selection is unavailable.</p>
+        </details>
+        <details id="android-network-options"><summary>Configure tablet Wi-Fi</summary>
+          <label><input id="android-wifi" type="checkbox"> Configure tablet Wi-Fi using the name and password above</label>
+          <p class="fine-print">Optional. Wi-Fi credentials go directly over USB to the app. Android or Fire OS may restrict network changes; setup reports refusals.</p>
+        </details>
         <details><summary>Dedicated tablet controls</summary>
           <label><input id="android-owner" type="checkbox"> Set Timetable as device owner and pin the app</label>
           <p class="fine-print">Only for a dedicated tablet without accounts or an existing device owner. Android may refuse. Setup never resets the tablet. Use the app’s ••• menu to exit kiosk mode and open system settings.</p>
         </details>
-        <p class="fine-print">An 80% charging cap needs support from the tablet, root access, or an external charging controller. This app cannot set a charging cap through standard Android controls.</p>
       </div>
       <div class="log-actions"><button type="button" id="android-connect" class="button" disabled>Connect Android tablet</button><button type="button" id="android-install" class="button primary" disabled>Install and configure</button><button type="button" id="android-disconnect" class="text-button" disabled>Disconnect / stop</button></div>
       <p id="android-status" role="status"></p>
@@ -161,7 +167,7 @@
       <button type="button" id="android-forget-key" class="text-button">Forget ADB key</button>
       <details id="android-adb" class="download-details">
         <summary>Advanced ADB controls</summary>
-        <p>Run commands directly on the connected tablet. Root uses an existing su installation and may ask for approval on the tablet.</p>
+        <p>ADB commands run without root by default. Root uses an existing su installation and may ask for approval on the tablet.</p>
         <button type="button" id="android-policy" class="text-button" disabled>Inspect device and profile owners</button>
         <label><input id="android-dangerous" type="checkbox" autocomplete="off"> Enable dangerous ADB commands</label>
         <p class="fine-print">Commands can change security settings or erase tablet data. Review every command, including AI-generated commands, before running it.</p>
@@ -179,7 +185,7 @@
       </details>
       <details id="android-tools" class="download-details">
         <summary>Battery and background apps</summary>
-        <p>Diagnostics stay on this page. Charging controls appear only when Android exposes a real writable battery threshold.</p>
+        <p>Read battery status and disable individual background apps without root. Android may restrict changes. Charging controls appear only when Android exposes a real writable battery threshold.</p>
         <div class="log-actions"><button type="button" id="android-battery" class="text-button" disabled>Read battery diagnostics</button><button type="button" id="android-save-report" class="text-button" disabled>Save diagnostics</button></div>
         <pre id="android-battery-output" class="log-output" tabindex="0" hidden></pre>
         <div id="android-charge-controls" hidden><label>Charging threshold (%)<input id="android-charge-percent" type="number" min="50" max="100" value="80"></label><label>Battery control<select id="android-charge-node"></select></label><button type="button" id="android-charge-apply" class="text-button" disabled>Set real charging threshold</button></div>

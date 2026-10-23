@@ -1,5 +1,14 @@
 // English message keys keep validation modules independent of browser state.
 export const polish = {
+  "Screen rotation": "Obrót ekranu",
+  "Follow Android settings": "Zgodnie z ustawieniami Androida",
+  "Portrait upside down": "Pionowo do góry nogami",
+  "Landscape upside down": "Poziomo do góry nogami",
+  "Motion dimming and startup": "Przyciemnianie ruchem i uruchamianie",
+  "Configure tablet Wi-Fi": "Skonfiguruj Wi-Fi tabletu",
+  "Invalid screen rotation.": "Nieprawidłowy obrót ekranu.",
+  "ADB commands run without root by default. Root uses an existing su installation and may ask for approval on the tablet.": "Polecenia ADB domyślnie działają bez roota. Tryb root korzysta z istniejącego su i może wymagać zatwierdzenia na tablecie.",
+  "Read battery status and disable individual background apps without root. Android may restrict changes. Charging controls appear only when Android exposes a real writable battery threshold.": "Sprawdzaj baterię i wyłączaj wybrane aplikacje w tle bez roota. Android może ograniczać zmiany. Sterowanie ładowaniem pojawia się tylko wtedy, gdy Android udostępnia rzeczywisty próg z możliwością zapisu.",
   "Replacing an existing owner requires Android 7.0 or newer. Owner inspection and the command console remain available.": "Zastąpienie obecnego właściciela wymaga Androida 7.0 lub nowszego. Nadal możesz sprawdzić właściciela i używać konsoli poleceń.",
   "Enable dangerous ADB commands": "Włącz niebezpieczne polecenia ADB",
   "Commands can change security settings or erase tablet data. Review every command, including AI-generated commands, before running it.": "Polecenia mogą zmienić ustawienia zabezpieczeń lub usunąć dane tabletu. Sprawdź każde polecenie, także wygenerowane przez AI, przed jego wykonaniem.",
