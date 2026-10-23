@@ -80,10 +80,37 @@ test("Android provisioning shares groups without Wi-Fi and keeps privileged opti
   expect(result.calls[0].settings.camera_motion).toBe(false);
   expect(result.calls[0].home).toBe(false); expect(result.calls[0].owner).toBe(false);
   expect(result.calls[0].settings.wifi_ssid).toBeUndefined();
+  await page.locator("#android-display-options > summary").click();
   await page.locator("#android-home").check(); await page.locator("#android-install").click();
   await expect(page.locator("#android-status")).toContainText("Choose Timetable as Home");
   expect(await page.evaluate(() => window.adbTest.calls[1].home)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+test("unused idle input cannot block setup; motion checks its timer and keep-awake dependency", async ({ page }) => {
+  await prepare(page);
+  await expect(page.locator("#android-idle")).toBeHidden();
+  await page.locator("#android-idle").evaluate(input => { input.value = ""; });
+  await page.locator("#android-rotation").selectOption("reverse_landscape");
+  await page.locator("#android-install").click();
+  await expect(page.locator("#android-status")).toContainText("ready on your tablet");
+  expect(await page.evaluate(() => window.adbTest.calls[0].settings)).toMatchObject({ idle_seconds: 120, camera_motion: false, rotation: "reverse_landscape" });
+  await page.locator("#android-display-options > summary").click();
+  await page.locator("#android-motion").check();
+  await expect(page.locator("#android-idle")).toBeVisible();
+  await page.locator("#android-idle").fill("29");
+  await page.locator("#android-install").click();
+  await expect(page.locator("#android-status")).toContainText("between 30 and 3600");
+  expect(await page.evaluate(() => window.adbTest.calls)).toHaveLength(1);
+  await page.locator("#android-idle").fill("30");
+  await page.locator("#android-install").click();
+  await expect(page.locator("#android-status")).toContainText("ready on your tablet");
+  expect(await page.evaluate(() => window.adbTest.calls[1].settings)).toMatchObject({ idle_seconds: 30, camera_motion: true });
+  await page.locator("#android-awake").uncheck();
+  await expect(page.locator("#android-motion")).toBeDisabled();
+  await expect(page.locator("#android-idle")).toBeHidden();
+  await page.locator("#android-install").click();
+  await expect(page.locator("#android-status")).toContainText("ready on your tablet");
+  expect(await page.evaluate(() => window.adbTest.calls[2].settings)).toMatchObject({ keep_awake: false, camera_motion: false, idle_seconds: 120 });
 });
 test("old Android is rejected before transfer", async ({ page }) => {
   await prepare(page, { sdk: 19 }); await expect(page.locator("#android-install")).toBeDisabled();
@@ -160,6 +187,7 @@ test("Wi-Fi is explicitly opted in and credentials travel only through ADB", asy
   const requests=[];page.on('request',r=>requests.push(r.url()+(r.postData()??'')));
   await prepare(page);await expect(page.locator('#android-wifi')).not.toBeChecked();
   await page.locator('#wifi-ssid').fill("House's Wi-Fi");await page.locator('#wifi-password').fill('secret-56789');
+  await page.locator('#android-network-options > summary').click();
   await page.locator('#android-wifi').check();await page.locator('#android-install').click();
   await expect(page.locator('#android-wifi-status')).toContainText('Check the connection on the tablet');
   const result=await page.evaluate(()=>window.adbTest);expect(result.wifi).toEqual([{ssid:"House's Wi-Fi",password:'secret-56789'}]);

@@ -10,14 +10,22 @@ test("Android shares group validation and includes real zone transitions without
   assert.equal(tabletSettings({ ...source, feed_id: "city_bus-gtfs" }, options).feed_id, "city_bus-gtfs");
   assert.deepEqual(result.groups, fixture.groups); assert.notEqual(result.groups, source.groups);
   assert.ok(result.zone.length > 8 && result.zone.length <= 404);
-  assert.deepEqual(Object.keys(result).sort(), Object.keys(fixture).sort());
+  assert.deepEqual(Object.keys(result).sort(), [...Object.keys(fixture), "rotation"].sort());
+  assert.equal(result.rotation, "system");
   assert.ok(!JSON.stringify(result).includes("never send this"));
   assert.throws(() => tabletSettings({ ...source, timezone: null }, options));
   assert.throws(() => tabletSettings({ ...source, groups: [{ ...fixture.groups[0], picks: [] }] }, options));
   assert.throws(() => tabletSettings(source, { ...options, keep_awake: false, camera_motion: true }));
-  assert.throws(() => tabletSettings(source, { ...options, idle_seconds: 29 }));
+  assert.throws(() => tabletSettings(source, { ...options, camera_motion: true, idle_seconds: 29 }));
   const bad = structuredClone(source); bad.groups[0].picks[0].walk = 100;
   assert.throws(() => tabletSettings(bad, options));
+});
+test("unused dimming does not block installation; enabled dimming and rotation are validated", () => {
+  for (const idle_seconds of [0, 29, NaN, 3601]) assert.equal(tabletSettings(source, { ...options, idle_seconds }).idle_seconds, 120);
+  for (const idle_seconds of [0, 29, NaN, 3601, 120.5]) assert.throws(() => tabletSettings(source, { ...options, camera_motion: true, idle_seconds }));
+  for (const idle_seconds of [30, 3600]) assert.equal(tabletSettings(source, { ...options, camera_motion: true, idle_seconds }).idle_seconds, idle_seconds);
+  for (const rotation of ["system", "portrait", "landscape", "reverse_portrait", "reverse_landscape"]) assert.equal(tabletSettings(source, { ...options, rotation }).rotation, rotation);
+  assert.throws(() => tabletSettings(source, { ...options, rotation: "sideways" }));
 });
 test("APK metadata and tablet capability gate reject unsupported installation targets", () => {
   const release = { version: 1, package: "org.nostdrs.timetable", min_sdk: 21, abis: ["armeabi-v7a", "arm64-v8a"], file: "timetable.apk", size: 300000, sha256: "a".repeat(64), certificate_sha256: "b".repeat(64), signing: "development" };

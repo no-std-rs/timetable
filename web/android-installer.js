@@ -9,10 +9,13 @@ export function tabletSettings(source, options, now = Date.now()) {
   if (!source.timezone || !validFeedId(source.feed_id)) throw new Error("Choose a transport network first.");
   const { groups, automatic } = validateConfig({ wifi_ssid: "Android", wifi_password: "", groups: structuredClone(source.groups), automatic: source.automatic });
   if (!groups.some(g => g.picks.length)) throw new Error("Add a line and stop first.");
-  if (!Number.isInteger(options.idle_seconds) || options.idle_seconds < 30 || options.idle_seconds > 3600) throw new Error("Idle time must be between 30 and 3600 seconds.");
   for (const key of ["keep_awake", "camera_motion", "launch_on_boot"]) if (typeof options[key] !== "boolean") throw new Error("Invalid tablet options.");
   if (options.camera_motion && !options.keep_awake) throw new Error("Keep the screen on to use motion dimming.");
-  return { version: 1, feed_id: source.feed_id, zone: [...zoneBytes(source.timezone, now)], automatic, groups, ...options };
+  const idle_seconds = options.camera_motion ? options.idle_seconds : 120;
+  if (!Number.isInteger(idle_seconds) || idle_seconds < 30 || idle_seconds > 3600) throw new Error("Idle time must be between 30 and 3600 seconds.");
+  const rotation = options.rotation ?? "system";
+  if (!["system", "portrait", "landscape", "reverse_portrait", "reverse_landscape"].includes(rotation)) throw new Error("Invalid screen rotation.");
+  return { version: 1, feed_id: source.feed_id, zone: [...zoneBytes(source.timezone, now)], automatic, groups, ...options, idle_seconds, rotation };
 }
 export function tabletWifi(source) {
   validateConfig({ wifi_ssid: source.wifi_ssid, wifi_password: source.wifi_password, automatic: source.automatic, groups: source.groups });
@@ -54,8 +57,10 @@ export class AndroidInstaller {
     this.$("show-system").addEventListener("change", () => { this.appSelection.clear(); this.renderApps(); });
     this.$("charge-apply").addEventListener("click", () => void this.changeLimit());
     this.$("install").addEventListener("click", () => void this.install());
+    for (const id of ["awake", "motion"]) this.$(id).addEventListener("change", () => this.controls());
     document.addEventListener("languagechange", () => { this.message(this.messageKey, this.messageValues, this.messageError); this.setKeyStatus(this.keyStatus); this.renderApps(); });
     navigator.usb?.addEventListener("disconnect", event => { if (event.device === this.raw) void this.stop(); });
+    this.controls();
   }
   message(key, values = {}, error = false) {
     this.messageKey = key; this.messageValues = values; this.messageError = error;
@@ -85,6 +90,10 @@ export class AndroidInstaller {
     this.$("charge-apply").disabled = this.busy || closing || !this.client || !this.diagnostics?.limits?.some(a => a.writable);
     this.$("charge-node").disabled = this.busy || closing || !this.client;
     for (const input of this.panel.querySelectorAll("input")) input.disabled = this.busy || closing || input.dataset.protected === "true";
+    this.$("motion").disabled = this.busy || closing || !this.$("awake").checked;
+    this.$("dimming").hidden = !this.$("awake").checked || !this.$("motion").checked;
+    this.$("idle").disabled = this.busy || closing || this.$("dimming").hidden;
+    this.$("rotation").disabled = this.busy || closing;
     this.$("dangerous").disabled = this.busy || closing || !this.client;
     this.$("root").disabled = commandsLocked;
   }
@@ -93,7 +102,7 @@ export class AndroidInstaller {
     if (!navigator.usb || !window.isSecureContext) { this.message("Android USB setup needs desktop Chrome or Edge over HTTPS or localhost."); return; }
     this.loading = true; this.message("Preparing Android USB setup…");
     try {
-      const module = await import("./android-adb/timetable_web_adb.js?v=4"); await module.default({ module_or_path: new URL("./android-adb/timetable_web_adb_bg.wasm?v=4", import.meta.url) });
+      const module = await import("./android-adb/timetable_web_adb.js?v=5"); await module.default({ module_or_path: new URL("./android-adb/timetable_web_adb_bg.wasm?v=5", import.meta.url) });
       const response = await fetch("./android/latest.json"); if (!response.ok) throw new Error("Android build is unavailable.");
       this.release = checkAndroidRelease(await response.json()); this.module = module;
       this.$("download").href = `./android/${this.release.file}`; this.$("download").hidden = false;
@@ -133,7 +142,7 @@ export class AndroidInstaller {
     try {
       const source = this.source();
       if (this.$("wifi").checked) wifi = tabletWifi(source);
-      settings = tabletSettings(source, { keep_awake: this.$("awake").checked, camera_motion: this.$("motion").checked, idle_seconds: Number(this.$("idle").value), launch_on_boot: this.$("boot").checked });
+      settings = tabletSettings(source, { keep_awake: this.$("awake").checked, camera_motion: this.$("awake").checked && this.$("motion").checked, idle_seconds: Number(this.$("idle").value), launch_on_boot: this.$("boot").checked, rotation: this.$("rotation").value });
       home = this.$("home").checked; owner = this.$("owner").checked;
     } catch(e) { this.message(e.message, {}, true); return; }
     this.busy = true; this.cancelled = false; this.controls();

@@ -106,6 +106,17 @@ is retained. Shell arguments are quoted and legacy shell exit codes are checked.
 
 ## Power, Home and kiosk behavior
 
+- **Rotation:** choose Follow Android settings, Portrait, Landscape, or either
+  upside-down orientation in the installer or the tablet's **••• → Settings**.
+  The app saves the selection and applies it on subsequent launches. Old
+  configurations follow Android settings. Rotation needs neither root nor
+  device-owner access; firmware can still override orientation requests.
+- **Stock tablets:** keeping the screen awake, motion dimming, rotation and
+  Android's confirmation-based **••• → Pin app** work without root or device
+  ownership. **Exit kiosk** unpins the app. The Settings dialog also opens Android
+  settings. Wi-Fi and individual background-app controls use normal ADB/app
+  permissions; firmware can refuse them. The advanced console defaults to the
+  ADB shell; select `su` only if the tablet already has root access.
 - **Keep awake:** Android's window flag keeps the display on while the app is
   visible. Turning it off restores the system's usual timeout.
 - **Motion dimming:** opt-in camera permission, foreground only. Rust compares a
@@ -113,6 +124,9 @@ is retained. Shell arguments are quoted and legacy shell exit codes are checked.
   in RAM and are never saved/uploaded. This is movement detection, not a person
   classifier. The screen dims; it does not enter deep sleep. Camera failure or
   refusal leaves normal brightness and a working timetable.
+  Its 30–3600 second timer appears and is validated only when motion dimming is
+  enabled. Unused timer input cannot block installation. Motion dimming and
+  startup options are collapsed by default in the installer.
 - **Home:** opt-in ADB selection where supported, otherwise opens Home settings
   for the user to choose. Some Fire OS versions block third-party launchers.
   No Amazon launcher is disabled or removed. Optional launch-at-boot remains
