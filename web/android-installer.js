@@ -42,6 +42,7 @@ export class AndroidInstaller {
       this.controls();
     });
     this.$("policy").addEventListener("click", () => void this.readOwnership());
+    this.$("existing-owner").addEventListener("change", () => this.controls());
     this.$("take-owner").addEventListener("click", () => void this.takeOwnership());
     this.$("run-command").addEventListener("click", () => void this.runCommand());
     this.$("command").addEventListener("input", () => this.controls());
@@ -71,7 +72,11 @@ export class AndroidInstaller {
     const commandsLocked = !this.dangerous || this.busy || closing || !this.client;
     this.$("danger-controls").hidden = !this.dangerous;
     this.$("existing-owner").disabled = commandsLocked || !this.ownerReport;
-    this.$("take-owner").disabled = commandsLocked || !this.ownerReport;
+    const selectedOwner = this.ownerReport?.owners.find(owner => owner.user === 0 && owner.component === this.$("existing-owner").value);
+    const needsRemoval = selectedOwner && !(selectedOwner.kind === "device" && selectedOwner.component.startsWith("org.nostdrs.timetable/"));
+    this.removalUnsupported = !!needsRemoval && !this.ownerReport.can_remove_owner;
+    this.$("owner-support").textContent = this.removalUnsupported ? t("Replacing an existing owner requires Android 7.0 or newer. Owner inspection and the command console remain available.") : "";
+    this.$("take-owner").disabled = commandsLocked || !this.ownerReport || this.removalUnsupported;
     this.$("command").disabled = commandsLocked;
     this.$("run-command").disabled = commandsLocked || !this.$("command").value.trim();
     this.$("save-report").disabled = !this.diagnostics;
@@ -88,7 +93,7 @@ export class AndroidInstaller {
     if (!navigator.usb || !window.isSecureContext) { this.message("Android USB setup needs desktop Chrome or Edge over HTTPS or localhost."); return; }
     this.loading = true; this.message("Preparing Android USB setup…");
     try {
-      const module = await import("./android-adb/timetable_web_adb.js?v=3"); await module.default({ module_or_path: new URL("./android-adb/timetable_web_adb_bg.wasm?v=3", import.meta.url) });
+      const module = await import("./android-adb/timetable_web_adb.js?v=4"); await module.default({ module_or_path: new URL("./android-adb/timetable_web_adb_bg.wasm?v=4", import.meta.url) });
       const response = await fetch("./android/latest.json"); if (!response.ok) throw new Error("Android build is unavailable.");
       this.release = checkAndroidRelease(await response.json()); this.module = module;
       this.$("download").href = `./android/${this.release.file}`; this.$("download").hidden = false;
@@ -183,7 +188,7 @@ export class AndroidInstaller {
     });
   }
   async takeOwnership() {
-    if (!this.dangerous || !this.ownerReport) return;
+    if (!this.dangerous || !this.ownerReport || this.removalUnsupported) return;
     const previous = this.$("existing-owner").value, root = this.$("root").checked;
     await this.deviceTask(async () => {
       // Clear the snapshot even on refusal; a partial takeover may have removed the old owner.

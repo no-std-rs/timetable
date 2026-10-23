@@ -61,7 +61,10 @@ pub fn owners(report: &str) -> Vec<Owner> {
     found
 }
 
-pub fn removal(owner: &Owner) -> Result<String, &'static str> {
+pub fn removal(owner: &Owner, sdk: u32) -> Result<String, &'static str> {
+    if sdk < 24 {
+        return Err("Replacing an existing owner requires Android 7.0 or newer");
+    }
     if owner.user != 0 || !component(&owner.component) {
         return Err("Select an owner on the main user (0)");
     }
@@ -83,9 +86,15 @@ mod tests {
             (rows[0].kind, rows[0].user, rows[0].component.as_str()),
             ("device", 0, "com.example/.Admin")
         );
-        assert!(removal(&rows[1]).is_err());
+        assert!(removal(&rows[1], 24).is_err());
+        for sdk in 21..24 {
+            assert_eq!(
+                removal(&rows[2], sdk).unwrap_err(),
+                "Replacing an existing owner requires Android 7.0 or newer"
+            );
+        }
         assert_eq!(
-            removal(&rows[2]).unwrap(),
+            removal(&rows[2], 24).unwrap(),
             "dpm remove-active-admin --user 0 'com.profile/.Owner'"
         );
         assert!(

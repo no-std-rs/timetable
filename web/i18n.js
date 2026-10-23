@@ -1,5 +1,6 @@
 // English message keys keep validation modules independent of browser state.
 export const polish = {
+  "Replacing an existing owner requires Android 7.0 or newer. Owner inspection and the command console remain available.": "Zastąpienie obecnego właściciela wymaga Androida 7.0 lub nowszego. Nadal możesz sprawdzić właściciela i używać konsoli poleceń.",
   "Enable dangerous ADB commands": "Włącz niebezpieczne polecenia ADB",
   "Commands can change security settings or erase tablet data. Review every command, including AI-generated commands, before running it.": "Polecenia mogą zmienić ustawienia zabezpieczeń lub usunąć dane tabletu. Sprawdź każde polecenie, także wygenerowane przez AI, przed jego wykonaniem.",
   "Existing owner": "Obecny właściciel",

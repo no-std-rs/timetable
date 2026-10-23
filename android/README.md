@@ -126,8 +126,11 @@ is retained. Shell arguments are quoted and legacy shell exit codes are checked.
   browser shows the conflicting policy report rather than stopping setup.
 - **Advanced ADB:** inspect device/profile owners, select the owner on user 0,
   and explicitly replace it with Timetable using Android's `dpm` commands.
-  Ownership is re-read before removal and verified after assignment. A refusal
-  retains the actual device error; removal of production administrators can
+  Owner removal requires Android 7.0/API24 or newer; older tablets retain owner
+  inspection and the command console. Android validates and registers Timetable's
+  admin receiver before removal, so a missing or invalid target leaves the old
+  owner intact. Ownership is re-read before removal and verified after assignment.
+  A refusal retains the actual device error; removal of production administrators can
   require action by the existing owner. Other profiles and accounts are kept.
   The installer keeps owner replacement and its command console behind
   **Enable dangerous ADB commands**, unchecked for every new USB session.

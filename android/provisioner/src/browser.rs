@@ -62,7 +62,7 @@ impl Client {
     pub async fn ownership_report(&mut self) -> Result<String, JsValue> {
         let report = self.command("dumpsys device_policy").await?;
         serde_json::to_string(
-            &serde_json::json!({"report":report,"owners":ownership::owners(&report)}),
+            &serde_json::json!({"report":report,"owners":ownership::owners(&report),"can_remove_owner":self.sdk >= 24}),
         )
         .map_err(error)
     }
@@ -82,7 +82,29 @@ impl Client {
             if selected.kind != "device"
                 || !selected.component.starts_with("org.nostdrs.timetable/")
             {
-                let remove = ownership::removal(selected).map_err(error)?;
+                let remove = ownership::removal(selected, self.sdk).map_err(error)?;
+                // Validate the target receiver with Android before removing its predecessor.
+                // A missing/disabled APK or invalid receiver must leave the old owner intact.
+                let registered = self
+                    .shell(
+                        format!("dpm set-active-admin --user 0 {}", ownership::ADMIN),
+                        root,
+                    )
+                    .await
+                    .map_err(|e| {
+                        error(format!(
+                            "Install the current Timetable app before replacing the owner: {}",
+                            e.as_string().unwrap_or_default()
+                        ))
+                    })?;
+                if !registered
+                    .lines()
+                    .any(|line| line.trim().starts_with("Success: Active admin set"))
+                {
+                    return Err(error(
+                        "Android did not validate Timetable's admin receiver; the previous owner was kept",
+                    ));
+                }
                 self.shell(remove, root).await.map_err(|e| {
                     error(format!(
                         "Android refused to remove {previous}: {}",

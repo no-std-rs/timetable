@@ -33,7 +33,7 @@ async function prepare(page, { sdk = 22, fail = false, pending = false, corrupt 
         if(window.adbTest.shellError)throw new Error(window.adbTest.shellError);
         return window.adbTest.shellOutput??'uid=2000(shell)';
       }
-      async ownership_report() { return JSON.stringify({ report:'Profile Owner (User 0): admin=ComponentInfo{com.owner/.Admin}', owners:[{kind:'profile',user:0,component:'com.owner/.Admin'},{kind:'profile',user:10,component:'com.work/.Admin'}] }); }
+      async ownership_report() { return JSON.stringify({ can_remove_owner:window.adbTest.sdk>=24, report:'Profile Owner (User 0): admin=ComponentInfo{com.owner/.Admin}', owners:[{kind:'profile',user:0,component:'com.owner/.Admin'},{kind:'profile',user:10,component:'com.work/.Admin'}] }); }
       async take_ownership(previous,root) {
         (window.adbTest.takeovers??=[]).push({previous,root});
         if(window.adbTest.ownerError)throw new Error(window.adbTest.ownerError);
@@ -211,7 +211,7 @@ test("ADB commands require a click, root is explicit, and output is plain text",
   await expect(page.locator('#android-command-output')).toBeHidden();
 });
 test("owner refusal keeps installation and exposes the conflicting profile owner", async ({page}) => {
-  await prepare(page);
+  await prepare(page, {sdk:24});
   await page.evaluate(()=>window.adbTest.ownerError='User already has a profile owner: com.owner/.Admin');
   await page.locator('#android-install').click();
   await expect(page.locator('#android-status')).toContainText('App installed and configured.');
@@ -244,7 +244,8 @@ test("stopping a pending shell command closes USB and permits reconnecting", asy
 });
 
 
-async function realADB(page) {
+async function realADB(page, sdk=22) {
+  await page.addInitScript(sdk=>window.fakeAdbSdk=sdk,sdk);
   const { installFakeADB } = await import('./fake-adb-usb.mjs');
   await page.addInitScript(installFakeADB);
   await page.route('**/android/latest.json', r=>r.fulfill({json:release}));
@@ -268,7 +269,7 @@ test('real WASM executes explicit shell and su commands and reports nonzero exit
   expect(await page.evaluate(()=>window.usbPeer.replies)).toHaveLength(0);
 });
 test('real WASM refuses a changed owner and verifies every step of replacement', async ({page})=>{
-  await realADB(page);
+  await realADB(page,24);
   const profile='Profile Owner (User 0):\n  admin=ComponentInfo{com.owner/.Admin}\n';
   const empty='Device Policy Manager state:\n';
   const final='Device Owner:\n  admin=ComponentInfo{org.nostdrs.timetable/.AdminReceiver}\n  User ID: 0\n';
@@ -280,6 +281,7 @@ test('real WASM refuses a changed owner and verifies every step of replacement',
   await page.evaluate(({profile,empty,final})=>window.usbPeer.replies=[
     {match:'dumpsys device_policy',body:profile},
     {match:'dumpsys device_policy',body:profile},
+    {match:'dpm set-active-admin --user 0 org.nostdrs.timetable/.AdminReceiver',body:'Success: Active admin set to component org.nostdrs.timetable/.AdminReceiver'},
     {match:'dpm remove-active-admin --user 0',body:'Success: Admin removed'},
     {match:'dumpsys device_policy',body:empty},
     {match:'dumpsys device_policy',body:empty},
@@ -294,10 +296,10 @@ test('real WASM refuses a changed owner and verifies every step of replacement',
   expect(await page.evaluate(()=>window.usbPeer.replies)).toHaveLength(0);
 });
 test('real WASM stops when Android refuses production administrator removal',async({page})=>{
-  await realADB(page);
+  await realADB(page,24);
   await page.evaluate(()=>{
     const body='Profile Owner (User 0):\n admin=ComponentInfo{com.owner/.Admin}\n';
-    window.usbPeer.replies=[{match:'dumpsys device_policy',body},{match:'dumpsys device_policy',body},{match:'dpm remove-active-admin',body:'Attempt to remove non-test admin',status:1}];
+    window.usbPeer.replies=[{match:'dumpsys device_policy',body},{match:'dumpsys device_policy',body},{match:'dpm set-active-admin',body:'Success: Active admin set to component org.nostdrs.timetable/.AdminReceiver'},{match:'dpm remove-active-admin',body:'Attempt to remove non-test admin',status:1}];
   });
   await page.locator('#android-policy').click();await expect(page.locator('#android-take-owner')).toBeEnabled();
   await page.locator('#android-take-owner').click();
@@ -343,4 +345,29 @@ test('dangerous installer commands require a fresh session opt-in while ownershi
   await expect(page.locator('#android-root')).not.toBeChecked();
   await expect(page.locator('#android-danger-controls')).toBeHidden();
   await expect(page.locator('#android-run-command')).toBeDisabled();
+});
+
+
+for(const sdk of [21,22,23])test(`SDK ${sdk} keeps owner removal unavailable even with root selected`,async({page})=>{
+  await realADB(page,sdk);
+  await page.evaluate(()=>window.usbPeer.replies=[{match:'dumpsys device_policy',body:'Profile Owner (User 0):\n admin=ComponentInfo{com.owner/.Admin}\n'}]);
+  await page.locator('#android-policy').click();
+  await expect(page.locator('#android-owner-support')).toContainText('requires Android 7.0');
+  await page.locator('#android-root').check();
+  await expect(page.locator('#android-take-owner')).toBeDisabled();
+  await page.evaluate(()=>document.querySelector('#android-take-owner').dispatchEvent(new MouseEvent('click')));
+  expect(await page.evaluate(()=>window.usbPeer.services.some(s=>s.includes('dpm ')))).toBe(false);
+  await expect(page.locator('#android-command')).toBeEnabled();
+});
+for(const status of [0,1])test(`unavailable Timetable admin leaves previous owner intact (exit ${status})`,async({page})=>{
+  await realADB(page,24);
+  await page.evaluate(status=>{
+    const body='Profile Owner (User 0):\n admin=ComponentInfo{com.owner/.Admin}\n';
+    window.usbPeer.replies=[{match:'dumpsys device_policy',body},{match:'dumpsys device_policy',body},{match:'dpm set-active-admin --user 0 org.nostdrs.timetable/.AdminReceiver',body:'Error: Unknown admin',status}];
+  },status);
+  await page.locator('#android-policy').click();await expect(page.locator('#android-take-owner')).toBeEnabled();
+  await page.locator('#android-take-owner').click();
+  await expect(page.locator('#android-status')).toContainText(status ? 'Install the current Timetable app' : 'previous owner was kept');
+  expect(await page.evaluate(()=>window.usbPeer.services.some(s=>s.includes('dpm remove-active-admin')||s.includes('dpm set-device-owner')))).toBe(false);
+  expect(await page.evaluate(()=>window.usbPeer.replies)).toHaveLength(0);
 });
