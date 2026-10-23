@@ -25,7 +25,19 @@ async function prepare(page, { sdk = 22, fail = false, pending = false, corrupt 
         window.adbTest.calls.push({ apk:apk.length, sha, settings:JSON.parse(new TextDecoder().decode(settings)), home, owner }); progress(100);
         if(window.adbTest.fail)throw new Error('INSTALL_FAILED_UPDATE_INCOMPATIBLE');
         if(window.adbTest.pending)await new Promise((resolve,reject)=>window.adbTest.reject=reject);
-        return JSON.stringify({ installed:true, configured:true, home:home?'choose_on_tablet':'unchanged' });
+        return JSON.stringify({ installed:true, configured:true, home:home?'choose_on_tablet':'unchanged', owner_error:window.adbTest.ownerError, owner_report:'Profile Owner (User 0): com.owner/.Admin' });
+      }
+      async shell(command,root) {
+        (window.adbTest.shells??=[]).push({command,root});
+        if(window.adbTest.shellPending)await new Promise((resolve,reject)=>window.adbTest.reject=reject);
+        if(window.adbTest.shellError)throw new Error(window.adbTest.shellError);
+        return window.adbTest.shellOutput??'uid=2000(shell)';
+      }
+      async ownership_report() { return JSON.stringify({ report:'Profile Owner (User 0): admin=ComponentInfo{com.owner/.Admin}', owners:[{kind:'profile',user:0,component:'com.owner/.Admin'},{kind:'profile',user:10,component:'com.work/.Admin'}] }); }
+      async take_ownership(previous,root) {
+        (window.adbTest.takeovers??=[]).push({previous,root});
+        if(window.adbTest.ownerError)throw new Error(window.adbTest.ownerError);
+        return 'Device Owner: org.nostdrs.timetable/.AdminReceiver';
       }
       async configure_wifi(ssid,password) { window.adbTest.wifi.push({ssid,password}); return 'Wi-Fi saved and connection requested.'; }
       async battery_report() { return JSON.stringify({ battery:'level: 79', power:'mWakefulness=Awake', identity:'uid=2000(shell)', charging:'Battery 79', limits:window.adbTest.charging?[{path:'/sys/class/power_supply/battery/charge_control_end_threshold',value:100,writable:true}]:[] }); }
@@ -175,4 +187,153 @@ test("unsupported battery caps stay unavailable and app selection is reversible 
   await page.evaluate(()=>window.adbTest.failApp='com.example.other');
   await apps.locator('[data-package="com.example.background"]').check();await apps.locator('[data-package="com.example.other"]').check();
   await page.locator('#android-disable-apps').click();await expect(page.locator('#android-status')).toContainText('Updated 1 apps before stopping: Android refused');
+});
+
+
+test("ADB commands require a click, root is explicit, and output is plain text", async ({page}) => {
+  await prepare(page);
+  await page.locator('#android-adb > summary').click();
+  await page.locator('#android-dangerous').check();
+  await expect(page.locator('#android-root')).not.toBeChecked();
+  expect(await page.evaluate(()=>window.adbTest.shells??[])).toHaveLength(0);
+  await page.locator('#android-command').fill('id');
+  await page.evaluate(()=>window.adbTest.shellOutput='<img src=x onerror=alert(1)>');
+  await page.locator('#android-run-command').click();
+  await expect(page.locator('#android-command-output')).toHaveText('<img src=x onerror=alert(1)>');
+  await expect(page.locator('#android-command-output img')).toHaveCount(0);
+  await page.locator('#android-root').check();
+  await page.locator('#android-command').fill('dpm list-owners');
+  await page.locator('#android-run-command').click();
+  await expect.poll(()=>page.evaluate(()=>window.adbTest.shells.length)).toBe(2);
+  expect(await page.evaluate(()=>window.adbTest.shells)).toEqual([{command:'id',root:false},{command:'dpm list-owners',root:true}]);
+  await page.locator('#android-disconnect').click();
+  await expect(page.locator('#android-root')).not.toBeChecked();
+  await expect(page.locator('#android-command-output')).toBeHidden();
+});
+test("owner refusal keeps installation and exposes the conflicting profile owner", async ({page}) => {
+  await prepare(page);
+  await page.evaluate(()=>window.adbTest.ownerError='User already has a profile owner: com.owner/.Admin');
+  await page.locator('#android-install').click();
+  await expect(page.locator('#android-status')).toContainText('App installed and configured.');
+  await expect(page.locator('#android-status')).toContainText('ownership is blocked');
+  await expect(page.locator('#android-adb')).toHaveAttribute('open','');
+  await expect(page.locator('#android-command-output')).toContainText('com.owner/.Admin');
+  expect(await page.evaluate(()=>window.adbTest.takeovers??[])).toHaveLength(0);
+  await page.locator('#android-policy').click();
+  await expect(page.locator('#android-existing-owner option')).toHaveCount(1);
+  await expect(page.locator('#android-existing-owner')).toHaveValue('com.owner/.Admin');
+  await expect(page.locator('#android-take-owner')).toBeDisabled();
+  await page.locator('#android-dangerous').check();
+  await page.locator('#android-take-owner').click();
+  await expect(page.locator('#android-status')).toContainText('User already has a profile owner');
+  await expect(page.locator('#android-take-owner')).toBeDisabled();
+  expect(await page.evaluate(()=>window.adbTest.takeovers)).toEqual([{previous:'com.owner/.Admin',root:false}]);
+});
+test("stopping a pending shell command closes USB and permits reconnecting", async ({page}) => {
+  await prepare(page);
+  await page.locator('#android-adb > summary').click();
+  await page.locator('#android-dangerous').check();
+  await page.evaluate(()=>window.adbTest.shellPending=true);
+  await page.locator('#android-command').fill('sleep 120');
+  await page.locator('#android-run-command').click();
+  await expect(page.locator('#android-status')).toContainText('Running ADB command');
+  await expect(page.locator('#android-run-command')).toBeDisabled();
+  await page.locator('#android-disconnect').click();
+  await expect(page.locator('#android-connect')).toBeEnabled();
+  await expect(page.locator('#android-run-command')).toBeDisabled();
+});
+
+
+async function realADB(page) {
+  const { installFakeADB } = await import('./fake-adb-usb.mjs');
+  await page.addInitScript(installFakeADB);
+  await page.route('**/android/latest.json', r=>r.fulfill({json:release}));
+  await page.goto('/');
+  await page.locator('#android-panel > summary').click();
+  await expect(page.locator('#android-connect')).toBeEnabled();
+  await page.locator('#android-connect').click();
+  await expect(page.locator('#android-status')).toContainText('Fire 7');
+  await page.locator('#android-adb > summary').click();
+  await page.locator('#android-dangerous').check();
+}
+test('real WASM executes explicit shell and su commands and reports nonzero exit', async ({page})=>{
+  await realADB(page);
+  await page.evaluate(()=>window.usbPeer.replies=[{match:'(\nid\n)',body:'uid=2000(shell)'},{match:'su -c',body:'su: permission denied',status:1}]);
+  await page.locator('#android-command').fill('id');await page.locator('#android-run-command').click();
+  await expect(page.locator('#android-command-output')).toHaveText('uid=2000(shell)');
+  await page.locator('#android-root').check();await page.locator('#android-run-command').click();
+  await expect(page.locator('#android-command-output')).toContainText('Device command failed (1): su: permission denied');
+  const services=await page.evaluate(()=>window.usbPeer.services);
+  expect(services.filter(s=>s.includes('su -c'))).toHaveLength(1);
+  expect(await page.evaluate(()=>window.usbPeer.replies)).toHaveLength(0);
+});
+test('real WASM refuses a changed owner and verifies every step of replacement', async ({page})=>{
+  await realADB(page);
+  const profile='Profile Owner (User 0):\n  admin=ComponentInfo{com.owner/.Admin}\n';
+  const empty='Device Policy Manager state:\n';
+  const final='Device Owner:\n  admin=ComponentInfo{org.nostdrs.timetable/.AdminReceiver}\n  User ID: 0\n';
+  await page.evaluate(profile=>window.usbPeer.replies=[{match:'dumpsys device_policy',body:profile},{match:'dumpsys device_policy',body:profile.replace('com.owner/','com.changed/')}],profile);
+  await page.locator('#android-policy').click();await expect(page.locator('#android-existing-owner')).toHaveValue('com.owner/.Admin');
+  await page.locator('#android-take-owner').click();
+  await expect(page.locator('#android-status')).toContainText('selected owner changed');
+  expect(await page.evaluate(()=>window.usbPeer.services.some(s=>s.includes('dpm remove')))).toBe(false);
+  await page.evaluate(({profile,empty,final})=>window.usbPeer.replies=[
+    {match:'dumpsys device_policy',body:profile},
+    {match:'dumpsys device_policy',body:profile},
+    {match:'dpm remove-active-admin --user 0',body:'Success: Admin removed'},
+    {match:'dumpsys device_policy',body:empty},
+    {match:'dumpsys device_policy',body:empty},
+    {match:'dpm set-device-owner',body:'Success: Device owner set'},
+    {match:'dumpsys device_policy',body:final},
+    {match:'am start -W',body:'Status: ok'}
+  ],{profile,empty,final});
+  await page.locator('#android-policy').click();await expect(page.locator('#android-take-owner')).toBeEnabled();
+  await page.locator('#android-take-owner').click();
+  await expect(page.locator('#android-status')).toHaveText('Timetable is now the device owner.');
+  await expect(page.locator('#android-command-output')).toContainText('org.nostdrs.timetable/.AdminReceiver');
+  expect(await page.evaluate(()=>window.usbPeer.replies)).toHaveLength(0);
+});
+test('real WASM stops when Android refuses production administrator removal',async({page})=>{
+  await realADB(page);
+  await page.evaluate(()=>{
+    const body='Profile Owner (User 0):\n admin=ComponentInfo{com.owner/.Admin}\n';
+    window.usbPeer.replies=[{match:'dumpsys device_policy',body},{match:'dumpsys device_policy',body},{match:'dpm remove-active-admin',body:'Attempt to remove non-test admin',status:1}];
+  });
+  await page.locator('#android-policy').click();await expect(page.locator('#android-take-owner')).toBeEnabled();
+  await page.locator('#android-take-owner').click();
+  await expect(page.locator('#android-status')).toContainText('Attempt to remove non-test admin');
+  expect(await page.evaluate(()=>window.usbPeer.services.some(s=>s.includes('dpm set-device-owner')))).toBe(false);
+  expect(await page.evaluate(()=>window.usbPeer.replies)).toHaveLength(0);
+});
+
+
+test('dangerous installer commands require a fresh session opt-in while ownership inspection stays available',async({page})=>{
+  await prepare(page);
+  await page.locator('#android-adb > summary').click();
+  await expect(page.locator('#android-dangerous')).not.toBeChecked();
+  await expect(page.locator('#android-danger-controls')).toBeHidden();
+  await page.locator('#android-policy').click();
+  await expect(page.locator('#android-command-output')).toContainText('Profile Owner');
+  await expect(page.locator('#android-take-owner')).toBeDisabled();
+  await page.evaluate(()=>{
+    document.querySelector('#android-command').value='id';
+    document.querySelector('#android-run-command').dispatchEvent(new MouseEvent('click'));
+    document.querySelector('#android-take-owner').dispatchEvent(new MouseEvent('click'));
+  });
+  expect(await page.evaluate(()=>window.adbTest.shells??[])).toHaveLength(0);
+  expect(await page.evaluate(()=>window.adbTest.takeovers??[])).toHaveLength(0);
+  await page.locator('#android-dangerous').check();
+  await expect(page.locator('#android-danger-controls')).toBeVisible();
+  await page.locator('#android-root').check();
+  await page.locator('#android-dangerous').uncheck();
+  await expect(page.locator('#android-root')).not.toBeChecked();
+  await expect(page.locator('#android-run-command')).toBeDisabled();
+  await page.locator('#android-dangerous').check();
+  await page.locator('#android-disconnect').click();
+  await expect(page.locator('#android-connect')).toBeEnabled();
+  await expect(page.locator('#android-dangerous')).not.toBeChecked();
+  await page.locator('#android-connect').click();
+  await expect(page.locator('#android-status')).toContainText('Fire 7');
+  await expect(page.locator('#android-danger-controls')).toBeHidden();
+  await expect(page.locator('#android-run-command')).toBeDisabled();
 });

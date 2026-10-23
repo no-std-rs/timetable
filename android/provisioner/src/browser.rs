@@ -1,4 +1,4 @@
-use super::{device_tools, protocol};
+use super::{device_tools, ownership, protocol};
 use adb_client::webusb::{ADBWebUSBDevice, WebUSBKey};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
@@ -53,6 +53,77 @@ impl Client {
             charging_limit: "unavailable",
         })
         .map_err(error)
+    }
+    /// Execute an explicit command over this browser's authorized USB session.
+    pub async fn shell(&mut self, command: String, root: bool) -> Result<String, JsValue> {
+        let command = device_tools::shell_command(&command, root).map_err(error)?;
+        self.command(&command).await
+    }
+    pub async fn ownership_report(&mut self) -> Result<String, JsValue> {
+        let report = self.command("dumpsys device_policy").await?;
+        serde_json::to_string(
+            &serde_json::json!({"report":report,"owners":ownership::owners(&report)}),
+        )
+        .map_err(error)
+    }
+    pub async fn take_ownership(
+        &mut self,
+        previous: String,
+        root: bool,
+    ) -> Result<String, JsValue> {
+        // Refresh immediately before changing policy; never act on stale browser selection.
+        let before = self.command("dumpsys device_policy").await?;
+        let owners = ownership::owners(&before);
+        if !previous.is_empty() {
+            let selected = owners
+                .iter()
+                .find(|owner| owner.user == 0 && owner.component == previous)
+                .ok_or_else(|| error("The selected owner changed. Inspect ownership again."))?;
+            if selected.kind != "device"
+                || !selected.component.starts_with("org.nostdrs.timetable/")
+            {
+                let remove = ownership::removal(selected).map_err(error)?;
+                self.shell(remove, root).await.map_err(|e| {
+                    error(format!(
+                        "Android refused to remove {previous}: {}",
+                        e.as_string().unwrap_or_default()
+                    ))
+                })?;
+                let report = self.command("dumpsys device_policy").await?;
+                if ownership::owners(&report)
+                    .iter()
+                    .any(|owner| owner.user == 0 && owner.component == previous)
+                {
+                    return Err(error(
+                        "Android did not confirm removal of the previous owner",
+                    ));
+                }
+            }
+        } else if owners.iter().any(|owner| owner.user == 0) {
+            return Err(error(
+                "An owner already exists. Inspect ownership and select it first.",
+            ));
+        }
+        let report = self.command("dumpsys device_policy").await?;
+        if !ownership::owners(&report).iter().any(|owner| {
+            owner.kind == "device"
+                && owner.user == 0
+                && owner.component.starts_with("org.nostdrs.timetable/")
+        }) {
+            self.shell(format!("dpm set-device-owner {}", ownership::ADMIN), root).await
+                .map_err(|e| error(format!("Android refused Timetable ownership. Inspect current ownership before retrying: {}",e.as_string().unwrap_or_default())))?;
+        }
+        let report = self.command("dumpsys device_policy").await?;
+        if !ownership::owners(&report).iter().any(|owner| {
+            owner.kind == "device"
+                && owner.user == 0
+                && owner.component.starts_with("org.nostdrs.timetable/")
+        }) {
+            return Err(error("Android did not confirm Timetable as device owner"));
+        }
+        self.command("am start -W -n org.nostdrs.timetable/.MainActivity")
+            .await?;
+        Ok(report)
     }
     pub async fn battery_report(&mut self) -> Result<String, JsValue> {
         let battery = self
@@ -288,21 +359,41 @@ impl Client {
                 "The app did not confirm its settings: {result}"
             )));
         }
-        if owner && !result.contains("device_owner=true") {
-            let owner_result=self.command("dpm set-device-owner org.nostdrs.timetable/.AdminReceiver").await.map_err(|e|error(format!("App installed and configured, but device-owner setup failed. This may require a device without accounts or an existing owner. No reset was performed. {e:?}")))?;
-            if !owner_result
-                .lines()
-                .any(|line| line.trim().starts_with("Success:"))
+        let mut actual_owner = result.contains("device_owner=true");
+        let mut owner_error = None;
+        let mut owner_report = None;
+        if owner && !actual_owner {
+            match self
+                .command("dpm set-device-owner org.nostdrs.timetable/.AdminReceiver")
+                .await
             {
-                return Err(error(format!(
-                    "App installed and configured, but Android did not confirm device-owner setup: {owner_result}"
-                )));
+                Ok(output)
+                    if output
+                        .lines()
+                        .any(|line| line.trim().starts_with("Success:")) =>
+                {
+                    // Verify the OS state through the installed app rather than trusting dpm text.
+                    match self.command(&format!("am broadcast --receiver-foreground -a org.nostdrs.timetable.PROVISION -n org.nostdrs.timetable/.ProvisionReceiver --es settings {}", protocol::shell_quote(&payload))).await {
+                        Ok(report) if report.contains("device_owner=true") => actual_owner = true,
+                        _ => owner_error = Some("Android did not confirm device ownership".to_string()),
+                    }
+                }
+                Ok(output) => owner_error = Some(output),
+                Err(e) => {
+                    owner_error = Some(
+                        e.as_string()
+                            .unwrap_or_else(|| "Android refused device ownership".into()),
+                    )
+                }
+            }
+            if owner_error.is_some() {
+                owner_report = self.command("dumpsys device_policy").await.ok();
             }
         }
         self.command("am start -W -n org.nostdrs.timetable/.MainActivity")
             .await?;
         let mut home = "unchanged";
-        if make_home && !owner {
+        if (make_home || owner) && !actual_owner {
             if self.sdk >= 24 {
                 let _ = self
                     .command("cmd package set-home-activity org.nostdrs.timetable/.MainActivity")
@@ -315,9 +406,9 @@ impl Client {
                     .await;
                 home = "choose_on_tablet";
             }
-        } else if owner {
+        } else if actual_owner {
             home = "device_owner";
         }
-        Ok(serde_json::json!({"installed":true,"configured":true,"home":home,"device_owner":owner}).to_string())
+        Ok(serde_json::json!({"installed":true,"configured":true,"home":home,"device_owner":actual_owner,"owner_error":owner_error,"owner_report":owner_report}).to_string())
     }
 }

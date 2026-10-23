@@ -122,6 +122,19 @@ is retained. Shell arguments are quoted and legacy shell exit codes are checked.
   never factory-resets a tablet. An accepted owner allows persistent Home and
   lock-task mode. The app's visible **••• → Exit kiosk and open settings** stops
   lock task and clears its persistent Home preference. Reprovision to re-enable.
+  If ownership is refused, the installed app and settings remain usable; the
+  browser shows the conflicting policy report rather than stopping setup.
+- **Advanced ADB:** inspect device/profile owners, select the owner on user 0,
+  and explicitly replace it with Timetable using Android's `dpm` commands.
+  Ownership is re-read before removal and verified after assignment. A refusal
+  retains the actual device error; removal of production administrators can
+  require action by the existing owner. Other profiles and accounts are kept.
+  The installer keeps owner replacement and its command console behind
+  **Enable dangerous ADB commands**, unchecked for every new USB session.
+  Read-only owner inspection remains available without enabling it. The console
+  runs arbitrary shell commands over the authorized USB session, with optional
+  existing `su` access. Output stays on the page; Stop
+  closes USB to interrupt a pending command. Root is opt-in and reset on disconnect.
 - **Battery diagnostics:** read real `dumpsys battery`, power/wake locks, shell
   permissions and readable power-supply nodes. Save the report locally. A cap
   control appears only for a writable standard battery

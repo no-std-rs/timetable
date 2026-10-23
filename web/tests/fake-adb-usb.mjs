@@ -19,8 +19,10 @@ export function installFakeADB() {
     else if (command === "OPEN") {
       local = arg0; remote = 100 + ++streams;
       const service = decode(payload); window.usbPeer.services.push(service);
-      const answer = service.includes("ro.build.version.sdk") ? "22" : service.includes("ro.product.model") ? "Fire 7" : service.includes("ro.product.cpu.abi") ? "armeabi-v7a" : "";
-      send("OKAY", remote, local); send("WRTE", remote, local, `${answer}\n\nTT_EXIT:0\n`);
+      const reply = window.usbPeer.replies?.shift();
+      if(reply && !service.includes(reply.match))throw new Error(`Unexpected shell command: ${service}`);
+      const answer = reply ? reply.body : service.includes("ro.build.version.sdk") ? "22" : service.includes("ro.product.model") ? "Fire 7" : service.includes("ro.product.cpu.abi") ? "armeabi-v7a" : "";
+      send("OKAY", remote, local); send("WRTE", remote, local, `${answer}\n\nTT_EXIT:${reply?.status??0}\n`);
     } else if (command === "OKAY") send("CLSE", remote, local);
     else if (command === "CLSE") { send("CLSE", remote, local); window.usbPeer.duplicates++; }
     else throw new Error(`Unexpected host ADB packet: ${command}`);

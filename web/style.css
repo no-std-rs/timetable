@@ -1158,3 +1158,6 @@
 .android-card{margin:40px 0;padding:28px}.android-card>summary{font:1.6rem Georgia,serif;cursor:pointer}.android-options{display:grid;gap:16px;margin:24px 0}.android-options label:has(input[type=checkbox]){display:flex;align-items:center;gap:10px}.android-options input[type=number]{max-width:140px}.android-options details>label{margin-top:16px}
 
 .android-app-list{display:grid;gap:10px;max-height:360px;overflow:auto;margin:16px 0}.android-app-list label{display:flex;align-items:start;gap:10px}.android-app-list span{min-width:0;overflow-wrap:anywhere}.android-app-list small{display:block;color:var(--muted)}#android-charge-controls{display:grid;gap:12px}#android-charge-controls[hidden]{display:none}#android-charge-percent{max-width:140px}
+
+#android-command { display:block; width:100%; min-width:0; resize:vertical; border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--ceramic); color:var(--ink); font:13px/1.5 ui-monospace,monospace; }
+#android-command:focus { outline:2px solid var(--gold); outline-offset:2px; }
