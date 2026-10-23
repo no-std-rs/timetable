@@ -1,0 +1,19 @@
+[package]
+name = "timetable-tablet"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+timetable-display = { path = "../display" }
+gtfs = { path = "../gtfs" }
+heapless = { version = "0.9.3", features = ["serde"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde-json-core = "0.6"
+embedded-io-async = "0.7"
+embedded-graphics = "0.8.2"
+
+[lints.rust]
+unsafe_code = "forbid"

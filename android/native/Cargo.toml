@@ -1,0 +1,20 @@
+[package]
+name = "timetable-android"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "timetable_android"
+crate-type = ["rlib"]
+
+[features]
+# Development-only: load the same JNI functions in a host JVM for CI tests.
+host-test = []
+
+[dependencies]
+timetable-tablet = { path = "../../tablet" }
+timetable-display = { path = "../../display" }
+jni-sys = "0.4.1"

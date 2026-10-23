@@ -1,3 +1,4 @@
+import { AndroidInstaller } from "./android-installer.js";
 import { device, DEFAULT_DEVICE } from "./devices.js";
 import { DevicePreview } from "./device-preview.js";
 import { loadDraft, loadFeedDraft, saveDraft, forgetDraft, REMEMBER_KEY } from "./settings-store.js";
@@ -994,3 +995,5 @@ networkPicker.load(false,state.feed.id).then(()=>{
   if(feed){state.feed=feed;if(feed.id!==DEFAULT_FEED)void selectFeed(feed,true);}
 });
 loadRelease();
+
+new AndroidInstaller($("android-panel"), () => ({ feed_id: state.feed.id, timezone: state.catalog?.timezone, groups: state.groups, automatic: state.automatic }));

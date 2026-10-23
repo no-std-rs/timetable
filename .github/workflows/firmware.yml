@@ -10,8 +10,41 @@ concurrency:
   group: device-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  android:
+    name: Android APK without SDK or NDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust targets
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt
+          rustup default 1.95.0
+          rustup target add armv7-linux-androideabi aarch64-linux-android
+      - name: Cache checksum-pinned Android tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: android/.cache
+          key: android-tools-${{ runner.os }}-${{ hashFiles('android/tools.json') }}
+      - name: Check the native bridge in a real JVM
+        run: sh tools/test-android-jni.sh
+      - name: Build and verify the signed ARMv7 and ARM64 APK
+        run: python3 android/build.py
+      - name: Test the browser provisioning protocol
+        run: |
+          cargo fmt --manifest-path android/provisioner/Cargo.toml --check
+          cargo test --manifest-path android/provisioner/Cargo.toml --locked
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: timetable-android
+          path: android/dist/
+          if-no-files-found: error
+          retention-days: 14
   build:
     name: C3 firmware and installer
+    needs: android
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -69,6 +102,18 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install the pinned WebAssembly target
         run: rustup target add wasm32-unknown-unknown --toolchain 1.95.0
+      - name: Cache the pinned WebAssembly bindings generator
+        id: wasm-bindgen
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-linux-0.2.129
+      - if: steps.wasm-bindgen.outputs.cache-hit != 'true'
+        run: cargo +1.95.0 install wasm-bindgen-cli --version 0.2.129 --locked
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: timetable-android
+          path: android/dist
       - name: Build and test the installer
         working-directory: web
         run: |

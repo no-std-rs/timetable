@@ -1154,3 +1154,5 @@
   .device-figure.landscape .device-shell { width:calc(100vw - 64px); height:auto; aspect-ratio:344/196; padding:10px; }
   .device-figure.landscape .device-face { width:100%; height:auto; aspect-ratio:320/172; }
 }
+
+.android-card{margin:40px 0;padding:28px}.android-card>summary{font:1.6rem Georgia,serif;cursor:pointer}.android-options{display:grid;gap:16px;margin:24px 0}.android-options label:has(input[type=checkbox]){display:flex;align-items:center;gap:10px}.android-options input[type=number]{max-width:140px}.android-options details>label{margin-top:16px}

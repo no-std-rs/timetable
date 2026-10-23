@@ -1,0 +1,29 @@
+[package]
+name = "timetable-web-adb"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Browser transport from upstream PR https://github.com/cocool97/adb_client/pull/222.
+adb_client = { git = "https://github.com/pawelchcki/adb_client", rev = "66ce40c6588f1f103d7db0f9209d7471a0309dd5", default-features = false, features = ["webusb"] }
+timetable-tablet = { path = "../../tablet" }
+wasm-bindgen = "0.2.129"
+wasm-bindgen-futures = "0.4.79"
+js-sys = "0.3.106"
+web-sys = { version = "0.3.106", features = ["UsbDevice"] }
+base64 = "0.23.1"
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
