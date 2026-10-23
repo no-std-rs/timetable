@@ -234,3 +234,20 @@ class CacheStackAuditTest(StackAuditTest):
         later = device_stack.audit(frames, 49192)['paths_bytes']
         self.assertEqual(later['runtime_cache_cold_replay'], baseline['runtime_cache_cold_replay'])
         self.assertEqual(later['runtime_cache_replay'], baseline['runtime_cache_replay'] + 512)
+
+    def test_inlined_update_is_counted_in_its_retained_task_frame(self):
+        frames = [(n, s) for n, s in self.cached_frames() if 'update_once' not in n]
+        baseline = device_stack.audit(frames, 60000)['paths_bytes']
+        grown = device_stack.audit([(n, s+512 if 'TaskStorage' in n else s) for n,s in frames], 60000)['paths_bytes']
+        self.assertEqual(grown['runtime_mirror_record'], baseline['runtime_mirror_record']+512)
+        outlined = device_stack.audit(frames + [('timetable_display11update_once closure', 512)], 60000)['paths_bytes']
+        self.assertEqual(outlined['runtime_mirror_record'], baseline['runtime_mirror_record']+512)
+
+    def test_shared_http_inner_and_conditional_frames_are_not_lost(self):
+        frames = [(n.replace('Connection 5fetch', 'Connection 11fetch_inner'), s) for n,s in self.cached_frames()]
+        baseline = device_stack.audit(frames, 60000)['paths_bytes']
+        grown = device_stack.audit(frames + [('http_session Connection 5fetch closure', 512)], 60000)['paths_bytes']
+        self.assertEqual(grown['runtime_mirror_record'], baseline['runtime_mirror_record']+512)
+        self.assertEqual(grown['runtime_conditional_headers'], baseline['runtime_conditional_headers']+512)
+        with self.assertRaises(ValueError):
+            device_stack.audit([(n,s) for n,s in frames if 'http_session Connection' not in n],60000)

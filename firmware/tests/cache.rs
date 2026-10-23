@@ -34,6 +34,7 @@ struct Memory {
     read_fault: Cell<Option<u32>>,
     scratch_calls: Cell<usize>,
     scratch_fails: Cell<bool>,
+    metadata_fails: Cell<bool>,
     scratch_active: Cell<usize>,
     fault: Cell<Option<usize>>,
     operations: Cell<usize>,
@@ -56,6 +57,7 @@ impl Memory {
             read_fault: Cell::new(None),
             scratch_calls: Cell::new(0),
             scratch_fails: Cell::new(false),
+            metadata_fails: Cell::new(false),
             scratch_active: Cell::new(0),
             fault: Cell::new(None),
             operations: Cell::new(0),
@@ -98,6 +100,12 @@ impl Drop for Scratch<'_> {
     }
 }
 impl Storage for Memory {
+    fn metadata(&self) -> Result<impl AsMut<[cache::Metadata]>, Error> {
+        if self.metadata_fails.get() {
+            return Err(Error::BufferTooSmall);
+        }
+        Ok([cache::Metadata::default()])
+    }
     fn identity(&self) -> &[u8] {
         self.identity.get()
     }
@@ -1017,18 +1025,24 @@ fn first_fill_late_error_and_cancel_leave_no_committed_bank_and_can_retry() {
 
 #[test]
 fn scratch_allocation_failure_falls_back_without_flash_writes() {
-    let flash = Memory::new();
-    let c = settings();
-    update(&flash, &Client::new(ORIGINAL), &c, NOW).1.unwrap();
-    let saved = flash.bytes.borrow().clone();
-    let before = flash.counters();
-    flash.scratch_fails.set(true);
-    let (mut cached, result) = update(&flash, &Client::new(CHANGED), &c, NOW + 1);
-    result.unwrap();
-    let mut direct = online(&Client::new(CHANGED), &c, NOW + 1);
-    assert_eq!(events(&mut cached), events(&mut direct));
-    assert_eq!(flash.counters(), before);
-    assert_eq!(*flash.bytes.borrow(), saved);
+    for metadata in [false, true] {
+        let flash = Memory::new();
+        let c = settings();
+        update(&flash, &Client::new(ORIGINAL), &c, NOW).1.unwrap();
+        let saved = flash.bytes.borrow().clone();
+        let before = flash.counters();
+        if metadata {
+            flash.metadata_fails.set(true);
+        } else {
+            flash.scratch_fails.set(true);
+        }
+        let (mut cached, result) = update(&flash, &Client::new(CHANGED), &c, NOW + 1);
+        result.unwrap();
+        let mut direct = online(&Client::new(CHANGED), &c, NOW + 1);
+        assert_eq!(events(&mut cached), events(&mut direct));
+        assert_eq!(flash.counters(), before);
+        assert_eq!(*flash.bytes.borrow(), saved);
+    }
 }
 
 #[test]
@@ -1102,7 +1116,7 @@ fn conditional_refresh_uses_no_archive_ranges_or_flash_writes_and_legacy_cache_s
         let mut bytes = flash.bytes.borrow_mut();
         assert_eq!(&bytes[..4], b"TTFC");
         let sources: Vec<_> = (0..3)
-            .map(|i| bytes[48 + i * 580..48 + i * 580 + 160].to_vec())
+            .map(|i| bytes[48 + i * 352..48 + i * 352 + 160].to_vec())
             .collect();
         for (i, source) in sources.iter().enumerate() {
             bytes[48 + i * 160..48 + (i + 1) * 160].copy_from_slice(source);

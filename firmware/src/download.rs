@@ -47,21 +47,21 @@ pub trait Operation {
 /// A bounded server validator, retained with the validated archive identity.
 #[derive(Clone, Copy)]
 pub struct Validator {
-    bytes: [u8; 96],
+    bytes: [u8; 64],
     len: u8,
     kind: u8,
 }
 impl Default for Validator {
     fn default() -> Self {
         Self {
-            bytes: [0; 96],
+            bytes: [0; 64],
             len: 0,
             kind: 0,
         }
     }
 }
 impl Validator {
-    pub const BYTES: usize = 98;
+    pub const BYTES: usize = 66;
     pub fn new(name: &str, value: &[u8]) -> Self {
         let kind = if name.eq_ignore_ascii_case("etag") {
             1
@@ -73,7 +73,7 @@ impl Validator {
         let quoted = value.strip_prefix(b"W/").unwrap_or(value);
         if kind == 0
             || value.is_empty()
-            || value.len() > 96
+            || value.len() > 64
             || !value.iter().all(|b| (32..=126).contains(b))
             || kind == 1
                 && (quoted.len() < 2
@@ -108,7 +108,7 @@ impl Validator {
     }
     pub fn decode(bytes: &[u8]) -> Self {
         let len = bytes[0] as usize;
-        if len > 96 {
+        if len > 64 {
             return Self::default();
         }
         Self::new(
@@ -374,7 +374,6 @@ pub struct Mirror<'a, H> {
     snapshot: MirrorSnapshot,
     length: u64,
     directory: zip::Directory,
-    validator: Validator,
 }
 impl<'a, H: Http> Mirror<'a, H> {
     pub async fn open(
@@ -382,16 +381,27 @@ impl<'a, H: Http> Mirror<'a, H> {
         snapshot: MirrorSnapshot,
         workspace: &mut zip::Workspace,
     ) -> Result<Self, Error> {
+        Self::open_with_validator(http, snapshot, workspace)
+            .await
+            .map(|(source, _)| source)
+    }
+    pub async fn open_with_validator(
+        http: &'a H,
+        snapshot: MirrorSnapshot,
+        workspace: &mut zip::Workspace,
+    ) -> Result<(Self, Validator), Error> {
         let mut url = [0; URL_BYTES];
         let url = snapshot.url(&mut url);
-        let meta = http
-            .fetch(
-                url,
-                Some((ByteRange::new(0, 0)?, None)),
-                &mut Fill(&mut [0]),
-            )
-            .await?;
-        let length = meta.length.ok_or(Error::Http)?;
+        let (length, validator) = {
+            let meta = http
+                .fetch(
+                    url,
+                    Some((ByteRange::new(0, 0)?, None)),
+                    &mut Fill(&mut [0]),
+                )
+                .await?;
+            (meta.length.ok_or(Error::Http)?, meta.validator)
+        };
         let fetcher = Range { http, url, length };
         let (cache, scratch) = workspace.scratch()[..3072].split_at_mut(2048);
         let mut reader = RangeReader::new(fetcher, length, cache)?;
@@ -407,16 +417,15 @@ impl<'a, H: Http> Mirror<'a, H> {
             )
             .await?;
         }
-        Ok(Self {
-            http,
-            snapshot,
-            length,
-            directory,
-            validator: meta.validator,
-        })
-    }
-    pub fn validator(&self) -> Validator {
-        self.validator
+        Ok((
+            Self {
+                http,
+                snapshot,
+                length,
+                directory,
+            },
+            validator,
+        ))
     }
     async fn table(
         &mut self,

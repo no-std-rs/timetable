@@ -192,3 +192,8 @@ reads or flash writes. Original v1 banks remain readable and use their existing
 manifest comparison until a real content change warrants a new bank. Metadata
 changes alone never cause a flash rewrite; the less-than-one-day warning and
 explicit confirmation still guard frequent content updates.
+
+The device adapter keeps about 1.2 KiB of bounded cache-source metadata and write scratch in the
+already reserved 64 KiB heap, acquired after TLS verification and freed at the
+end of the update. Allocation failure falls back to the normal streaming query;
+parser capacities, the 16 KiB filter and the linked RAM limits are unchanged.

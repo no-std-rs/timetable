@@ -211,6 +211,11 @@ impl Http<'_> {
 }
 struct Timed<H>(H);
 impl<H: download::Http> download::Http for Timed<H> {
+    async fn unchanged(&self, url: &str, validator: &download::Validator) -> Result<bool, Error> {
+        with_timeout(Duration::from_secs(300), self.0.unchanged(url, validator))
+            .await
+            .map_err(|_| Error::Network)?
+    }
     fn stage(&self, message: &str) {
         self.0.stage(message);
     }

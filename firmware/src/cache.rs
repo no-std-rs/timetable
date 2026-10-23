@@ -19,7 +19,7 @@ pub const SIZE: u32 = 0xf0000;
 pub const BANK_SIZE: u32 = SIZE / 2;
 pub const FILTER_BYTES: usize = 16 * 1024;
 const SECTOR: u32 = 4096;
-const SOURCE_BYTES: usize = 580;
+const SOURCE_BYTES: usize = 352;
 const HEADER: usize = 48 + SOURCES * SOURCE_BYTES;
 const LEGACY_HEADER: usize = 528;
 const SOURCES: usize = 3;
@@ -37,6 +37,12 @@ pub trait Storage {
     fn read(&self, offset: u32, out: &mut [u8]) -> Result<(), Error>;
     fn write(&self, offset: u32, bytes: &[u8]) -> Result<(), Error>;
     fn erase(&self, start: u32, end: u32) -> Result<(), Error>;
+    /// Bounded source metadata, acquired only for comparing/writing a bank.
+    /// Device adapters may place it in their existing reserved heap after TLS
+    /// verification; the cache library itself never allocates.
+    fn metadata(&self) -> Result<impl AsMut<[Metadata]>, Error> {
+        Ok([Metadata::default()])
+    }
     /// Temporary caller-owned filter. The device acquires this inside its
     /// verified session, after certificate-verification allocations are freed.
     /// Returning an error disables cache writes and uses the ordinary query.
@@ -65,7 +71,7 @@ struct Block {
     length: u32,
     crc: u32,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Source {
     start: u32,
     end: u32,
@@ -73,22 +79,19 @@ struct Source {
     updated: i64,
     original: [[u32; 2]; Table::COUNT],
     tables: [Block; Table::COUNT],
-    url: [u8; gtfs::mobility::URL_BYTES],
-    url_len: u16,
+    snapshot: Option<gtfs::mobility::Snapshot>,
     validator: crate::download::Validator,
 }
-impl Default for Source {
+/// Caller-owned scratch for three source identities and one 256-byte write buffer.
+pub struct Metadata {
+    sources: [Source; SOURCES],
+    buffer: [u8; 256],
+}
+impl Default for Metadata {
     fn default() -> Self {
         Self {
-            start: 0,
-            end: 0,
-            present: 0,
-            updated: 0,
-            original: [[0; 2]; Table::COUNT],
-            tables: [Block::default(); Table::COUNT],
-            url: [0; gtfs::mobility::URL_BYTES],
-            url_len: 0,
-            validator: crate::download::Validator::default(),
+            sources: [Source::default(); SOURCES],
+            buffer: [0; 256],
         }
     }
 }
@@ -123,9 +126,13 @@ impl Source {
         }))
     }
     fn encode(&self, out: &mut [u8]) {
-        out[160..162].copy_from_slice(&self.url_len.to_le_bytes());
-        out[162..482].copy_from_slice(&self.url);
-        self.validator.encode(&mut out[482..580]);
+        if let Some(snapshot) = self.snapshot {
+            out[160..172].copy_from_slice(snapshot.timestamp().as_bytes());
+            let id = snapshot.feed_id().as_bytes();
+            out[172] = id.len() as u8;
+            out[173..173 + id.len()].copy_from_slice(id);
+        }
+        self.validator.encode(&mut out[253..319]);
         put(out, 0, self.start);
         put(out, 4, self.end);
         put(out, 8, self.present);
@@ -158,16 +165,15 @@ impl Source {
             };
         }
         if bytes.len() >= SOURCE_BYTES {
-            let len = u16::from_le_bytes(bytes[160..162].try_into().unwrap());
-            if len as usize <= gtfs::mobility::URL_BYTES
-                && core::str::from_utf8(&bytes[162..162 + len as usize])
+            let len = bytes[172] as usize;
+            if len <= gtfs::mobility::MAX_ID {
+                s.snapshot = core::str::from_utf8(&bytes[173..173 + len])
                     .ok()
-                    .and_then(|url| url.parse::<gtfs::mobility::Snapshot>().ok())
-                    .is_some()
-            {
-                s.url_len = len;
-                s.url.copy_from_slice(&bytes[162..482]);
-                s.validator = crate::download::Validator::decode(&bytes[482..580]);
+                    .zip(core::str::from_utf8(&bytes[160..172]).ok())
+                    .and_then(|(id, stamp)| gtfs::mobility::Snapshot::from_parts(id, stamp).ok());
+                if s.snapshot.is_some() {
+                    s.validator = crate::download::Validator::decode(&bytes[253..319]);
+                }
             }
         }
         s
@@ -523,15 +529,23 @@ struct Writer<'a, F> {
     different: bool,
     pos: u32,
     used: usize,
-    buffer: [u8; 256],
+    buffer: &'a mut [u8; 256],
     hash: crc32fast::Hasher,
     table_hash: crc32fast::Hasher,
-    sources: [Source; SOURCES],
+    sources: &'a mut [Source; SOURCES],
     count: u8,
     now: i64,
 }
 impl<'a, F: Storage> Writer<'a, F> {
-    fn new(flash: &'a F, active: Option<Bank>, compare: bool, now: i64) -> Self {
+    fn new(
+        flash: &'a F,
+        active: Option<Bank>,
+        compare: bool,
+        now: i64,
+        sources: &'a mut [Source; SOURCES],
+        buffer: &'a mut [u8; 256],
+    ) -> Self {
+        sources.fill(Source::default());
         Self {
             flash,
             active,
@@ -539,10 +553,10 @@ impl<'a, F: Storage> Writer<'a, F> {
             different: false,
             pos: 0,
             used: 0,
-            buffer: [0; 256],
+            buffer,
             hash: crc32fast::Hasher::new(),
             table_hash: crc32fast::Hasher::new(),
-            sources: [Source::default(); SOURCES],
+            sources,
             count: 0,
             now,
         }
@@ -847,7 +861,8 @@ async fn build<H: crate::download::Http, F: Storage>(
     key(config, writer.flash.identity(), |b| writer.append(b))?;
     let mut remaining = builder.day_mask();
     for &snapshot in &snapshots.0 {
-        let mut source = crate::download::Mirror::open(http, snapshot, workspace).await?;
+        let (mut source, validator) =
+            crate::download::Mirror::open_with_validator(http, snapshot, workspace).await?;
         let mask = {
             let (start, end) = source.coverage_dates(workspace).await?;
             let manifest = source.manifest();
@@ -860,11 +875,8 @@ async fn build<H: crate::download::Http, F: Storage>(
                     .unwrap_or(EMPTY),
                 ..Source::default()
             };
-            let mut url = [0; gtfs::mobility::URL_BYTES];
-            let url = snapshot.url(&mut url);
-            info.url[..url.len()].copy_from_slice(url.as_bytes());
-            info.url_len = url.len() as u16;
-            info.validator = source.validator();
+            info.snapshot = Some(snapshot);
+            info.validator = validator;
             let mask = info.mask(builder.dates) & remaining;
             if mask == 0 {
                 continue;
@@ -948,7 +960,7 @@ async fn matches<H: crate::download::Http>(
         let mut unchanged_mask = 0;
         for i in 0..bank.count as usize {
             let stored = bank.source(flash, i)?;
-            if &stored.url[..stored.url_len as usize] == url.as_bytes()
+            if stored.snapshot == Some(snapshot)
                 && stored.validator.header().is_some()
                 && http.unchanged(url, &stored.validator).await?
             {
@@ -1024,8 +1036,8 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
     config: &Config,
     flash: &F,
 ) -> Result<Freshness, crate::download::Error> {
-    let mut writer = {
-        let active = load(flash).await?;
+    let active = load(flash).await?;
+    {
         if let Some(bank) = active
             && same_key(bank, flash, config)?
             && matches(http, snapshots, flash, bank, builder, workspace).await?
@@ -1035,8 +1047,20 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
             fresh.checked_at = Some(builder.now);
             return Ok(fresh);
         }
-        Writer::new(flash, active, true, builder.now)
-    };
+    }
+    let mut allocation = flash.metadata()?;
+    let metadata = allocation
+        .as_mut()
+        .first_mut()
+        .ok_or(Error::BufferTooSmall)?;
+    let mut writer = Writer::new(
+        flash,
+        active,
+        true,
+        builder.now,
+        &mut metadata.sources,
+        &mut metadata.buffer,
+    );
     // This operation is scoped inside the already verified TLS session. The
     // caller can reuse heap space freed by certificate verification here.
     let mut scratch = flash.scratch()?;
@@ -1089,7 +1113,14 @@ pub async fn mirror_tables<H: crate::download::Http, F: Storage>(
         return Err(Error::InvalidField("obsolete cache update").into());
     }
     http.stage("cache: selected contents changed; streaming inactive bank");
-    writer = Writer::new(flash, writer.active, false, writer.now);
+    let mut writer = Writer::new(
+        flash,
+        writer.active,
+        false,
+        writer.now,
+        writer.sources,
+        writer.buffer,
+    );
     build(
         http,
         snapshots,
