@@ -9,7 +9,9 @@ It can therefore prefer a 12-minute walk to a direct bus over a nearer stop.
 
 The normal setting allows **one transfer**. The minimum change defaults to
 **three minutes**: exactly three is allowed; less is rejected. The GTFS minimum
-can increase this margin, and prohibited transfers remain prohibited. Choose
+can increase this margin, and prohibited transfers remain prohibited. The chosen
+minimum also applies to GTFS timed-transfer guarantees; the app does not waive
+your margin or assume a later departure than the published schedule. Choose
 zero transfers for direct journeys, or two in the advanced device settings.
 For equal arrival times, fewer rides and less access walking win. These are
 scheduled ETAs; live delays and the likelihood of catching a vehicle are not
@@ -37,7 +39,9 @@ the operator renumbers stops. This mode does not plan walking-only journeys,
 fares, accessibility constraints, frequency templates, conditional boarding or
 alighting that requires arrangements, route/trip-specific
 transfer rules or in-seat transfer rules. Unsupported relevant rules fail the
-search explicitly. On ESP32, a window requiring different GTFS archives is
+search explicitly. The bounded device search conservatively rejects a scoped
+rule touching a selected trip’s stops; it does not evaluate route/trip predicates.
+Use feeds without such rules for those stops. On ESP32, a window requiring different GTFS archives is
 rejected instead of claiming a complete search across incompatible snapshots.
 
 The planner uses fixed storage and fails visibly when a selection exceeds it:

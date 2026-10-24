@@ -152,3 +152,5 @@ write_archive('journey-inseat-rule.zip',{**journey,'transfers.txt':'from_stop_id
 write_archive('journey-conditional-alight.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('legal,08:30:00,08:30:00,Z,2,0,0','legal,08:30:00,08:30:00,Z,2,0,3')})
 
 write_archive('journey-conditional-through.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('W,2,0,0','W,2,3,2')})
+
+write_archive('journey-timed.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,X,1\n'})

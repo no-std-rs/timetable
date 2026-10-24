@@ -19,7 +19,7 @@ test("browser stages agree with the Rust fixture for direct, one-transfer and de
   assert.equal(result.paths[0].target.name,"Bolechowo-Os./Szkoła");
 });
 test("walking, transfer minimums, feed exclusions, shuffled calls and multiple targets stay consistent",async()=>{
-  for(const [file,minutes]of[["journey-direct.zip",28],["journey-forbidden.zip",35],["journey-minimum.zip",35],["journey-shuffled.zip",30],["journey-station.zip",30],["journey-station-forbidden.zip",35]]){
+  for(const [file,minutes]of[["journey-direct.zip",28],["journey-forbidden.zip",35],["journey-minimum.zip",35],["journey-timed.zip",30],["journey-shuffled.zip",30],["journey-station.zip",30],["journey-station-forbidden.zip",35]]){
     const result=await searchJourneys(await loader(file),config(),{now:NOW});assert.equal(result.paths[0].arrival-NOW,minutes*60,file);
   }
   assert.deepEqual((await searchJourneys(await loader("journey-no-service.zip"),config(),{now:NOW})).paths,[]);
@@ -47,4 +47,9 @@ test("unsupported rules fail only for reachable transfers, and conditional board
   for(const file of["journey-scoped-rule.zip","journey-inseat-rule.zip","journey-conditional.zip","journey-conditional-alight.zip"]){
     await assert.rejects(searchJourneys(await loader(file),config(),{now:NOW}),/does not yet support/);
   }
+});
+
+test("a timed-transfer guarantee does not waive the configured user margin",async()=>{
+  const c=config();c.transfer_minutes=2;
+  assert.equal((await searchJourneys(await loader("journey-timed.zip"),c,{now:NOW})).paths[0].arrival,NOW+25*60);
 });

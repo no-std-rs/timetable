@@ -419,6 +419,8 @@ impl<
         let at = self.epochs[day].checked_add(i64::from(time?.seconds()))? - self.now;
         (0..=HORIZON).contains(&at).then_some(at as u16)
     }
+    // The user's minimum applies even to GTFS timed transfers. A guarantee
+    // never grants permission to waive their chosen change-time margin.
     fn transfer(&self, from: u16, to: u16, slack: u8) -> Option<u16> {
         let from_parent = self.parents[from as usize];
         let to_parent = self.parents[to as usize];
@@ -863,6 +865,9 @@ impl<
                     }) {
                         return Ok(());
                     }
+                    // This bounded mode admits stop-level rules only. Scoped
+                    // rules touching a selected trip's stops fail explicitly;
+                    // their route/trip predicates are not approximated.
                     if [C::FromRouteId, C::ToRouteId, C::FromTripId, C::ToTripId]
                         .iter()
                         .any(|&c| row.get(c).is_some())

@@ -500,7 +500,10 @@ async fn main(spawner: Spawner) -> ! {
     let mut radio = Some(p.WIFI);
     if connect {
         info!("Boot: settings ready; starting network");
-        start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
+        radio = start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
+        if radio.is_some() {
+            startup_failed(&mut shared.try_lock().unwrap());
+        }
     }
     info!("Boot: application ready");
     log_heap();
@@ -611,7 +614,10 @@ async fn main(spawner: Spawner) -> ! {
                 if request {
                     s.network_busy = true;
                     if let Some(wifi) = radio.take() {
-                        start_network(spawner, wifi, shared, flash, cache_enabled);
+                        radio = start_network(spawner, wifi, shared, flash, cache_enabled);
+                        if radio.is_some() {
+                            startup_failed(&mut s);
+                        }
                     } else {
                         REFRESH.signal(());
                     }
@@ -664,7 +670,10 @@ async fn main(spawner: Spawner) -> ! {
                 )
             {
                 s.network_busy = true;
-                start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
+                radio = start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
+                if radio.is_some() {
+                    startup_failed(&mut s);
+                }
             }
             if let Some(seconds) = s.completed_delay.take() {
                 next_refresh_rtc = rtc
@@ -858,13 +867,18 @@ fn initialize_state(
     })
 }
 
-fn heap_slot<T: 'static>(value: T) -> Result<&'static mut T, gtfs::Error> {
+fn heap_slot<T>(value: T) -> Result<alloc::vec::Vec<T>, gtfs::Error> {
     let mut storage = alloc::vec::Vec::new();
     storage
         .try_reserve_exact(1)
         .map_err(|_| gtfs::Error::BufferTooSmall)?;
     storage.push(value);
-    Ok(storage.leak().first_mut().unwrap())
+    Ok(storage)
+}
+fn startup_failed(state: &mut State) {
+    state.network_busy = false;
+    state.app.status = Status::Failed;
+    state.completed_delay = Some(60);
 }
 #[inline(never)]
 fn start_network(
@@ -873,15 +887,20 @@ fn start_network(
     shared: &'static Shared,
     flash: &'static FlashMutex,
     cache_enabled: bool,
-) {
-    let Ok(query_config) = heap_slot(Config::empty()) else {
-        warn!("No memory for query settings");
-        return;
+) -> Option<esp_hal::peripherals::WIFI<'static>> {
+    let (wifi, query_config, journey_cache) = match power::prepare_startup(
+        wifi,
+        || heap_slot(Config::empty()),
+        || heap_slot(timetable_display::journey::Cache::default()),
+    ) {
+        Ok(slots) => slots,
+        Err((wifi, error)) => {
+            warn!("Network startup allocation failed: {error:?}; retaining radio for retry");
+            return Some(wifi);
+        }
     };
-    let Ok(journey_cache) = heap_slot(timetable_display::journey::Cache::default()) else {
-        warn!("No memory for journey results");
-        return;
-    };
+    let query_config = query_config.leak().first_mut().unwrap();
+    let journey_cache = journey_cache.leak().first_mut().unwrap();
     let builder = FEED.take();
     builder.zone = catalog_slot::profile().zone();
     builder.journeys = Some(journey_cache);
@@ -901,6 +920,7 @@ fn start_network(
         .unwrap(),
     );
     info!("Wi-Fi: update task started; CPU 80 MHz; radio sleeps between updates");
+    None
 }
 
 #[embassy_executor::task]

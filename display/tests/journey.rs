@@ -426,3 +426,23 @@ fn three_leg_landscape_keeps_destination_text_out_of_the_footer() {
     assert_eq!(footer.detail, 0, "leg detail intrudes into footer area");
     assert!(footer.summary > 0, "connection summary must remain visible");
 }
+
+#[test]
+fn timed_transfer_guarantees_do_not_waive_the_users_minimum_slack() {
+    let mut config = settings(1);
+    assert_eq!(
+        query(include_bytes!("fixtures/journey-timed.zip"), &config)
+            .best(0, NOW)
+            .unwrap()
+            .arrival,
+        30 * 60
+    );
+    config.transfer_minutes = 2;
+    assert_eq!(
+        query(include_bytes!("fixtures/journey-timed.zip"), &config)
+            .best(0, NOW)
+            .unwrap()
+            .arrival,
+        25 * 60
+    );
+}
