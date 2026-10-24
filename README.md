@@ -24,6 +24,11 @@ tablets, including older Fire 7 models. A JDK and a small set of pinned standalo
 tools build the APK without an SDK/NDK installation; see its build and device-policy
 notes before using Home, kiosk, or optional camera motion dimming.
 
+Groups also support [complete connections](docs/journeys.md): several starting
+stops with individual walks, several targets, scheduled arrival ETA and a
+three-minute transfer margin. Android and ESP32 calculate locally; one transfer
+is the default, with deeper search in advanced settings.
+
 The [`gtfs`](gtfs/) crate streams GTFS ZIP archives, lists routes and stops, and
 filters departures with caller-owned buffers. Poznań is the first verified
 provider, with MobilityDatabase range requests and a direct official-source

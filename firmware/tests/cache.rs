@@ -1125,21 +1125,7 @@ fn conditional_refresh_uses_no_archive_ranges_or_flash_writes_and_legacy_cache_s
     assert_eq!(flash.counters(), counters);
     // Convert only the header to the original v1 format. Payload offsets and
     // committed bytes are deliberately unchanged: upgrades must preserve it.
-    {
-        let mut bytes = flash.bytes.borrow_mut();
-        assert_eq!(&bytes[..4], b"TTFC");
-        let sources: Vec<_> = (0..3)
-            .map(|i| bytes[48 + i * 352..48 + i * 352 + 160].to_vec())
-            .collect();
-        for (i, source) in sources.iter().enumerate() {
-            bytes[48 + i * 160..48 + (i + 1) * 160].copy_from_slice(source);
-        }
-        bytes[4..8].copy_from_slice(&1_u32.to_le_bytes());
-        bytes[40..48].fill(0);
-        let crc = crc32fast::hash(&bytes[..528]);
-        bytes[40..44].copy_from_slice(&crc.to_le_bytes());
-        bytes[44..48].copy_from_slice(&0x434f4d54_u32.to_le_bytes());
-    }
+    downgrade_cache_header(&flash, 1);
     assert_eq!(events(&mut restore(&flash, &c, NOW)), expected);
     let client = Client::new(ORIGINAL);
     update(&flash, &client, &c, NOW + 120).1.unwrap();
@@ -1183,5 +1169,50 @@ fn weak_etag_sources_keep_normal_archive_validation_without_a_304_shortcut() {
     update(&flash, &refresh, &c, NOW + 60).1.unwrap();
     assert_eq!(refresh.checks.get(), 0);
     assert!(refresh.bytes.get() > 0);
+    assert_eq!(flash.counters(), counters);
+}
+
+fn downgrade_cache_header(flash: &Memory, version: u32) {
+    let mut bytes = flash.bytes.borrow_mut();
+    assert_eq!(&bytes[..4], b"TTFC");
+    let size = if version == 1 { 160 } else { 352 };
+    let sources: Vec<_> = (0..3)
+        .map(|i| {
+            let source = &bytes[48 + i * 384..48 + (i + 1) * 384];
+            let mut old = vec![0; size];
+            old[..76].copy_from_slice(&source[..76]);
+            old[76..160].copy_from_slice(&source[84..168]);
+            if version == 2 {
+                old[160..319].copy_from_slice(&source[180..339]);
+            }
+            old
+        })
+        .collect();
+    for (i, source) in sources.iter().enumerate() {
+        bytes[48 + i * size..48 + (i + 1) * size].copy_from_slice(source);
+    }
+    bytes[4..8].copy_from_slice(&version.to_le_bytes());
+    bytes[40..48].fill(0);
+    let crc = crc32fast::hash(&bytes[..48 + 3 * size]);
+    bytes[40..44].copy_from_slice(&crc.to_le_bytes());
+    bytes[44..48].copy_from_slice(&0x434f4d54_u32.to_le_bytes());
+}
+#[test]
+fn version_two_cache_preserves_conditional_identity_after_upgrade() {
+    let flash = Memory::new();
+    let config = settings();
+    let (mut original, result) = update(&flash, &Client::new(ORIGINAL), &config, NOW);
+    result.unwrap();
+    let expected = events(&mut original);
+    downgrade_cache_header(&flash, 2);
+    assert_eq!(events(&mut restore(&flash, &config, NOW)), expected);
+    let mut client = Client::new(ORIGINAL);
+    client.conditional = true;
+    let counters = flash.counters();
+    let (mut fresh, result) = update(&flash, &client, &config, NOW + 60);
+    result.unwrap();
+    assert_eq!(events(&mut fresh), expected);
+    assert_eq!(client.checks.get(), 1);
+    assert_eq!(client.bytes.get(), 0);
     assert_eq!(flash.counters(), counters);
 }

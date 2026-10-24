@@ -36,6 +36,65 @@ pub struct Group {
     pub start: u16,
     pub end: u16,
     pub picks: Vec<Pick, MAX_PICKS>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journey: Option<Journey>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct JourneyStop {
+    pub stop: String<32>,
+    pub walk: u8,
+}
+impl<'de> Deserialize<'de> for JourneyStop {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            stop: String<32>,
+            walk: u8,
+            #[serde(default, rename = "stop_name")]
+            _name: Option<serde::de::IgnoredAny>,
+            #[serde(default, rename = "stop_code")]
+            _code: Option<serde::de::IgnoredAny>,
+        }
+        let value = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            stop: value.stop,
+            walk: value.walk,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Journey {
+    pub origins: Vec<JourneyStop, 4>,
+    pub targets: Vec<JourneyStop, 4>,
+    pub transfer_minutes: u8,
+    pub max_transfers: u8,
+}
+impl Journey {
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.origins.is_empty()
+            || self.targets.is_empty()
+            || self.transfer_minutes > 30
+            || self.max_transfers > 2
+        {
+            return Err(Error::Invalid("Journey origins, targets or transfers"));
+        }
+        for stops in [&self.origins, &self.targets] {
+            for (i, s) in stops.iter().enumerate() {
+                if s.stop.is_empty()
+                    || s.walk > 60
+                    || s.stop.chars().any(char::is_control)
+                    || stops[..i].iter().any(|previous| previous.stop == s.stop)
+                {
+                    return Err(Error::Invalid("Journey stop or walking time"));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -101,6 +160,9 @@ impl Config {
             for p in &g.picks {
                 p.validate()?;
             }
+            if let Some(journey) = &g.journey {
+                journey.validate()?;
+            }
         }
         Ok(())
     }
@@ -130,6 +192,7 @@ impl Clone for Config {
                     start: group.start,
                     end: group.end,
                     picks: group.picks.clone(),
+                    journey: group.journey.clone(),
                 })
                 .unwrap();
         }
@@ -157,6 +220,13 @@ impl Pick {
 }
 
 impl Group {
+    pub fn departure_picks(&self) -> &[Pick] {
+        if self.journey.is_some() {
+            &[]
+        } else {
+            &self.picks
+        }
+    }
     pub fn active(&self, weekday: u8, minute: u16) -> bool {
         if self.start == self.end {
             return self.days & (1 << weekday) != 0;

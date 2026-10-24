@@ -1,5 +1,9 @@
 # Persistent selected timetable
 
+This cache applies to departure-board configurations. When any journey group is
+configured, ESP32 uses a RAM journey profile and fetches GTFS again after a
+restart or deep-sleep wake. See [journey persistence](journeys.md).
+
 The device saves selected GTFS tables for the feed's full service period, rather
 than writing a moving six-hour departure list. On cold boot it validates and
 replays saved data **before starting Wi-Fi**. Until NTP succeeds, the board shows

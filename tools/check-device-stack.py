@@ -211,6 +211,35 @@ def audit(frames, stack):
             'runtime_cache_cold_validation': cold + frame('cache4load', 'closure') + frame('cache8validate', 'closure') + flash_read,
             'runtime_cache_cold_replay': cold + frame('cache7restore', 'closure') + query_sources + stages + frame('csv', '4next', 'closure') + frame('csv', '8raw_next', 'closure') + flash_read,
         })
+        # Journey scratch is allocated only after TLS verification. Its query
+        # and table-scan coroutines remain live during record/header parsing;
+        # count every surviving wrapper family, using the largest specialization.
+        journey = [size for name, size in frames
+                   if 'journey' in name and 'Search' in name and ('5query' in name or 'query_using' in name) and 'closure' in name
+                   and 'drop_in_place' not in name]
+        if journey:
+            phase = max((size for name, size in frames
+                         if 'journey' in name and 'Search' in name and 'closure' in name
+                         and 'drop_in_place' not in name
+                         and any(method in name for method in
+                                 ('collect_calls', 'metadata', 'stations', 'publish'))), default=0)
+            wrappers = sum(max((size for name, size in frames
+                                if all(part in name for part in parts)
+                                and 'drop_in_place' not in name), default=0)
+                           for parts in [('http_session', 'journey_plan', 'closure'),
+                                         ('transport', 'journey_plan', 'closure'),
+                                         ('feed', 'journeys_with', 'closure')])
+            query = base + transport + normal + wrappers + max(journey)
+            paths.update({
+                'runtime_journey_scratch': base + transport + normal + wrappers
+                    + frame('transport', 'journey_scratch'),
+                'runtime_journey_record': query + phase + http
+                    + frame('gtfs', 'zip', '6record', 'closure'),
+                'runtime_journey_headers': query + phase + http
+                    + frame('response', 'Response', '7headers'),
+                'runtime_journey_official': query + phase + http
+                    + frame('gtfs', 'next_entry'),
+            })
     elif scoped:
         # Pinned scoped-session ELF: update_once and session are inlined into
         # Select/refresh. TLS.open is in TimeoutFuture::poll, BEFORE the

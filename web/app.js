@@ -1,3 +1,4 @@
+import { JourneyEditor } from "./journey-editor.js";
 import { AndroidInstaller } from "./android-installer.js";
 import { device, DEFAULT_DEVICE } from "./devices.js";
 import { DevicePreview } from "./device-preview.js";
@@ -27,6 +28,7 @@ state.catalogGeneration = 0; state.installGeneration = 0;
 const networkDrafts = new Map();
 const networkPicker = new NetworkPicker(feed => void selectFeed(feed));
 let storeReady = false;
+let journeyEditor;
 const group = () => state.groups[state.active];
 const minute = (value) => {
   const [h, m] = value.split(":").map(Number);
@@ -104,6 +106,14 @@ const devicePreview = new DevicePreview($("device-canvas"), {
     $("preview-leave").textContent = !next ? t("Add a line and stop below.") : next.left === null ? t("Saved times / waiting for NTP") : next.chance === 0 ? t("Not enough walk time") : next.left > 0 ? t("Leave in {minutes} min", { minutes: Math.ceil(next.left / 60) }) : t("Leave now");
     $("preview-walk").textContent = next?.chance != null ? t("{minutes}m walk · {chance}% walk est.", { minutes: p.walk, chance: next.chance }) : "";
     $("preview-freshness").textContent = snapshot.loaded ? t("Sample timetable / source date unknown") : "";
+    if(g.journey){
+      $("preview-line").textContent=t("Journey mode");
+      $("preview-direction").textContent=g.journey.targets.map(s=>s.stop_name||state.catalog?.stops.find(stop=>stop.id===s.stop)?.name||s.stop).join(" / ");
+      $("preview-stop").textContent=g.journey.origins.map(s=>s.stop_name||state.catalog?.stops.find(stop=>stop.id===s.stop)?.name||s.stop).join(" / ");
+      $("preview-leave").textContent=t("The device calculates the next best connection.");
+      $("preview-walk").textContent=t("Minimum transfer time: {minutes} min",{minutes:g.journey.transfer_minutes});
+    }
+
     $("device-canvas").setAttribute("aria-label", `${t("Interactive device demo")}: ${t(["Board", "Groups", "Choices", "Lines", "Stops", "Walking time", "Timetable age"][snapshot.screen])}`);
     if (!demoSaved) copy("preview-state", "Wi-Fi and NTP simulated. Sample departures.");
     $("preview-retry").hidden = true;
@@ -227,6 +237,7 @@ function renderGroup(preserveInputs = false) {
   });
   $("add-pick").hidden = g.picks.length >= 4;
   $("add-pick").disabled = !state.catalog;
+  journeyEditor?.render();
   if (!preserveInputs) preview();
   else devicePreview.paint();
   persistSettings();
@@ -649,7 +660,7 @@ $("settings").addEventListener("submit", async (event) => {
     let firmwareUrl = state.firmwareUrl;
     currentBundle();
     if(state.feed.id !== DEFAULT_FEED || state.release.catalog_slot || state.bundleHasProfile) {
-      if(!state.bundleFull && !state.groups.some(g=>g.picks.length))throw new Error("Choose a line and stop before installing this large network.");
+      if(!state.bundleFull && !state.groups.some(g=>g.picks.length||g.journey))throw new Error("Choose a line and stop before installing this large network.");
       $("prepare").disabled=true;
       const customized = await customizeFirmware(state.firmwareBytes,state.release,currentBundle());
       if(generation!==state.installGeneration)return;
@@ -671,10 +682,16 @@ $("settings").addEventListener("submit", async (event) => {
 function currentBundle() {
   if (!state.catalog) throw new Error("Load a transport network first.");
   const picks=state.groups.flatMap(g=>g.picks);
+  const journeys=state.groups.flatMap(g=>g.journey?[g.journey]:[]);
   const routes=new Set(picks.map(p=>state.catalog.routes.findIndex(r=>r.id===p.route)));
+  if(journeys.length){
+    const endpoints=new Set(journeys.flatMap(j=>[...j.origins,...j.targets].map(s=>s.stop)));
+    state.catalog.links.forEach(([route,stop])=>{if(endpoints.has(state.catalog.stops[stop].id))routes.add(route);});
+  }
   const routeKey=[...routes].sort((a,b)=>a-b).join(",");
   const characters=texts=>[...new Set(texts.flatMap(text=>[...String(text||"")]).filter(needsGlyph))].sort((a,b)=>a.codePointAt(0)-b.codePointAt(0)).join("");
-  const userChars=characters([...state.groups.map(g=>g.name),...picks.flatMap(p=>[p.line,p.stop_name,p.headsign])]);
+  if(journeys.length && state.journeyGlyphs===undefined)state.journeyGlyphs=characters([...state.catalog.stops.map(s=>s.name),...state.catalog.routes.map(r=>r.line)]);
+  const userChars=characters([...state.groups.map(g=>g.name),...picks.flatMap(p=>[p.line,p.stop_name,p.headsign]),...journeys.flatMap(j=>[...j.origins,...j.targets].map(s=>s.stop_name)),journeys.length?state.journeyGlyphs:""]);
   if(state.bundle && state.bundleUserChars===userChars && (state.bundleFull || state.bundleKey===routeKey))return state.bundle;
   if(state.fullBytes===undefined){try{state.fullBytes=catalogBytes(state.catalog);}catch{state.fullBytes=null;}}
   const build=full=>{
@@ -707,7 +724,7 @@ function acceptCatalog(c) {
   const index = catalogIndex(c);
   state.catalog = c; state.index = index;
   state.bundle = null; state.bundleFull = false; state.profileBytes = null;
-  state.fullBytes=undefined;state.catalogBytesKey=undefined;state.profileGlyphs=undefined;
+  state.fullBytes=undefined;state.journeyGlyphs=undefined;state.catalogBytesKey=undefined;state.profileGlyphs=undefined;
   $("network-active").textContent = `${state.feed.provider || c.provider || state.feed.id} · ${c.timezone || "Europe/Warsaw"}`;
   $("schedule-timezone").textContent = c.timezone || "Europe/Warsaw";
   copy("catalog-status", "{routes} lines · {stops} stops · {provider} · catalogue {date}", {routes:c.routes.length,stops:c.stops.length,provider:state.feed.provider || c.provider || state.feed.id,date:`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6)}`});
@@ -984,6 +1001,13 @@ $("device-orientation").addEventListener("change", () => {
   state.release = null;
   updateDevice();changed();void loadRelease();
 });
+journeyEditor=new JourneyEditor({group,catalog:()=>state.catalog,changed,preview:async(journey,depth,update)=>{
+  if(!state.feedClient)state.feedClient=new FeedClient(text=>{$("journey-preview-status").textContent=t(text);});
+  const client=state.feedClient,feed=state.feed;
+  if(client.feedId!==feed.id)await client.load(feed);
+  if(state.feedClient!==client)throw new DOMException("Network selection changed","AbortError");
+  return client.journey(journey,depth,Math.floor(Date.now()/1000),update);
+}});
 restoreSettings();
 updateDevice();
 storeReady = true;

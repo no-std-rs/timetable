@@ -63,18 +63,23 @@ pub fn reserves_bytes() -> usize {
 /// The visible App coexists with the pending update and is counted separately.
 pub async fn display_workflow(source: &[u8]) -> Result<(), Error> {
     let mut workspace = zip::Workspace::new();
-    let mut builder = timetable_display::feed::Builder::new(Date::new(2026, 10, 17)?);
+    let mut journeys = timetable_display::journey::Cache::default();
+    let mut builder = timetable_display::feed::ZonedBuilder::new(Date::new(2026, 10, 17)?);
     let (config, _) = {
         let mut image = *include_bytes!("../../../display/tests/settings.bin");
         timetable_display::config::decode(&mut image)
             .map_err(|_| Error::InvalidField("settings"))?
     };
+    builder.journeys = Some(&mut journeys);
     builder.begin(1792260000)?;
     builder
         .calendars(source, 7, &config, &mut workspace)
         .await?;
     builder.trips(source, &config, &mut workspace).await?;
     builder.departures(source, &config, &mut workspace).await?;
+    builder
+        .journeys_from(&mut JourneySource(source), 7, &config, &mut workspace)
+        .await?;
     core::hint::black_box(&builder.events);
     Ok(())
 }
@@ -102,4 +107,17 @@ pub fn display_reserves_bytes() -> usize {
         + core::mem::size_of::<timetable_display::App>()
         + core::mem::size_of::<timetable_display::Config>()
         + 8192 // shared settings flash image / panel tile (never concurrent)
+}
+
+struct JourneySource<'a>(&'a [u8]);
+impl timetable_display::feed::Tables for JourneySource<'_> {
+    async fn scan(
+        &mut self,
+        tables: &[gtfs::Table],
+        expected: Option<&zip::Manifest>,
+        workspace: &mut zip::Workspace,
+        visit: impl FnMut(gtfs::csv::Record<'_>) -> Result<(), Error>,
+    ) -> Result<zip::Manifest, Error> {
+        stream::scan(self.0, tables, expected, workspace, visit).await
+    }
 }

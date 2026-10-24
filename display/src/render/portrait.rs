@@ -66,6 +66,9 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
     let Some(group) = config.groups.get(app.group) else {
         return setup(d);
     };
+    if app.screen == Screen::Board && group.journey.is_some() {
+        return journey_board(d, app, config, catalog, 172, 320);
+    }
     let title = match app.screen {
         Screen::Board => group.name.as_str(),
         Screen::Groups => "Your groups",

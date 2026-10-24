@@ -73,11 +73,13 @@ pub async fn query(
 ) -> Result<usize, &'static str> {
     let settings_value = crate::Settings::decode(settings)?;
     let zone = settings_value.timezone();
+    let mut journeys = timetable_display::journey::Cache::default();
     let mut builder = Builder::new(
         zone.service_date(now)
             .ok_or("Clock is outside timezone coverage")?,
     );
     builder.zone = zone;
+    builder.journeys = Some(&mut journeys);
     builder.begin(now).map_err(|_| "Invalid date")?;
     let config = settings_value.config();
     let mut workspace = zip::Workspace::new();
@@ -108,8 +110,15 @@ pub async fn query(
         .departures_from(&mut source, &config, &mut workspace)
         .await
         .map_err(|_| "Departures do not fit or are invalid")?;
+    builder
+        .journeys_from(&mut source, 7, &config, &mut workspace)
+        .await
+        .map_err(
+            |_| "Journey search exceeded device limits or the feed has unsupported transfer rules",
+        )?;
     let mut app = timetable_display::App::default();
     app.publish(builder.events, builder.headsigns, now);
+    app.journeys = core::mem::take(builder.journeys.as_deref_mut().unwrap());
     app.freshness.checked_at = Some(checked_at);
     app.freshness.source_updated_at = observed.updated_at();
     crate::snapshot::encode(settings, &app, out)

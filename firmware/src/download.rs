@@ -190,6 +190,30 @@ pub trait Http {
     {
         crate::cache::mirror_tables(self, snapshots, builder, workspace, config, flash).await
     }
+    async fn journey_plan(
+        &self,
+        builder: &mut Builder,
+        source: &mut impl Tables,
+        mask: u8,
+        config: &Config,
+        workspace: &mut zip::Workspace,
+    ) -> Result<(), gtfs::Error>
+    where
+        Self: Sized,
+    {
+        builder.journeys_from(source, mask, config, workspace).await
+    }
+    async fn official_tables(
+        &self,
+        builder: &mut Builder,
+        workspace: &mut zip::Workspace,
+        config: &Config,
+    ) -> Result<Freshness, Error>
+    where
+        Self: Sized,
+    {
+        official(self, builder, workspace, config).await
+    }
     fn stage(&self, _message: &str) {}
     fn fallback(&self, _error: &Error) {
         self.stage("MobilityDatabase failed; using official ZTM fallback");
@@ -647,12 +671,22 @@ pub async fn mirror_tables<H: Http>(
         if mask == 0 {
             continue;
         }
+        // Journey legs must share one immutable archive and exact ID namespace.
+        // Do not publish a falsely complete search across a feed handover.
+        if mask != builder.day_mask() && config.groups.iter().any(|g| g.journey.is_some()) {
+            return Err(
+                gtfs::Error::InvalidField("journey window spans different archives").into(),
+            );
+        }
         builder
             .calendars_from(&mut source, mask, config, workspace)
             .await?;
         builder.trips_from(&mut source, config, workspace).await?;
         builder
             .departures_from(&mut source, config, workspace)
+            .await?;
+        http.stage("journey planner: direct, then configured transfer depth");
+        http.journey_plan(builder, &mut source, mask, config, workspace)
             .await?;
         times.observe(
             builder
@@ -681,6 +715,17 @@ impl Operation for Archives {
             self.consider(name);
         }
         Ok(())
+    }
+}
+pub struct OfficialQuery<'a> {
+    pub builder: &'a mut Builder,
+    pub workspace: &'a mut zip::Workspace,
+    pub config: &'a Config,
+}
+impl SessionOperation for OfficialQuery<'_> {
+    type Output = Freshness;
+    async fn run(&mut self, http: &impl Http) -> Result<Freshness, Error> {
+        official(http, self.builder, self.workspace, self.config).await
     }
 }
 enum Phase {
@@ -717,6 +762,54 @@ impl Operation for Pass<'_> {
     }
 }
 
+struct OfficialTables<'a, H> {
+    http: &'a H,
+    url: &'a str,
+}
+struct JourneyPass<'a, F> {
+    tables: &'a [Table],
+    expected: Option<&'a zip::Manifest>,
+    workspace: &'a mut zip::Workspace,
+    visit: F,
+    manifest: Option<zip::Manifest>,
+}
+impl<F: FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>> Operation for JourneyPass<'_, F> {
+    async fn read<R: Read>(&mut self, body: R) -> Result<(), Error> {
+        self.manifest = Some(
+            gtfs::stream::scan(
+                body,
+                self.tables,
+                self.expected,
+                self.workspace,
+                &mut self.visit,
+            )
+            .await?,
+        );
+        Ok(())
+    }
+}
+impl<H: Http> Tables for OfficialTables<'_, H> {
+    async fn scan(
+        &mut self,
+        tables: &[Table],
+        expected: Option<&zip::Manifest>,
+        workspace: &mut zip::Workspace,
+        visit: impl FnMut(csv::Record<'_>) -> Result<(), gtfs::Error>,
+    ) -> Result<zip::Manifest, gtfs::Error> {
+        let mut pass = JourneyPass {
+            tables,
+            expected,
+            workspace,
+            visit,
+            manifest: None,
+        };
+        self.http
+            .fetch(self.url, None, &mut pass)
+            .await
+            .map_err(Error::feed)?;
+        pass.manifest.ok_or(gtfs::Error::InvalidZip)
+    }
+}
 pub async fn official(
     http: &impl Http,
     builder: &mut Builder,
@@ -728,6 +821,11 @@ pub async fn official(
         .fetch(gtfs::poznan::LIST_URL, None, &mut listing)
         .await?;
     let sources = listing.sources().ok_or(Error::MissingArchive)?;
+    if c.groups.iter().any(|g| g.journey.is_some())
+        && sources.iter().filter(|(_, mask)| *mask != 0).count() > 1
+    {
+        return Err(gtfs::Error::InvalidField("journey window spans different archives").into());
+    }
     let mut times = timetable_display::freshness::SourceTimes::default();
     for (name, mask) in sources {
         if mask == 0 {
@@ -767,6 +865,14 @@ pub async fn official(
             });
             times.observe(modified);
         }
+        http.journey_plan(
+            builder,
+            &mut OfficialTables { http, url },
+            mask,
+            c,
+            workspace,
+        )
+        .await?;
     }
     Ok(timetable_display::freshness::Freshness {
         checked_at: Some(builder.now),
@@ -783,7 +889,11 @@ pub async fn refresh(
     now: i64,
 ) -> Result<Freshness, Error> {
     builder.begin(now)?;
-    if config.groups.iter().all(|g| g.picks.is_empty()) {
+    if config
+        .groups
+        .iter()
+        .all(|g| g.departure_picks().is_empty() && g.journey.is_none())
+    {
         return Ok(Freshness::default());
     }
     match mirror(http, builder, workspace, config).await {
@@ -799,7 +909,7 @@ pub async fn refresh(
             }
             http.fallback(&error);
             builder.begin(now)?;
-            official(http, builder, workspace, config).await
+            http.official_tables(builder, workspace, config).await
         }
     }
 }

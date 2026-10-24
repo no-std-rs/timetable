@@ -212,8 +212,11 @@ fn has_cache_partition(flash: &mut FlashStorage<'_>) -> bool {
 static NET: StaticCell<StackResources<4>> = StaticCell::new();
 static SETTINGS: StaticCell<[u8; config::IMAGE_SIZE]> = StaticCell::new();
 const _: () = assert!(panel::TILE_BYTES <= config::IMAGE_SIZE);
-static FEED: StaticCell<Builder> = StaticCell::new();
-static QUERY_CONFIG: ConstStaticCell<Config> = ConstStaticCell::new(Config::empty());
+static FEED: ConstStaticCell<Builder> =
+    ConstStaticCell::new(Builder::unstarted(match gtfs::Date::new(2000, 1, 1) {
+        Ok(date) => date,
+        Err(_) => panic!("invalid initial date"),
+    }));
 static WORKSPACE: ConstStaticCell<gtfs::zip::Workspace> =
     ConstStaticCell::new(gtfs::zip::Workspace::new());
 static REFRESH: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -235,6 +238,9 @@ fn log_heap() {
 // temporaries out of the async radio caller while it later verifies TLS.
 #[inline(never)]
 fn publish_departures(app: &mut App, builder: &mut Builder) {
+    if let Some(cache) = builder.journeys.as_deref_mut() {
+        app.journeys = core::mem::take(cache);
+    }
     app.publish(
         core::mem::take(&mut builder.events),
         core::mem::take(&mut builder.headsigns),
@@ -838,7 +844,9 @@ fn initialize_state(
     } else {
         None
     };
-    let connect = !s.config.battery || restored.as_ref().is_none_or(|r| r.refresh_in_us == 0);
+    let connect = !s.config.battery
+        || s.config.groups.iter().any(|g| g.journey.is_some())
+        || restored.as_ref().is_none_or(|r| r.refresh_in_us == 0);
     s.network_busy = connect;
     drop(s);
     Some(Boot {
@@ -850,6 +858,14 @@ fn initialize_state(
     })
 }
 
+fn heap_slot<T: 'static>(value: T) -> Result<&'static mut T, gtfs::Error> {
+    let mut storage = alloc::vec::Vec::new();
+    storage
+        .try_reserve_exact(1)
+        .map_err(|_| gtfs::Error::BufferTooSmall)?;
+    storage.push(value);
+    Ok(storage.leak().first_mut().unwrap())
+}
 #[inline(never)]
 fn start_network(
     spawner: Spawner,
@@ -858,17 +874,24 @@ fn start_network(
     flash: &'static FlashMutex,
     cache_enabled: bool,
 ) {
+    let Ok(query_config) = heap_slot(Config::empty()) else {
+        warn!("No memory for query settings");
+        return;
+    };
+    let Ok(journey_cache) = heap_slot(timetable_display::journey::Cache::default()) else {
+        warn!("No memory for journey results");
+        return;
+    };
+    let builder = FEED.take();
+    builder.zone = catalog_slot::profile().zone();
+    builder.journeys = Some(journey_cache);
     spawner.spawn(
         network_service(
             wifi,
             shared,
             NET.init(StackResources::new()),
-            QUERY_CONFIG.take(),
-            FEED.init_with(|| {
-                let mut builder = Builder::new("20261017".parse().unwrap());
-                builder.zone = catalog_slot::profile().zone();
-                builder
-            }),
+            query_config,
+            builder,
             WORKSPACE.take(),
             CachePartition {
                 flash,
@@ -1005,6 +1028,10 @@ async fn restore_saved_board(
         state.app.status = Status::Restoring;
         copy_query(&state, query_config)
     };
+    if query_config.groups.iter().any(|g| g.journey.is_some()) {
+        shared.lock().await.app.status = Status::Connecting;
+        return;
+    }
     let storage = CacheFlash {
         flash: cache.flash,
         shared,
@@ -1190,6 +1217,7 @@ async fn update_once(
         approval: Cell::new(None),
     };
     if cache.enabled
+        && !query_config.groups.iter().any(|g| g.journey.is_some())
         && let Ok(Some(bank)) = cache::load(&storage).await
     {
         match cache::restore(
@@ -1219,7 +1247,7 @@ async fn update_once(
     let cached = cache::Http {
         inner: &transport,
         flash: &storage,
-        enabled: cache.enabled,
+        enabled: cache.enabled && !query_config.groups.iter().any(|g| g.journey.is_some()),
     };
     let mut confirmed = false;
     let result = loop {

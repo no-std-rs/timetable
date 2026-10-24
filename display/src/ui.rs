@@ -150,11 +150,19 @@ pub fn tap(
                 };
                 return Action::Refresh;
             } else if held {
-                app.screen = Screen::Picks;
+                app.screen = if config.groups[app.group].journey.is_some() {
+                    Screen::Groups
+                } else {
+                    Screen::Picks
+                };
             } else if y >= 200 || (38..58).contains(&y) {
                 app.screen = Screen::Freshness;
             } else if y > 190 {
-                app.screen = Screen::Picks;
+                app.screen = if config.groups[app.group].journey.is_some() {
+                    Screen::Groups
+                } else {
+                    Screen::Picks
+                };
             } else if y < 50 {
                 app.screen = Screen::Groups;
             }

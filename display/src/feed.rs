@@ -137,14 +137,48 @@ struct Service {
     removed: u8,
 }
 
+// The 16 KiB exact-ID arena is idle after the departure join. Reuse that
+// storage for 1,024 journey calls rather than allocating another 14 KiB on ESP.
+#[allow(clippy::large_enum_variant)] // Deliberate allocation-free reuse of the same 16 KiB arena.
+enum TripStorage {
+    Ids(Vec<u8, TRIP_ID_BYTES>),
+    Calls(Vec<crate::journey::Call, 1024>),
+}
+impl TripStorage {
+    fn ids(&self) -> Result<&Vec<u8, TRIP_ID_BYTES>, Error> {
+        match self {
+            Self::Ids(ids) => Ok(ids),
+            _ => Err(Error::InvalidField("departure phase already finished")),
+        }
+    }
+    fn ids_mut(&mut self) -> Result<&mut Vec<u8, TRIP_ID_BYTES>, Error> {
+        match self {
+            Self::Ids(ids) => Ok(ids),
+            _ => Err(Error::InvalidField("departure phase already finished")),
+        }
+    }
+    fn reset(&mut self) {
+        *self = Self::Ids(Vec::new());
+    }
+    fn calls(&mut self) -> &mut Vec<crate::journey::Call, 1024> {
+        if !matches!(self, Self::Calls(_)) {
+            *self = Self::Calls(Vec::new());
+        }
+        match self {
+            Self::Calls(calls) => calls,
+            _ => unreachable!(),
+        }
+    }
+}
 /// Builder with a caller-owned timezone table (for native tablet settings).
 pub struct ZonedBuilder<'zone> {
     services: Vec<Service, MAX_SERVICES>,
     trips: Vec<Trip, MAX_TRIPS>,
-    trip_ids: Vec<u8, TRIP_ID_BYTES>,
+    trip_ids: TripStorage,
     resolved: [Resolved; crate::config::MAX_GROUPS * crate::config::MAX_PICKS],
     pub events: Departures,
     pub headsigns: Headings,
+    pub journeys: Option<&'zone mut crate::journey::Cache>,
     /// Mask bits 0/1/2 select yesterday/today/tomorrow for one archive.
     pub dates: [Date; 3],
     pub now: i64,
@@ -203,10 +237,21 @@ pub type Builder = ZonedBuilder<'static>;
 
 impl<'zone> ZonedBuilder<'zone> {
     pub fn new(today: Date) -> Self {
+        let mut builder = Self::unstarted(today);
+        builder.dates = [
+            clock::previous(today).unwrap_or(today),
+            today,
+            clock::next(today).unwrap_or(today),
+        ];
+        builder
+    }
+    /// Construct static storage without a startup stack copy. Call `begin`
+    /// before scanning so all three service dates reflect the actual clock.
+    pub const fn unstarted(today: Date) -> Self {
         Self {
             services: Vec::new(),
             trips: Vec::new(),
-            trip_ids: Vec::new(),
+            trip_ids: TripStorage::Ids(Vec::new()),
             resolved: [Resolved {
                 route: Id::EMPTY,
                 stop: Id::EMPTY,
@@ -216,12 +261,9 @@ impl<'zone> ZonedBuilder<'zone> {
                 stop_ambiguous: false,
             }; crate::config::MAX_GROUPS * crate::config::MAX_PICKS],
             events: Departures::new(0),
-            headsigns: Headings::default(),
-            dates: [
-                clock::previous(today).unwrap_or(today),
-                today,
-                clock::next(today).unwrap_or(today),
-            ],
+            headsigns: Headings::new(),
+            journeys: None,
+            dates: [today; 3],
             now: 0,
             manifest: None,
             zone: clock::Zone::WARSAW,
@@ -236,8 +278,102 @@ impl<'zone> ZonedBuilder<'zone> {
         ];
         self.now = now;
         self.events.reset(now);
+        if let Some(cache) = self.journeys.as_deref_mut() {
+            cache.reset(now);
+        }
         self.headsigns.clear();
         self.manifest = None;
+        Ok(())
+    }
+    /// Search each configured journey on-device against the same immutable feed.
+    /// Output remains provisional in this builder until all selected groups pass.
+    pub async fn journeys_from(
+        &mut self,
+        source: &mut impl Tables,
+        mask: u8,
+        config: &Config,
+        workspace: &mut zip::Workspace,
+    ) -> Result<(), Error> {
+        if !config.groups.iter().any(|g| g.journey.is_some()) {
+            return Ok(());
+        }
+        let mut planner = crate::journey::Planner::new(self.dates[1]);
+        self.journeys_with(&mut planner, source, mask, config, workspace)
+            .await
+    }
+    pub async fn journeys_with<
+        const CALLS: usize,
+        const STOPS: usize,
+        const TRIPS: usize,
+        const IDS: usize,
+        const MIDDLE: usize,
+        const SERVICES: usize,
+        const ROUTES: usize,
+    >(
+        &mut self,
+        planner: &mut crate::journey::Search<CALLS, STOPS, TRIPS, IDS, MIDDLE, SERVICES, ROUTES>,
+        source: &mut impl Tables,
+        mask: u8,
+        config: &Config,
+        workspace: &mut zip::Workspace,
+    ) -> Result<(), Error> {
+        if !config.groups.iter().any(|g| g.journey.is_some()) {
+            return Ok(());
+        }
+        let output = self.journeys.as_deref_mut().ok_or(Error::BufferTooSmall)?;
+        for (group, settings) in config.groups.iter().enumerate() {
+            if let Some(journey) = &settings.journey {
+                planner
+                    .query(
+                        source,
+                        workspace,
+                        journey,
+                        self.zone,
+                        self.now,
+                        mask,
+                        group as u8,
+                        output,
+                        &mut self.headsigns,
+                        self.manifest.as_ref(),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+    /// Firmware variant reuses the departure ID arena after all ordinary joins.
+    pub async fn device_journeys_with(
+        &mut self,
+        planner: &mut crate::journey::DevicePlanner,
+        source: &mut impl Tables,
+        mask: u8,
+        config: &Config,
+        workspace: &mut zip::Workspace,
+    ) -> Result<(), Error> {
+        if !config.groups.iter().any(|g| g.journey.is_some()) {
+            return Ok(());
+        }
+        let output = self.journeys.as_deref_mut().ok_or(Error::BufferTooSmall)?;
+        let calls = self.trip_ids.calls();
+        for (group, settings) in config.groups.iter().enumerate() {
+            if let Some(journey) = &settings.journey {
+                planner
+                    .query_using(
+                        calls,
+                        source,
+                        workspace,
+                        journey,
+                        self.zone,
+                        self.now,
+                        mask,
+                        group as u8,
+                        output,
+                        &mut self.headsigns,
+                        self.manifest.as_ref(),
+                    )
+                    .await?;
+            }
+        }
         Ok(())
     }
     /// Include tomorrow when its GTFS service epoch enters the six-hour horizon.
@@ -272,7 +408,7 @@ impl<'zone> ZonedBuilder<'zone> {
         let mask = mask & self.day_mask();
         self.services.clear();
         self.trips.clear();
-        self.trip_ids.clear();
+        self.trip_ids.reset();
         self.manifest = None;
         self.resolved.fill(Resolved {
             route: Id::EMPTY,
@@ -295,7 +431,7 @@ impl<'zone> ZonedBuilder<'zone> {
                 |row| {
                     if matches!(row.table(), Table::Routes | Table::Stops) {
                         for (g, group) in config.groups.iter().enumerate() {
-                            for (p, pick) in group.picks.iter().enumerate() {
+                            for (p, pick) in group.departure_picks().iter().enumerate() {
                                 let resolved = &mut self.resolved[g * crate::config::MAX_PICKS + p];
                                 if row.table() == Table::Routes {
                                     let r = row.route()?;
@@ -373,7 +509,7 @@ impl<'zone> ZonedBuilder<'zone> {
             return Err(Error::MissingTable(Table::Calendar));
         }
         for (g, group) in config.groups.iter().enumerate() {
-            for p in 0..group.picks.len() {
+            for p in 0..group.departure_picks().len() {
                 let r = self.resolved[g * crate::config::MAX_PICKS + p];
                 if r.route_ambiguous {
                     return Err(Error::InvalidField("ambiguous line"));
@@ -422,7 +558,7 @@ impl<'zone> ZonedBuilder<'zone> {
             .as_ref()
             .ok_or(Error::MissingTable(Table::Trips))?;
         self.trips.clear();
-        self.trip_ids.clear();
+        self.trip_ids.reset();
         let mut staged = Staged {
             before: self.events.len(),
             events: &mut self.events,
@@ -444,7 +580,7 @@ impl<'zone> ZonedBuilder<'zone> {
                 }
                 let mut route = None;
                 for (g, group) in config.groups.iter().enumerate() {
-                    for (p, pick) in group.picks.iter().enumerate() {
+                    for (p, pick) in group.departure_picks().iter().enumerate() {
                         if self.resolved[g * crate::config::MAX_PICKS + p]
                             .route
                             .as_str()
@@ -463,8 +599,9 @@ impl<'zone> ZonedBuilder<'zone> {
                     if t.id.len() > u8::MAX as usize {
                         return Err(Error::IdTooLong);
                     }
-                    let offset = self.trip_ids.len() as u16;
+                    let offset = self.trip_ids.ids()?.len() as u16;
                     self.trip_ids
+                        .ids_mut()?
                         .extend_from_slice(t.id.as_bytes())
                         .map_err(|_| Error::IndexFull)?;
                     let headsign = staged.headsigns.insert(t.headsign.unwrap_or(""))?;
@@ -480,13 +617,9 @@ impl<'zone> ZonedBuilder<'zone> {
                 Ok(())
             })
             .await?;
-        self.trips
-            .sort_unstable_by(|a, b| a.id(&self.trip_ids).cmp(b.id(&self.trip_ids)));
-        if self
-            .trips
-            .windows(2)
-            .any(|w| w[0].id(&self.trip_ids) == w[1].id(&self.trip_ids))
-        {
+        let ids = self.trip_ids.ids()?;
+        self.trips.sort_unstable_by(|a, b| a.id(ids).cmp(b.id(ids)));
+        if self.trips.windows(2).any(|w| w[0].id(ids) == w[1].id(ids)) {
             return Err(Error::DuplicateTrip);
         }
         staged.committed = true;
@@ -570,16 +703,17 @@ impl<'zone> ZonedBuilder<'zone> {
                 |row| {
                     record(row, Selection(&self.resolved))?;
                     let id = row.required(Column::TripId)?;
+                    let ids = self.trip_ids.ids()?;
                     let found = if let Some((key, found)) = &last_trip
                         && found.map_or_else(
                             || key.as_str() == id,
-                            |i| self.trips[i].id(&self.trip_ids) == id.as_bytes(),
+                            |i| self.trips[i].id(ids) == id.as_bytes(),
                         ) {
                         *found
                     } else {
                         let found = self
                             .trips
-                            .binary_search_by(|t| t.id(&self.trip_ids).cmp(id.as_bytes()))
+                            .binary_search_by(|t| t.id(ids).cmp(id.as_bytes()))
                             .ok();
                         // Long unselected IDs remain valid and are never shortened.
                         last_trip = if found.is_some() {
@@ -602,7 +736,7 @@ impl<'zone> ZonedBuilder<'zone> {
                     };
                     let route = self.resolved[usize::from(t.flags >> 3)].route;
                     for (group, g) in config.groups.iter().enumerate() {
-                        for (pick, p) in g.picks.iter().enumerate() {
+                        for (pick, p) in g.departure_picks().iter().enumerate() {
                             let resolved = self.resolved[group * crate::config::MAX_PICKS + pick];
                             if resolved.route != route
                                 || resolved.stop.as_str() != event.stop_id

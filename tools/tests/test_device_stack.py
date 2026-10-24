@@ -251,3 +251,37 @@ class CacheStackAuditTest(StackAuditTest):
         self.assertEqual(grown['runtime_conditional_headers'], baseline['runtime_conditional_headers']+512)
         with self.assertRaises(ValueError):
             device_stack.audit([(n,s) for n,s in frames if 'http_session Connection' not in n],60000)
+
+class JourneyStackAuditTest(CacheStackAuditTest):
+    def journey_frames(self):
+        return self.cached_frames() + [
+            ('journey Search 5query closure', 5760),
+            ('journey Search metadata closure', 5440),
+            ('journey Search collect_calls closure', 5520),
+            ('journey Search stations closure', 5456),
+            ('transport journey_scratch', 3152),
+        ]
+
+    def test_query_and_scan_frames_count_after_handshake(self):
+        frames = self.journey_frames()
+        baseline = device_stack.audit(frames, 60000)['paths_bytes']
+        for component in ('5query', 'collect_calls', 'http_session Connection'):
+            grown = device_stack.audit([(n, s+1024 if component in n else s)
+                                        for n, s in frames], 60000)['paths_bytes']
+            for path in ('runtime_journey_record', 'runtime_journey_headers', 'runtime_journey_official'):
+                self.assertEqual(grown[path], baseline[path]+1024)
+            self.assertEqual(grown['runtime_tls'], baseline['runtime_tls'])
+        with self.assertRaisesRegex(ValueError, 'runtime_journey_record'):
+            device_stack.audit([(n, 15000 if 'collect_calls' in n else s)
+                                for n, s in frames], 55000)
+
+    def test_scratch_initialization_and_optional_wrappers_are_counted(self):
+        baseline = device_stack.audit(self.journey_frames(), 60000)['paths_bytes']
+        frames = self.journey_frames() + [('http_session journey_plan closure', 1024)]
+        grown = device_stack.audit(frames, 60000)['paths_bytes']
+        for path in baseline:
+            self.assertEqual(grown[path], baseline[path]+(1024 if path.startswith('runtime_journey_') else 0))
+        frames = [(n, s+1024 if 'journey_scratch' in n else s) for n,s in self.journey_frames()]
+        grown = device_stack.audit(frames, 60000)['paths_bytes']
+        self.assertEqual(grown['runtime_journey_scratch'], baseline['runtime_journey_scratch']+1024)
+        self.assertEqual(grown['runtime_journey_record'], baseline['runtime_journey_record'])

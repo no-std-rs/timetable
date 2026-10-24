@@ -16,10 +16,11 @@ pub enum Table {
     Calendar,
     CalendarDates,
     FeedInfo,
+    Transfers,
 }
 
 impl Table {
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 8;
     pub const ALL: [Self; Self::COUNT] = [
         Self::Routes,
         Self::Stops,
@@ -28,6 +29,7 @@ impl Table {
         Self::Calendar,
         Self::CalendarDates,
         Self::FeedInfo,
+        Self::Transfers,
     ];
 
     pub fn filename(self) -> &'static str {
@@ -39,6 +41,7 @@ impl Table {
             Self::Calendar => "calendar.txt",
             Self::CalendarDates => "calendar_dates.txt",
             Self::FeedInfo => "feed_info.txt",
+            Self::Transfers => "transfers.txt",
         }
     }
 
@@ -68,6 +71,7 @@ impl Table {
             ],
             Self::CalendarDates => &[C::ServiceId, C::Date, C::ExceptionType],
             Self::FeedInfo => &[],
+            Self::Transfers => &[C::FromStopId, C::ToStopId],
         }
     }
 }
@@ -76,7 +80,7 @@ impl Table {
 pub struct Date(u32);
 
 impl Date {
-    pub fn new(year: u16, month: u8, day: u8) -> Result<Self, Error> {
+    pub const fn new(year: u16, month: u8, day: u8) -> Result<Self, Error> {
         let leap =
             year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
         let days = match month {

@@ -24,6 +24,139 @@ pub const GOLD: Rgb565 = Rgb565::new(22, 37, 12);
 pub const CHILLI: Rgb565 = Rgb565::new(23, 14, 6);
 const MUTED: Rgb565 = Rgb565::new(15, 30, 14);
 
+fn journey_board<D: DrawTarget<Color = Rgb565>>(
+    d: &mut D,
+    app: &App,
+    config: &Config,
+    catalog: &Catalog<'_>,
+    width: i32,
+    height: i32,
+) -> Result<(), D::Error> {
+    let profile = catalog.profile();
+    let group = &config.groups[app.group];
+    let center = width / 2;
+    let chars = (width / 6 - 4) as usize;
+    label_with_profile(
+        profile,
+        d,
+        &short(&group.name, chars),
+        center,
+        16,
+        INK,
+        true,
+    )?;
+    let status = match app.status {
+        Status::Capacity => "SEARCH LIMIT / TAP RETRY",
+        Status::Failed => "SEARCH FAILED / RETRY",
+        Status::Offline => "OFFLINE / TAP RETRY",
+        Status::Loading | Status::Connecting | Status::Syncing => "CALCULATING ON DEVICE",
+        _ => "SCHEDULED JOURNEY",
+    };
+    label_with_profile(profile, d, &short(status, chars), center, 32, MUTED, true)?;
+    let Some(now) = app.clock else {
+        return label_with_profile(profile, d, "Waiting for clock", center, 80, MUTED, true);
+    };
+    let Some(path) = app.journeys.best(app.group, now) else {
+        let message = if app.loaded_at.is_none() {
+            "Waiting for route data"
+        } else if matches!(app.status, Status::Failed | Status::Capacity) {
+            "Search incomplete"
+        } else if now > app.journeys.until {
+            "Refresh route data"
+        } else {
+            "No reachable journey"
+        };
+        label_with_profile(profile, d, &short(message, chars), center, 78, INK, true)?;
+        return label_with_profile(
+            profile,
+            d,
+            "Tap status to refresh",
+            center,
+            101,
+            MUTED,
+            true,
+        );
+    };
+    let zone = profile.zone();
+    let mut value = String::<96>::new();
+    if let Some(arrival) = zone.local(app.journeys.epoch + i64::from(path.arrival)) {
+        let _ = write!(
+            value,
+            "Arrive {:02}:{:02} / {}m",
+            arrival.hour(),
+            arrival.minute(),
+            (app.journeys.epoch + i64::from(path.arrival) - now + 59) / 60
+        );
+    }
+    label_with_profile(profile, d, &short(&value, chars), center, 52, INK, true)?;
+    value.clear();
+    let _ = write!(
+        value,
+        "Leave in {}m / {}m walk",
+        (app.journeys.epoch + i64::from(path.leave) - now).max(0) / 60,
+        path.walk
+    );
+    label_with_profile(profile, d, &short(&value, chars), center, 68, CHILLI, true)?;
+    let step = if height < 200 { 24 } else { 40 };
+    for (i, leg) in path.legs[..path.len as usize].iter().enumerate() {
+        value.clear();
+        if let (Some(departure), Some(arrival)) = (
+            zone.local(app.journeys.epoch + i64::from(leg.departure)),
+            zone.local(app.journeys.epoch + i64::from(leg.arrival)),
+        ) {
+            let _ = write!(
+                value,
+                "{} {:02}:{:02}>{:02}:{:02}",
+                app.headsigns.get(leg.line).unwrap_or("?"),
+                departure.hour(),
+                departure.minute(),
+                arrival.hour(),
+                arrival.minute()
+            );
+        }
+        label_with_profile(
+            profile,
+            d,
+            &short(&value, chars),
+            center,
+            88 + i as i32 * step,
+            INK,
+            true,
+        )?;
+        value.clear();
+        if i != 0 {
+            let wait = (u32::from(leg.departure) - u32::from(path.legs[i - 1].arrival)) / 60;
+            let _ = write!(value, "{wait}m change / ");
+        }
+        let _ = write!(
+            value,
+            "{} > {}",
+            app.headsigns.get(leg.from).unwrap_or("?"),
+            app.headsigns.get(leg.to).unwrap_or("?")
+        );
+        label_with_profile(
+            profile,
+            d,
+            &short(&value, chars),
+            center,
+            100 + i as i32 * step,
+            MUTED,
+            true,
+        )?;
+    }
+    value.clear();
+    let _ = write!(value, "{} transfer(s) / search complete", path.len - 1);
+    label_with_profile(
+        profile,
+        d,
+        &short(&value, chars),
+        center,
+        height - 16,
+        GOLD,
+        true,
+    )
+}
+
 // The board redraws in tiles. Avoid rasterizing text and primitives that cannot
 // touch this target; a full framebuffer still draws the same complete image.
 fn draw_visible<D, T>(d: &mut D, item: &T) -> Result<(), D::Error>
@@ -407,6 +540,9 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
     let Some(group) = config.groups.get(app.group) else {
         return setup(d);
     };
+    if app.screen == Screen::Board && group.journey.is_some() {
+        return journey_board(d, app, config, catalog, 240, 240);
+    }
     let title = match app.screen {
         Screen::Board => group.name.as_str(),
         Screen::Groups => "Your groups",

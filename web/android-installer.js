@@ -8,7 +8,7 @@ import { t } from "./i18n.js";
 export function tabletSettings(source, options, now = Date.now()) {
   if (!source.timezone || !validFeedId(source.feed_id)) throw new Error("Choose a transport network first.");
   const { groups, automatic } = validateConfig({ wifi_ssid: "Android", wifi_password: "", groups: structuredClone(source.groups), automatic: source.automatic });
-  if (!groups.some(g => g.picks.length)) throw new Error("Add a line and stop first.");
+  if (!groups.some(g => g.journey || g.picks.length)) throw new Error("Add a line and stop first.");
   for (const key of ["keep_awake", "camera_motion", "launch_on_boot"]) if (typeof options[key] !== "boolean") throw new Error("Invalid tablet options.");
   if (options.camera_motion && !options.keep_awake) throw new Error("Keep the screen on to use motion dimming.");
   const idle_seconds = options.camera_motion ? options.idle_seconds : 120;

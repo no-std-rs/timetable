@@ -8,6 +8,12 @@ pub struct Headings {
     spans: Vec<(u16, u8), MAX_HEADSIGNS>,
 }
 impl Headings {
+    pub const fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            spans: Vec::new(),
+        }
+    }
     pub(crate) fn checkpoint(&self) -> (usize, usize) {
         (self.bytes.len(), self.spans.len())
     }
@@ -109,6 +115,7 @@ pub struct App {
     pub freshness: crate::freshness::Freshness,
     pub departures: Departures,
     pub headsigns: Headings,
+    pub journeys: crate::journey::Cache,
 }
 
 impl Default for App {
@@ -131,6 +138,7 @@ impl Default for App {
             freshness: crate::freshness::Freshness::default(),
             departures: Departures::new(0),
             headsigns: Headings::default(),
+            journeys: crate::journey::Cache::default(),
         }
     }
 }

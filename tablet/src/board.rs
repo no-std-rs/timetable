@@ -72,6 +72,113 @@ fn clock(settings: &Settings, at: i64) -> String<24> {
     }
     out
 }
+fn journey_card<P: Painter>(
+    settings: &Settings,
+    app: &App,
+    input: Input,
+    l: &Layout,
+    p: &mut P,
+) -> Result<(), P::Error> {
+    let x = l.margin;
+    let y = l.body_y;
+    let w = l.w - 2 * l.margin;
+    let h = l.body_h;
+    let ink = argb(render::INK);
+    p.rect(x, y, w, h, 18, CARD)?;
+    let Some(path) = app.journeys.best(app.group, input.now) else {
+        let message = if input.status == 1 {
+            "Calculating journeys on this tablet…"
+        } else if input.status == 2 {
+            "Journey search failed. Open Device info for details."
+        } else if app.loaded_at.is_none() {
+            "Waiting for timetable data."
+        } else if input.now > app.journeys.until {
+            "Refresh to calculate the next journey window."
+        } else {
+            "No reachable journey within the downloaded window."
+        };
+        text(p, message, x + 20, y + 48, 20, w - 40, ink, 1)?;
+        return text(
+            p,
+            "Check walking times, destinations and transfer slack.",
+            x + 20,
+            y + 82,
+            14,
+            w - 40,
+            MUTED,
+            0,
+        );
+    };
+    let cache = &app.journeys;
+    let config = settings.groups[app.group].journey.as_ref().unwrap();
+    let mut value = String::<160>::new();
+    let _ = write!(
+        value,
+        "Arrive {} · {} min",
+        clock(settings, cache.epoch + i64::from(path.arrival)),
+        (cache.epoch + i64::from(path.arrival) - input.now + 59) / 60
+    );
+    text(p, &value, x + 20, y + 37, 28, w - 40, ink, 1)?;
+    value.clear();
+    let _ = write!(
+        value,
+        "Leave in {} min · {} min walk · {}",
+        (cache.epoch + i64::from(path.leave) - input.now).max(0) / 60,
+        path.walk,
+        app.headsigns.get(path.legs[0].from).unwrap_or("?")
+    );
+    text(
+        p,
+        &value,
+        x + 20,
+        y + 66,
+        16,
+        w - 40,
+        argb(render::CHILLI),
+        4,
+    )?;
+    let step = ((h - 110) / i32::from(path.len)).clamp(31, 70);
+    for (i, leg) in path.legs[..path.len as usize].iter().enumerate() {
+        let top = y + 98 + i as i32 * step;
+        value.clear();
+        let _ = write!(
+            value,
+            "{}  {} → {}",
+            app.headsigns.get(leg.line).unwrap_or("?"),
+            clock(settings, cache.epoch + i64::from(leg.departure)),
+            clock(settings, cache.epoch + i64::from(leg.arrival))
+        );
+        text(p, &value, x + 20, top, 20, w - 40, ink, 4)?;
+        value.clear();
+        if i != 0 {
+            let _ = write!(
+                value,
+                "{} min transfer · ",
+                (u32::from(leg.departure) - u32::from(path.legs[i - 1].arrival)) / 60
+            );
+        }
+        let _ = write!(
+            value,
+            "{} → {}",
+            app.headsigns.get(leg.from).unwrap_or("?"),
+            app.headsigns.get(leg.to).unwrap_or("?")
+        );
+        text(p, &value, x + 20, top + 17, 12, w - 40, MUTED, 0)?;
+    }
+    value.clear();
+    let _ = write!(
+        value,
+        "On-device search complete · up to {} transfers · {} min minimum change{}",
+        config.max_transfers,
+        config.transfer_minutes,
+        if path.egress != 0 {
+            " · includes destination walk"
+        } else {
+            ""
+        }
+    );
+    text(p, &value, x + 20, y + h - 15, 11, w - 40, MUTED, 0)
+}
 #[allow(clippy::too_many_arguments)]
 fn text<P: Painter>(
     p: &mut P,
@@ -278,84 +385,88 @@ pub fn draw<P: Painter>(
             4,
         )?;
     }
-    let featured = app.featured(&settings.config()).map(|(_, event)| event);
-    let (hero_w, hero_h, list_x, list_y, list_w, list_h) = if l.wide {
-        let hw = (l.w - 2 * l.margin - l.gap) * 53 / 100;
-        (
-            hw,
-            l.body_h,
-            l.margin + hw + l.gap,
-            l.body_y,
-            l.w - 2 * l.margin - hw - l.gap,
-            l.body_h,
-        )
+    if settings.groups[app.group].journey.is_some() {
+        journey_card(settings, app, input, &l, p)?;
     } else {
-        let hh = (l.body_h * 55 / 100).clamp(240, 300).min(l.body_h);
-        (
-            l.w - 2 * l.margin,
-            hh,
-            l.margin,
-            l.body_y + hh + l.gap,
-            l.w - 2 * l.margin,
-            (l.body_h - hh - l.gap).max(0),
-        )
-    };
-    hero(
-        p, app, settings, featured, l.margin, l.body_y, hero_w, hero_h, input.now,
-    )?;
-    let rows = (list_h / 74).max(0) as usize;
-    for (i, event) in app
-        .board_departures()
-        .filter(|e| featured.is_none_or(|f| f.at != e.at || f.pick != e.pick))
-        .take(rows)
-        .enumerate()
-    {
-        let y = list_y + i as i32 * 74;
-        let pick = label(event, settings);
-        p.rect(list_x, y, list_w, 64, 14, CARD)?;
-        let mut line = String::<12>::new();
-        let _ = write!(
-            line,
-            "{}{}",
-            pick.line,
-            if event.conditional { "*" } else { "" }
-        );
-        text(
-            p,
-            &line,
-            list_x + 14,
-            y + 29,
-            22,
-            58,
-            argb(render::CHILLI),
-            6,
+        let featured = app.featured(&settings.config()).map(|(_, event)| event);
+        let (hero_w, hero_h, list_x, list_y, list_w, list_h) = if l.wide {
+            let hw = (l.w - 2 * l.margin - l.gap) * 53 / 100;
+            (
+                hw,
+                l.body_h,
+                l.margin + hw + l.gap,
+                l.body_y,
+                l.w - 2 * l.margin - hw - l.gap,
+                l.body_h,
+            )
+        } else {
+            let hh = (l.body_h * 55 / 100).clamp(240, 300).min(l.body_h);
+            (
+                l.w - 2 * l.margin,
+                hh,
+                l.margin,
+                l.body_y + hh + l.gap,
+                l.w - 2 * l.margin,
+                (l.body_h - hh - l.gap).max(0),
+            )
+        };
+        hero(
+            p, app, settings, featured, l.margin, l.body_y, hero_w, hero_h, input.now,
         )?;
-        text(
-            p,
-            app.headsigns
-                .get(event.headsign)
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&pick.headsign),
-            list_x + 76,
-            y + 25,
-            15,
-            list_w - 146,
-            ink,
-            4,
-        )?;
-        text(
-            p,
-            &pick.stop_name,
-            list_x + 76,
-            y + 46,
-            11,
-            list_w - 146,
-            MUTED,
-            0,
-        )?;
-        let mut due = String::<20>::new();
-        let _ = write!(due, "{}m", (event.at - input.now + 59) / 60);
-        text(p, &due, list_x + list_w - 62, y + 31, 23, 50, ink, 2)?;
+        let rows = (list_h / 74).max(0) as usize;
+        for (i, event) in app
+            .board_departures()
+            .filter(|e| featured.is_none_or(|f| f.at != e.at || f.pick != e.pick))
+            .take(rows)
+            .enumerate()
+        {
+            let y = list_y + i as i32 * 74;
+            let pick = label(event, settings);
+            p.rect(list_x, y, list_w, 64, 14, CARD)?;
+            let mut line = String::<12>::new();
+            let _ = write!(
+                line,
+                "{}{}",
+                pick.line,
+                if event.conditional { "*" } else { "" }
+            );
+            text(
+                p,
+                &line,
+                list_x + 14,
+                y + 29,
+                22,
+                58,
+                argb(render::CHILLI),
+                6,
+            )?;
+            text(
+                p,
+                app.headsigns
+                    .get(event.headsign)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&pick.headsign),
+                list_x + 76,
+                y + 25,
+                15,
+                list_w - 146,
+                ink,
+                4,
+            )?;
+            text(
+                p,
+                &pick.stop_name,
+                list_x + 76,
+                y + 46,
+                11,
+                list_w - 146,
+                MUTED,
+                0,
+            )?;
+            let mut due = String::<20>::new();
+            let _ = write!(due, "{}m", (event.at - input.now + 59) / 60);
+            text(p, &due, list_x + list_w - 62, y + 31, 23, 50, ink, 2)?;
+        }
     }
     p.rect(l.margin, l.h - 48, l.w - 2 * l.margin, 1, 0, LINE)?;
     let mut footer = String::<128>::new();

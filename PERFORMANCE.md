@@ -1148,3 +1148,55 @@ permissive quote syntax. They also cover conservative false positives, escaped
 identity keys, invalid ignored values, errors in selected rows/headers, and a
 bad member CRC when all rows are rejected. Existing cache/join/cancellation
 regressions continue to pass.
+
+## On-device connection profiles
+
+Journey mode searches complete connections in a six-hour window, using the same
+allocation-free Rust engine on Android and ESP32. The default depth is one
+transfer; advanced device search permits two. Results retain future
+nondominated leave/arrival pairs, so selecting the next connection does not
+repeat the GTFS scans. Website exploration is optional and independent.
+
+The ESP32's 1,024 call records reuse the ordinary departure join's idle 16 KiB
+exact-ID arena. Its remaining search scratch is allocated fallibly after TLS
+verification, then released before the next handshake. This preserves the
+64 KiB heap, the existing departure/parser capacities and the new journey search
+capacities. A host ABI admission model counts 34,320 B radio allowance, query
+settings, staged results, 20,096 B planner scratch and 512 B allocation allowance:
+63,464 B total. That is an admission model, not a physical peak or a reservation
+against radio activity. Large selections still fail explicitly at fixed limits.
+
+The final linked binaries give these results with the pinned firmware toolchain:
+
+| Image | Static + 24 KiB reserve | Full linker RAM | Available stack | Journey record path | TLS path |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| C3 | 299,892 B | 324,604 B | 49,288 B | 39,840 B | 41,744 B |
+| C6 portrait | 331,412 B | 397,308 B | 90,472 B | 38,944 B | 40,848 B |
+| C6 landscape | 331,412 B | 397,308 B | 90,472 B | 38,944 B | 40,848 B |
+
+All audited paths retain 4,096 B headroom. The C3 static-plus-reserve figure
+increases by 24 B from the preceding 299,868 B baseline; all unchanged C3/C6 RAM
+ratchets pass. Static initialization avoids copying the large shared parser
+arena through the startup stack. The isolated no_std display workflow plus
+explicit reserves is 366,736 B under the unchanged 400,000 B budget. These
+compiler/linker accounts and DWARF path sums are not complete call-graph proofs
+or measurements on hardware. Journey mode has not been physically exercised.
+
+The underlying records are
+[`device-journeys-c3-ram.json`](benchmarks/device-journeys-c3-ram.json),
+[`device-journeys-c3-stack.json`](benchmarks/device-journeys-c3-stack.json),
+and the corresponding `c6` / `c6-landscape` files in `benchmarks/`.
+Reproduce the linked measurements with `tools/build-device-artifact.sh` for
+`guition-c3`, `waveshare-c6` and `waveshare-c6-landscape`, or apply
+`tools/check-device-ram.py` and `tools/check-device-stack.py` to those release
+ELFs. The stack auditor includes scratch creation, journey query/scan outlines,
+ZIP-record/header parsing and original-ZIP fallback as separate audited paths.
+
+Offline regression checks exercise both real device capacities, direct/one/two
+transfer ranking, different access walks, exact change-time boundaries,
+parent-station platforms, prohibited/minimum transfers, unordered calls,
+calendar exceptions, after-24:00 service and saved-profile advancement. The
+real JNI smoke test renders both legs and ETA, advances the saved connection
+locally, and preserves the snapshot after a corrupt ZIP. The Android build
+verifies ARMv7 and ARM64 JNI libraries and APK signatures. No live feed is used
+by these regression checks; their named Poznań stops have synthetic schedules.

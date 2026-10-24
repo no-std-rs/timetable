@@ -15,6 +15,12 @@ optional motion input uses the front camera. These are compatibility targets,
 not physically tested devices. Original Android 4.x Fire tablets are unsupported.
 The app targets API28 for direct sideloading, not Play Store publication.
 
+Journey groups show the next best complete connection with scheduled ETA,
+access walking, each ride and transfer time. The shared Rust planner runs on
+the tablet and the saved profile advances locally without a network request.
+The default allows one transfer with a three-minute margin. See
+[journey settings and limits](../docs/journeys.md).
+
 ## Build without an SDK/NDK installation
 
 On Linux x86_64, install Rust and a JDK17 or newer, then:

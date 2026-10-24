@@ -42,6 +42,12 @@ pub fn encode(settings: &[u8], app: &App, output: &mut [u8]) -> Result<usize, &'
         ]);
         at += 12;
     }
+    if app.journeys.until > app.journeys.epoch {
+        output[33] = 1;
+        at += app
+            .journeys
+            .encode(output.get_mut(at..).ok_or("Snapshot buffer too small")?)?;
+    }
     let total = at + 4;
     output
         .get_mut(at..total)
@@ -124,10 +130,19 @@ pub fn restore(settings: &[u8], input: &[u8], app: &mut App) -> Result<(), &'sta
             .map_err(|_| invalid)?;
         at += 12;
     }
-    if at != end {
+    let journeys = if input[33] == 1 {
+        timetable_display::journey::Cache::decode(
+            input.get(at..end).ok_or(invalid)?,
+            &config,
+            &headings,
+        )?
+    } else if input[33] == 0 && at == end {
+        timetable_display::journey::Cache::default()
+    } else {
         return Err(invalid);
-    }
+    };
     app.publish(events, headings, epoch);
+    app.journeys = journeys;
     let checked = i64::from_le_bytes(input[40..48].try_into().unwrap());
     app.freshness.checked_at = (checked != i64::MIN).then_some(checked);
     app.freshness.source_updated_at = (source != i64::MIN).then_some(source);
