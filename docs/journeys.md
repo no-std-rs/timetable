@@ -34,7 +34,8 @@ or explicit `transfers.txt` links. No street route or nearby-stop footpath is
 invented. A station transfer's configured slack must cover its walking time.
 Journey stop IDs must still exist in the downloaded feed; select them again if
 the operator renumbers stops. This mode does not plan walking-only journeys,
-fares, accessibility constraints, frequency templates, route/trip-specific
+fares, accessibility constraints, frequency templates, conditional boarding or
+alighting that requires arrangements, route/trip-specific
 transfer rules or in-seat transfer rules. Unsupported relevant rules fail the
 search explicitly. On ESP32, a window requiring different GTFS archives is
 rejected instead of claiming a complete search across incompatible snapshots.

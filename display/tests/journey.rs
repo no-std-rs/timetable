@@ -226,7 +226,7 @@ fn snapshot_preserves_future_connections_and_rejects_invalid_references() {
             picks: Default::default(),
             days: 127,
             start: 0,
-            end: 1440,
+            end: 0,
             journey: Some(settings(1)),
         })
         .unwrap();
@@ -254,4 +254,175 @@ fn esp32_heap_envelope_includes_radio_and_persistent_staging() {
         core::mem::size_of::<DevicePlanner>()
     );
     assert!(needed <= 65536);
+}
+
+#[test]
+fn dwell_calls_can_cross_both_search_window_boundaries() {
+    for device in [false, true] {
+        let result = query_at(
+            include_bytes!("fixtures/journey-boundaries.zip"),
+            &settings(0),
+            NOW,
+            device,
+        );
+        let best = result.best(0, NOW).unwrap();
+        assert_eq!((best.legs[0].departure, best.arrival), (7 * 60, 359 * 60));
+    }
+}
+#[test]
+fn relevant_unsupported_rules_fail_explicitly_but_remote_rules_do_not() {
+    assert_eq!(
+        query(
+            include_bytes!("fixtures/journey-conditional-through.zip"),
+            &settings(0)
+        )
+        .best(0, NOW)
+        .unwrap()
+        .arrival,
+        35 * 60
+    );
+    assert_eq!(
+        query(
+            include_bytes!("fixtures/journey-remote-rule.zip"),
+            &settings(1)
+        )
+        .best(0, NOW)
+        .unwrap()
+        .arrival,
+        30 * 60
+    );
+    for bytes in [
+        include_bytes!("fixtures/journey-conditional.zip").as_slice(),
+        include_bytes!("fixtures/journey-conditional-alight.zip").as_slice(),
+        include_bytes!("fixtures/journey-scoped-rule.zip").as_slice(),
+        include_bytes!("fixtures/journey-inseat-rule.zip").as_slice(),
+    ] {
+        let mut planner = DevicePlanner::new("20261017".parse().unwrap());
+        let mut output = Cache::default();
+        output.reset(NOW);
+        let error = futures::executor::block_on(planner.query(
+            &mut Source(bytes),
+            &mut zip::Workspace::new(),
+            &settings(1),
+            clock::Zone::WARSAW,
+            NOW,
+            7,
+            0,
+            &mut output,
+            &mut Default::default(),
+            None,
+        ))
+        .unwrap_err();
+        assert!(matches!(error, Error::InvalidField(_)), "{error:?}");
+        assert!(output.paths.is_empty());
+    }
+}
+#[test]
+fn empty_and_expired_journeys_can_refresh_by_touch_on_every_display() {
+    use timetable_display::{
+        App, Config, Screen,
+        catalog::Catalog,
+        model::Status,
+        ui::{self, Action},
+    };
+    let mut config: Config = serde_json_core::from_slice(include_bytes!("settings.json"))
+        .unwrap()
+        .0;
+    config.groups[0].journey = Some(settings(1));
+    let catalog = Catalog::new(include_bytes!("../../catalog/catalog.bin")).unwrap();
+    for expired in [false, true] {
+        for layout in 0..3 {
+            let mut app = App {
+                clock: Some(NOW),
+                status: Status::Ready,
+                ..Default::default()
+            };
+            if expired {
+                app.journeys = query(include_bytes!("fixtures/journey.zip"), &settings(1)).cache;
+                app.clock = Some(NOW + 6 * 3600 + 1);
+            }
+            assert!(app.can_refresh(&config));
+            let action = match layout {
+                0 => ui::tap(&mut app, &mut config, &catalog, 120, 37, false),
+                1 => ui::tap_portrait(&mut app, &mut config, &catalog, 86, 37, false),
+                _ => ui::tap_landscape(&mut app, &mut config, &catalog, 160, 37, false),
+            };
+            assert_eq!(action, Action::Refresh);
+            assert_eq!(app.screen, Screen::Board);
+            assert_eq!(app.status, Status::Loading);
+        }
+    }
+    for status in [Status::Loading, Status::Connecting, Status::Syncing] {
+        let app = App {
+            clock: Some(NOW),
+            status,
+            ..Default::default()
+        };
+        assert!(!app.can_refresh(&config));
+    }
+    config.groups[0].journey = None;
+    assert!(
+        !App {
+            clock: Some(NOW),
+            status: Status::Ready,
+            ..Default::default()
+        }
+        .can_refresh(&config)
+    );
+}
+
+#[test]
+fn three_leg_landscape_keeps_destination_text_out_of_the_footer() {
+    use core::convert::Infallible;
+    use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
+    struct Footer {
+        detail: usize,
+        summary: usize,
+    }
+    impl OriginDimensions for Footer {
+        fn size(&self) -> Size {
+            Size::new(320, 172)
+        }
+    }
+    impl DrawTarget for Footer {
+        type Color = Rgb565;
+        type Error = Infallible;
+        fn draw_iter<I: IntoIterator<Item = Pixel<Rgb565>>>(
+            &mut self,
+            pixels: I,
+        ) -> Result<(), Infallible> {
+            for Pixel(point, color) in pixels {
+                if point.y >= 154 && point.y < 172 {
+                    self.detail += usize::from(color == Rgb565::new(15, 30, 14));
+                    self.summary += usize::from(color == timetable_display::render::GOLD);
+                }
+            }
+            Ok(())
+        }
+    }
+    let planned = query(include_bytes!("fixtures/journey.zip"), &settings(2));
+    let mut config: timetable_display::Config =
+        serde_json_core::from_slice(include_bytes!("settings.json"))
+            .unwrap()
+            .0;
+    config.groups[0].journey = Some(settings(2));
+    let app = timetable_display::App {
+        journeys: planned.cache,
+        headsigns: planned.labels,
+        clock: Some(NOW),
+        loaded_at: Some(NOW),
+        status: timetable_display::model::Status::Ready,
+        ..Default::default()
+    };
+    let catalog =
+        timetable_display::catalog::Catalog::new(include_bytes!("../../catalog/catalog.bin"))
+            .unwrap();
+    let mut footer = Footer {
+        detail: 0,
+        summary: 0,
+    };
+    timetable_display::render::landscape::draw_animated(&mut footer, &app, &config, &catalog, 0)
+        .unwrap();
+    assert_eq!(footer.detail, 0, "leg detail intrudes into footer area");
+    assert!(footer.summary > 0, "connection summary must remain visible");
 }

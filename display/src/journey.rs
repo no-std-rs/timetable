@@ -12,6 +12,7 @@ const ID_BYTES: usize = 16384;
 const MAX_CALLS: usize = 2048;
 const MAX_STOPS: usize = 384;
 const NONE: u16 = u16::MAX;
+const CONDITIONAL: u8 = 0x80;
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Leg {
@@ -488,7 +489,7 @@ impl<
         Ok(())
     }
     fn join(&self, a: Ride, b: Ride, slack: u8) -> bool {
-        (a.trip != b.trip || a.day != b.day)
+        (a.trip != b.trip || a.day & !CONDITIONAL != b.day & !CONDITIONAL)
             && self.transfer(a.to, b.from, slack).is_some_and(|seconds| {
                 u32::from(a.arrival) + u32::from(seconds) <= u32::from(b.departure)
             })
@@ -506,6 +507,15 @@ impl<
         let arrival = u32::from(c.end().arrival) + u32::from(egress);
         if arrival > HORIZON as u32 {
             return Ok(());
+        }
+        if [Some(c.first), c.middle, c.last]
+            .into_iter()
+            .flatten()
+            .any(|ride| ride.day & CONDITIONAL != 0)
+        {
+            return Err(Error::InvalidField(
+                "conditional journey boarding or alighting is unsupported",
+            ));
         }
         let dominates = |a: Candidate, b: Candidate| {
             let a_walk = u16::from(config.origins[a.first.endpoint as usize].walk) * 60;
@@ -635,21 +645,31 @@ impl<
                 } else {
                     self.stop(call.stop_id)?
                 };
-                let flags =
-                    u8::from(call.pickup_type == 0) | (u8::from(call.drop_off_type == 0) * 2);
                 for day in 0..3 {
                     if self.trips[i].active & (1 << day) == 0 {
                         continue;
                     }
-                    let (Some(arrival), Some(departure)) = (
-                        self.offset(call.arrival, day),
-                        self.offset(call.departure, day),
-                    ) else {
+                    let (Some(arrival), Some(departure)) = (call.arrival, call.departure) else {
                         continue;
                     };
+                    let arrival = self.epochs[day] + i64::from(arrival.seconds()) - self.now;
+                    let departure = self.epochs[day] + i64::from(departure.seconds()) - self.now;
                     if arrival > departure {
                         return Err(Error::InvalidTime);
                     }
+                    if departure < 0 || arrival > HORIZON {
+                        continue;
+                    }
+                    let board = (0..=HORIZON).contains(&departure);
+                    let alight = (0..=HORIZON).contains(&arrival);
+                    // A dwell can straddle either boundary. Only the in-window
+                    // timestamp grants boarding/alighting; clamping never invents it.
+                    let flags = u8::from(board && call.pickup_type != 1)
+                        | (u8::from(alight && call.drop_off_type != 1) * 2)
+                        | (u8::from(call.pickup_type >= 2) * 4)
+                        | (u8::from(call.drop_off_type >= 2) * 8);
+                    let arrival = arrival.clamp(0, HORIZON) as u16;
+                    let departure = departure.clamp(0, HORIZON) as u16;
                     let value = Call {
                         trip: i as u16,
                         stop,
@@ -912,7 +932,7 @@ impl<
                         return Ok(());
                     };
                     let call = row.stop_time()?;
-                    if call.pickup_type != 0 {
+                    if call.pickup_type == 1 {
                         return Ok(());
                     }
                     if (0..3).any(|day| {
@@ -958,7 +978,7 @@ impl<
                         departure: board.departure,
                         arrival: alight.arrival,
                         endpoint: 0,
-                        day: board.day,
+                        day: ride_day(board, alight),
                     };
                     for first in first_rides(calls, &self.origin_ids, config) {
                         if !self.join(first, middle, config.transfer_minutes) {
@@ -1112,6 +1132,16 @@ fn bounded_label<const N: usize>(value: &str) -> String<N> {
     text
 }
 
+// The high bit records a conditional endpoint without enlarging a ride.
+// Passing a request stop while staying on the vehicle needs no arrangement.
+fn ride_day(board: Call, alight: Call) -> u8 {
+    board.day
+        | if board.flags & 4 != 0 || alight.flags & 8 != 0 {
+            CONDITIONAL
+        } else {
+            0
+        }
+}
 fn first_rides<'a>(
     calls: &'a [Call],
     origins: &'a [u16; 4],
@@ -1139,7 +1169,7 @@ fn first_rides<'a>(
                         departure: board.departure,
                         arrival: alight.arrival,
                         endpoint: origin as u8,
-                        day: board.day,
+                        day: ride_day(*board, *alight),
                     })
             })
     })
@@ -1168,7 +1198,7 @@ fn last_rides<'a>(
                             departure: board.departure,
                             arrival: alight.arrival,
                             endpoint: target as u8,
-                            day: board.day,
+                            day: ride_day(*board, *alight),
                         })
                 })
         })

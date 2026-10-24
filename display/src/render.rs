@@ -97,7 +97,7 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
         path.walk
     );
     label_with_profile(profile, d, &short(&value, chars), center, 68, CHILLI, true)?;
-    let step = if height < 200 { 24 } else { 40 };
+    let step = if height < 200 { 22 } else { 40 };
     for (i, leg) in path.legs[..path.len as usize].iter().enumerate() {
         value.clear();
         if let (Some(departure), Some(arrival)) = (
@@ -835,7 +835,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 }
             }
             let mut foot = String::<40>::new();
-            let fault = app.can_retry() || app.status == Status::Capacity;
+            let fault = app.can_refresh(config) || app.status == Status::Capacity;
             let saved_without_clock = app.clock.is_none() && app.loaded_at.is_some();
             if !fault
                 && let Some(local) = catalog
@@ -989,14 +989,18 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
             label_with_profile(
                 profile,
                 d,
-                if app.can_retry() {
+                if app.can_refresh(config) {
                     "Retry now"
                 } else {
                     "Tap to return"
                 },
                 120,
                 207,
-                if app.can_retry() { CHILLI } else { MUTED },
+                if app.can_refresh(config) {
+                    CHILLI
+                } else {
+                    MUTED
+                },
                 true,
             )?;
         }

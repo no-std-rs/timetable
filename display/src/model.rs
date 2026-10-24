@@ -148,6 +148,21 @@ impl App {
         !self.save_failed && matches!(self.status, Status::Offline | Status::Failed)
     }
 
+    /// A completed empty/expired journey window can be recalculated by touch.
+    pub fn can_refresh(&self, config: &Config) -> bool {
+        self.can_retry()
+            || !self.save_failed
+                && config
+                    .groups
+                    .get(self.group)
+                    .is_some_and(|g| g.journey.is_some())
+                && (self.status == Status::Capacity
+                    || self.status == Status::Ready
+                        && self
+                            .clock
+                            .is_some_and(|now| self.journeys.best(self.group, now).is_none()))
+    }
+
     pub fn tick(&mut self, config: &Config, now: i64) {
         self.tick_in_zone(config, now, clock::Zone::WARSAW);
     }

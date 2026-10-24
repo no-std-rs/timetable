@@ -120,6 +120,7 @@ pub fn tap(
     if cache_update_tap(app, x, y, held, 240, 156..192) {
         return Action::None;
     }
+    let can_refresh = app.can_refresh(config);
     let Some(group) = config.groups.get_mut(app.group) else {
         return Action::None;
     };
@@ -140,9 +141,14 @@ pub fn tap(
         };
         return Action::None;
     }
+    let status_tap = if group.journey.is_some() {
+        (28..58).contains(&y)
+    } else {
+        (38..58).contains(&y)
+    };
     match app.screen {
         Screen::Board => {
-            if !held && (38..58).contains(&y) && app.can_retry() {
+            if !held && status_tap && can_refresh {
                 app.status = if app.status == Status::Offline {
                     Status::Connecting
                 } else {
@@ -155,7 +161,7 @@ pub fn tap(
                 } else {
                     Screen::Picks
                 };
-            } else if y >= 200 || (38..58).contains(&y) {
+            } else if y >= 200 || status_tap {
                 app.screen = Screen::Freshness;
             } else if y > 190 {
                 app.screen = if config.groups[app.group].journey.is_some() {
@@ -170,7 +176,7 @@ pub fn tap(
         }
         Screen::Freshness => {
             app.screen = Screen::Board;
-            if y >= 190 && app.can_retry() {
+            if y >= 190 && can_refresh {
                 app.status = if app.status == Status::Offline {
                     Status::Connecting
                 } else {
@@ -464,7 +470,7 @@ pub fn tap_landscape(
     let mut lx = (u32::from(x) * 240 / 320) as u16;
     let ly = match app.screen {
         Screen::Board => {
-            if app.can_retry() && !held && y >= 20 {
+            if app.can_refresh(config) && !held && y >= 20 {
                 45
             } else if y < 32 {
                 24

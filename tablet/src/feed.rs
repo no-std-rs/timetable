@@ -114,7 +114,7 @@ pub async fn query(
         .journeys_from(&mut source, 7, &config, &mut workspace)
         .await
         .map_err(
-            |_| "Journey search exceeded device limits or the feed has unsupported transfer rules",
+            |_| "Journey search exceeded device limits or the feed has unsupported journey rules",
         )?;
     let mut app = timetable_display::App::default();
     app.publish(builder.events, builder.headsigns, now);

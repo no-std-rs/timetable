@@ -109,7 +109,11 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
                 status,
                 160,
                 24,
-                if app.can_retry() { CHILLI } else { MUTED },
+                if app.can_refresh(config) {
+                    CHILLI
+                } else {
+                    MUTED
+                },
                 true,
             )?;
             if matches!(
@@ -333,7 +337,7 @@ pub fn draw_animated<D: DrawTarget<Color = Rgb565>>(
             text(
                 d,
                 profile,
-                if app.can_retry() {
+                if app.can_refresh(config) {
                     "Retry now"
                 } else {
                     "Tap to return"

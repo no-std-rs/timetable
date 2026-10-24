@@ -2,6 +2,7 @@
 export const polish = {
   "Group mode": "Tryb grupy",
   "Departure board": "Tablica odjazdów",
+  "Journey routing does not yet support conditional boarding or alighting.": "Planowanie nie obsługuje jeszcze warunkowego wsiadania ani wysiadania.",
   "Journey planner (advanced)": "Planowanie podróży (zaawansowane)",
   "Journey settings": "Ustawienia podróży",
   "Compare walking to different starting stops and travelling to any target. The tablet or ESP32 calculates scheduled journeys itself.": "Porównaj dojście do różnych przystanków początkowych i przejazd do wybranego celu. Tablet lub ESP32 sam oblicza podróże według rozkładu.",

@@ -138,3 +138,17 @@ write_archive('journey-no-pickup.zip',{**journey,'stop_times.txt':journey['stop_
 write_archive('journey-no-dropoff.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('legal,08:30:00,08:30:00,Z,2,0,0','legal,08:30:00,08:30:00,Z,2,0,1')})
 
 write_archive('journey-handover.zip',{**journey,'feed_info.txt':'feed_start_date,feed_end_date\n20261017,20261031\n'})
+
+write_archive('journey-boundaries.zip',{**journey,
+    'trips.txt':'route_id,service_id,trip_id\nA,ALL,boundary\n',
+    'stop_times.txt':'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\nboundary,07:59:00,08:07:00,A,1,0,0\nboundary,13:59:00,14:01:00,Z,2,0,0\n'})
+write_archive('journey-conditional.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('A,10,0,0','A,10,2,0')})
+write_archive('journey-remote-rule.zip',{**journey,
+    'stops.txt':journey['stops.txt']+'U,Remote station,U01\nV,Other remote station,V01\n',
+    'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id\nU,V,0,A\nV,U,4,\n'})
+write_archive('journey-scoped-rule.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id\nX,X,0,A\n'})
+write_archive('journey-inseat-rule.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,X,4\n'})
+
+write_archive('journey-conditional-alight.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('legal,08:30:00,08:30:00,Z,2,0,0','legal,08:30:00,08:30:00,Z,2,0,3')})
+
+write_archive('journey-conditional-through.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('W,2,0,0','W,2,3,2')})

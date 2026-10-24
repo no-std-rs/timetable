@@ -35,3 +35,16 @@ test("device settings reject unsupported depth and ambiguous endpoint lists",()=
   assert.throws(()=>validateJourney({...c,origins:[]}));
   assert.throws(()=>validateJourney({...c,origins:[c.origins[0],c.origins[0]]}));
 });
+
+test("dwell calls spanning either window boundary remain usable",async()=>{
+  const result=await searchJourneys(await loader("journey-boundaries.zip"),config(),{now:NOW,maxTransfers:0});
+  assert.equal(result.paths[0].legs[0].departure,NOW+7*60);
+  assert.equal(result.paths[0].arrival,NOW+359*60);
+});
+test("unsupported rules fail only for reachable transfers, and conditional boarding is explicit",async()=>{
+  assert.equal((await searchJourneys(await loader("journey-conditional-through.zip"),config(),{now:NOW,maxTransfers:0})).paths[0].arrival,NOW+35*60);
+  assert.equal((await searchJourneys(await loader("journey-remote-rule.zip"),config(),{now:NOW})).paths[0].arrival,NOW+30*60);
+  for(const file of["journey-scoped-rule.zip","journey-inseat-rule.zip","journey-conditional.zip","journey-conditional-alight.zip"]){
+    await assert.rejects(searchJourneys(await loader(file),config(),{now:NOW}),/does not yet support/);
+  }
+});

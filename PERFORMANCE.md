@@ -1170,9 +1170,9 @@ The final linked binaries give these results with the pinned firmware toolchain:
 
 | Image | Static + 24 KiB reserve | Full linker RAM | Available stack | Journey record path | TLS path |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| C3 | 299,892 B | 324,604 B | 49,288 B | 39,840 B | 41,744 B |
-| C6 portrait | 331,412 B | 397,308 B | 90,472 B | 38,944 B | 40,848 B |
-| C6 landscape | 331,412 B | 397,308 B | 90,472 B | 38,944 B | 40,848 B |
+| C3 | 299,892 B | 324,604 B | 49,288 B | 39,856 B | 41,744 B |
+| C6 portrait | 331,412 B | 397,308 B | 90,472 B | 38,960 B | 40,848 B |
+| C6 landscape | 331,412 B | 397,308 B | 90,472 B | 38,960 B | 40,848 B |
 
 All audited paths retain 4,096 B headroom. The C3 static-plus-reserve figure
 increases by 24 B from the preceding 299,868 B baseline; all unchanged C3/C6 RAM
