@@ -1,5 +1,5 @@
 import { device } from "./devices.js";
-import { validateConfig } from "./config.js";
+import { validateConfig, validateJourney } from "./config.js";
 import { validFeedId } from "./feed-directory.js";
 export const SETTINGS_KEY = "timetable.settings.v1";
 export const REMEMBER_KEY = "timetable.remember";
@@ -16,7 +16,8 @@ export function validateDraft(draft) {
       || typeof c.wifi_password !== "string" || bytes(c.wifi_password) > 256 || c.wifi_password.includes("\0")
       || !Array.isArray(c.groups) || c.groups.some(g => !g || typeof g.name !== "string" || [...g.name].length > 24 || /\p{Cc}/u.test(g.name))
       || draft.active < 0 || draft.active >= c.groups.length) throw new Error("Invalid saved settings.");
-  validateConfig({ ...c, wifi_ssid: "draft", wifi_password: "", groups: c.groups.map(g => ({ ...g, name: "draft" })) });
+  for (const g of c.groups) if (g.journey) validateJourney(g.journey,true);
+  validateConfig({ ...c, wifi_ssid: "draft", wifi_password: "", groups: c.groups.map(g => { const copy={ ...g, name: "draft" };delete copy.journey;return copy; }) });
   return draft;
 }
 export function loadDraft(storage) {

@@ -147,6 +147,16 @@ The public image without a settings bank shows the USB setup screen and does
 not start Wi-Fi. Group names and schedules can be configured in the installer;
 line, stop, direction and walking settings can then be changed on the device.
 
+## Journey groups
+
+Journey mode recommends a complete catchable connection and its arrival ETA.
+One transfer and a three-minute minimum change are the defaults; two transfers
+are optional. ESP32 runs its own bounded Rust search after downloading GTFS.
+The temporary search workspace uses the existing heap after TLS verification;
+the last validated result remains visible during an update. Journey profiles
+are RAM-only: restart or C3 deep-sleep wake requires Wi-Fi to calculate again.
+See [configuration, transfer semantics and capacities](../docs/journeys.md).
+
 ## Data and memory
 
 The bundled browse catalogue contains **212 routes, 3,232 boarding stops and 10,614
@@ -253,16 +263,16 @@ time and signature verification. See [the reproducible comparison](../PERFORMANC
 The ZIP dictionary supplies directory scratch while no inflater is active.
 `tools/check-device-ram.py` counts actual linked IRAM/DRAM sections, including
 radio, heap, all async tasks and application state; alias dummy sections are
-excluded. The C3 static-plus-minimum-stack regression account is **299,868 B**,
+excluded. The C3 static-plus-minimum-stack regression account is **299,892 B**,
 including the unchanged 64 KiB heap and 24 KiB minimum reserve, below the unchanged
 **300,000-byte ceiling**. This account is not the runtime peak: TLS needs more
-stack. Static RAM plus all 49,312 linker-available stack bytes is **324,604 B**,
+stack. Static RAM plus all 49,288 linker-available stack bytes is **324,604 B**,
 below 400,000 B. `RAM.json` labels both quantities explicitly.
 `tools/check-device-stack.py` reads linked DWARF frames with GNU `readelf`,
 checks audited boot paths against 24 KiB and runtime paths against the actual
 available stack, with 4 KiB headroom. The original binary fails this check.
 `STACK.json` records the scoped audit, including the network selection, update,
-mirror and transport callers. Its C3 TLS bound is 40,896 B plus 4,096 B headroom; it is not a complete call-graph proof or
+mirror and transport callers. Its C3 TLS bound is 41,744 B plus 4,096 B headroom; it is not a complete call-graph proof or
 physical high-water measurement. See [boot-stack details](../docs/boot-recovery.md).
 HTTPS, inflation, CSV parsing and cached refresh were exercised on a physical
 C6 in landscape at 80 MHz; see [measurements](../PERFORMANCE.md#c6-http-wake-isolation).

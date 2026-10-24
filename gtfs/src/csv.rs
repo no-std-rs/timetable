@@ -111,6 +111,8 @@ columns! {
     PickupType=>"pickup_type", DropOffType=>"drop_off_type", Monday=>"monday", Tuesday=>"tuesday", Wednesday=>"wednesday",
     Thursday=>"thursday", Friday=>"friday", Saturday=>"saturday", Sunday=>"sunday", StartDate=>"start_date", EndDate=>"end_date",
     Date=>"date", ExceptionType=>"exception_type", FeedStartDate=>"feed_start_date", FeedEndDate=>"feed_end_date", FeedVersion=>"feed_version",
+    FromStopId=>"from_stop_id", ToStopId=>"to_stop_id", TransferType=>"transfer_type", MinTransferTime=>"min_transfer_time",
+    FromRouteId=>"from_route_id", ToRouteId=>"to_route_id", FromTripId=>"from_trip_id", ToTripId=>"to_trip_id",
 }
 
 /// Borrows the current row until the next call to `Reader::next`.

@@ -14,7 +14,7 @@ const CONFIG_FIELDS: &[&str] = &[
     "battery",
     "groups",
 ];
-const GROUP_FIELDS: &[&str] = &["name", "days", "start", "end", "picks"];
+const GROUP_FIELDS: &[&str] = &["name", "days", "start", "end", "picks", "journey"];
 
 fn field<E: de::Error>(seen: &mut u8, index: usize, names: &[&'static str]) -> Result<(), E> {
     if *seen & (1 << index) != 0 {
@@ -49,6 +49,7 @@ enum GroupField {
     Start,
     End,
     Picks,
+    Journey,
 }
 
 pub(super) struct ConfigSeed<'a>(pub &'a mut Config);
@@ -135,6 +136,7 @@ impl<'de> Visitor<'de> for GroupSeed {
             start: 0,
             end: 0,
             picks: Vec::new(),
+            journey: None,
         };
         let mut seen = 0;
         while let Some(key) = map.next_key::<GroupField>()? {
@@ -144,6 +146,7 @@ impl<'de> Visitor<'de> for GroupSeed {
                 GroupField::Start => 2,
                 GroupField::End => 3,
                 GroupField::Picks => 4,
+                GroupField::Journey => 5,
             };
             field(&mut seen, index, GROUP_FIELDS)?;
             match key {
@@ -152,6 +155,7 @@ impl<'de> Visitor<'de> for GroupSeed {
                 GroupField::Start => group.start = map.next_value()?,
                 GroupField::End => group.end = map.next_value()?,
                 GroupField::Picks => map.next_value_seed(Picks(&mut group.picks))?,
+                GroupField::Journey => group.journey = map.next_value()?,
             }
         }
         required(seen, 0b11111, GROUP_FIELDS)?;

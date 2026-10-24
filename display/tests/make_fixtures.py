@@ -92,3 +92,79 @@ for variant, ordered in [('grouped', sorted(rows)), ('shuffled', rows)]:
                   for i, (trip, at) in enumerate(ordered)))
     write_archive(f'lookup-{variant}.zip', lookup)
 module.build(destination / 'edge.zip', destination, '20261017')
+
+# Journey fixtures are synthetic: names mirror the requested use case, times
+# deliberately distinguish access walks, unsafe connections and search depth.
+journey = {
+    'agency.txt': 'agency_name,agency_url,agency_timezone\nSynthetic transit,https://example.invalid,Europe/Warsaw\n',
+    'routes.txt': 'route_id,route_short_name,route_type\nA,911,3\nD,Direct,3\nT,Transfer,3\nM,Middle,3\nF,Final,3\n',
+    'stops.txt': 'stop_id,stop_name,stop_code\nA,Maków Polnych,A01\nB,Further stop,B01\nX,Interchange,X01\nY,Second interchange,Y01\nZ,Bolechowo-Os./Szkoła,Z01\nW,Other target,W01\n',
+    'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nALL,1,1,1,1,1,1,1,20261001,20261031\n',
+    'calendar_dates.txt': 'service_id,date,exception_type\n',
+    'trips.txt': 'route_id,service_id,trip_id\nA,ALL,a\nD,ALL,d\nT,ALL,tight\nT,ALL,legal\nM,ALL,m\nF,ALL,f\nA,ALL,a2\nT,ALL,t2\nD,ALL,d2\n',
+}
+journey_rows = [
+    ('a','08:07:00','A',10),('a','08:17:00','X',20),
+    ('d','08:15:00','B',1),('d','08:27:00','W',2),('d','08:35:00','Z',3),
+    ('tight','08:19:00','X',1),('tight','08:25:00','Z',2),
+    ('legal','08:20:00','X',1),('legal','08:30:00','Z',2),
+    ('m','08:20:00','X',1),('m','08:25:00','Y',2),
+    ('f','08:28:00','Y',1),('f','08:29:00','Z',2),
+    ('a2','08:37:00','A',1),('a2','08:47:00','X',2),
+    ('t2','08:50:00','X',1),('t2','09:00:00','Z',2),
+    ('d2','08:45:00','B',1),('d2','09:05:00','Z',2),
+]
+def journey_calls(rows):
+    return 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\n'+''.join(f'{trip},{at},{at},{stop},{seq},0,0\n' for trip,at,stop,seq in rows)
+journey['stop_times.txt'] = journey_calls(journey_rows)
+write_archive('journey.zip',journey)
+write_archive('journey-shuffled.zip',{**journey,'stop_times.txt':journey_calls(journey_rows[::-1])})
+write_archive('journey-direct.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('d,08:35:00,08:35:00','d,08:28:00,08:28:00')})
+write_archive('journey-no-service.zip',{**journey,'calendar_dates.txt':'service_id,date,exception_type\nALL,20261017,2\n'})
+write_archive('journey-forbidden.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,X,3\n'})
+write_archive('journey-minimum.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,min_transfer_time\nX,X,2,240\n'})
+
+station = {**journey}
+station['stops.txt'] = 'stop_id,stop_name,stop_code,parent_station,location_type\nA,Maków Polnych,A01,,0\nB,Further stop,B01,,0\nX,Interchange platform 1,X01,P,0\nXP,Interchange platform 2,X02,P,0\nY,Second interchange,Y01,,0\nZ,Bolechowo-Os./Szkoła,Z01,,0\nW,Other target,W01,,0\nP,Interchange,,,1\n'
+station['stop_times.txt'] = journey_calls([(trip,at,'XP' if stop=='X' and trip in ('tight','legal','t2') else stop,seq) for trip,at,stop,seq in journey_rows])
+write_archive('journey-station.zip',station)
+write_archive('journey-station-forbidden.zip',{**station,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nP,P,3\n'})
+
+night = journey['stop_times.txt']
+for hour in (8,9):
+    night = night.replace(f',{hour:02}:',f',{hour+16:02}:')
+write_archive('journey-night.zip',{**journey,'stop_times.txt':night,'calendar_dates.txt':'service_id,date,exception_type\nALL,20261018,2\n'})
+write_archive('journey-no-pickup.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('A,10,0,0','A,10,1,0')})
+write_archive('journey-no-dropoff.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('legal,08:30:00,08:30:00,Z,2,0,0','legal,08:30:00,08:30:00,Z,2,0,1')})
+
+write_archive('journey-handover.zip',{**journey,'feed_info.txt':'feed_start_date,feed_end_date\n20261017,20261031\n'})
+
+write_archive('journey-boundaries.zip',{**journey,
+    'trips.txt':'route_id,service_id,trip_id\nA,ALL,boundary\n',
+    'stop_times.txt':'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\nboundary,07:59:00,08:07:00,A,1,0,0\nboundary,13:59:00,14:01:00,Z,2,0,0\n'})
+write_archive('journey-conditional.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('A,10,0,0','A,10,2,0')})
+write_archive('journey-remote-rule.zip',{**journey,
+    'stops.txt':journey['stops.txt']+'U,Remote station,U01\nV,Other remote station,V01\n',
+    'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id\nU,V,0,A\nV,U,4,\n'})
+write_archive('journey-scoped-rule.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id\nX,X,0,A\n'})
+write_archive('journey-inseat-rule.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,X,4\n'})
+
+write_archive('journey-conditional-alight.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('legal,08:30:00,08:30:00,Z,2,0,0','legal,08:30:00,08:30:00,Z,2,0,3')})
+
+write_archive('journey-conditional-through.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('W,2,0,0','W,2,3,2')})
+
+write_archive('journey-timed.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,X,1\n'})
+
+write_archive('journey-scope-unrelated.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,X,3,D,T\n'})
+write_archive('journey-scope-precedence.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,X,3,,\nX,X,0,A,T\n'})
+write_archive('journey-scope-trip.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id,from_trip_id,to_trip_id\nX,X,3,A,T,,\nX,X,0,,,a,legal\n'})
+write_archive('journey-scope-alternative.zip',{**journey,
+    'routes.txt':journey['routes.txt']+'Q,Alt,3\n',
+    'trips.txt':journey['trips.txt']+'Q,ALL,q\n',
+    'stop_times.txt':journey['stop_times.txt'].replace('legal,08:20:00,08:20:00','legal,08:21:00,08:21:00')+'q,08:08:00,08:08:00,A,1,0,0\nq,08:18:00,08:18:00,X,2,0,0\n',
+    'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,X,3,A,T\n'})
+
+for name,route in [('matching','A'),('unrelated','D')]:
+    write_archive(f'journey-scope-link-{name}.zip',{**station,
+        'stops.txt':station['stops.txt'].replace('XP,Interchange platform 2,X02,P,0','XP,Interchange platform 2,X02,,0'),
+        'transfers.txt':f'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,XP,0,{route},T\n'})

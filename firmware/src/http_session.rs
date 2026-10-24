@@ -6,6 +6,13 @@ use reqwless::{request::Method, response::Response};
 use timetable_firmware::download::{Error, Http, Metadata, Operation};
 
 pub trait Observe {
+    /// Acquired only inside a verified TLS session; the platform owns storage.
+    fn journey_scratch(
+        &self,
+        _today: gtfs::Date,
+    ) -> Result<impl AsMut<[timetable_display::journey::DevicePlanner]>, gtfs::Error> {
+        Err::<[timetable_display::journey::DevicePlanner; 0], _>(gtfs::Error::BufferTooSmall)
+    }
     fn millis(&self) -> u64;
     fn now(&self) -> Option<i64>;
     fn stage(&self, _message: &str) {}
@@ -57,6 +64,26 @@ impl<R: Read, O: Observe> Read for Body<'_, R, O> {
     }
 }
 impl<S: Read + Write, O: Observe> Http for Connection<'_, S, O> {
+    async fn journey_plan(
+        &self,
+        builder: &mut timetable_display::feed::Builder,
+        source: &mut impl timetable_display::feed::Tables,
+        mask: u8,
+        config: &timetable_display::Config,
+        workspace: &mut gtfs::zip::Workspace,
+    ) -> Result<(), gtfs::Error> {
+        if !config.groups.iter().any(|g| g.journey.is_some()) {
+            return Ok(());
+        }
+        let mut storage = self.observe.journey_scratch(builder.dates[1])?;
+        let planner = storage
+            .as_mut()
+            .first_mut()
+            .ok_or(gtfs::Error::BufferTooSmall)?;
+        builder
+            .device_journeys_with(planner, source, mask, config, workspace)
+            .await
+    }
     fn stage(&self, message: &str) {
         self.observe.stage(message);
     }

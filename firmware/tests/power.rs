@@ -110,3 +110,54 @@ fn session_selection_does_not_duplicate_the_large_network_future() {
         "session wrapper duplicated a full network future"
     );
 }
+
+#[test]
+fn failed_startup_keeps_radio_and_releases_provisional_slots_before_retry() {
+    struct Slot<'a>(&'a Cell<u8>);
+    impl Drop for Slot<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+    for first_fails in [false, true] {
+        let radio_drops = Cell::new(0);
+        let slot_drops = Cell::new(0);
+        let token = Slot(&radio_drops);
+        let error = power::prepare_startup(
+            token,
+            || {
+                if first_fails {
+                    Err("first")
+                } else {
+                    Ok(Slot(&slot_drops))
+                }
+            },
+            || Err::<Slot<'_>, _>("second"),
+        );
+        let (token, error) = match error {
+            Err(failure) => failure,
+            Ok(_) => panic!("failure injection succeeded"),
+        };
+        assert_eq!(error, if first_fails { "first" } else { "second" });
+        assert_eq!(
+            radio_drops.get(),
+            0,
+            "radio token must survive failed initialization"
+        );
+        assert_eq!(
+            slot_drops.get(),
+            u8::from(!first_fails),
+            "provisional allocation must be freed"
+        );
+        let ready = power::prepare_startup(
+            token,
+            || Ok::<_, &str>(Slot(&slot_drops)),
+            || Ok(Slot(&slot_drops)),
+        );
+        assert!(ready.is_ok(), "same radio token must be usable on retry");
+        assert_eq!(radio_drops.get(), 0);
+        drop(ready);
+        assert_eq!(radio_drops.get(), 1);
+        assert_eq!(slot_drops.get(), 2 + u8::from(!first_fails));
+    }
+}

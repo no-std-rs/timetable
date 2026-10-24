@@ -62,6 +62,23 @@ impl CryptoProvider for Provider {
 }
 pub struct Http<'d>(pub Stack<'d>);
 impl download::Http for Http<'_> {
+    async fn official_tables(
+        &self,
+        builder: &mut timetable_display::feed::Builder,
+        workspace: &mut gtfs::zip::Workspace,
+        config: &timetable_display::Config,
+    ) -> Result<timetable_display::freshness::Freshness, Error> {
+        self.session(
+            "https://www.ztm.poznan.pl/",
+            &mut download::OfficialQuery {
+                builder,
+                workspace,
+                config,
+            },
+            true,
+        )
+        .await
+    }
     fn feed_id(&self) -> &str {
         crate::catalog_slot::profile().feed_id().unwrap()
     }
@@ -211,6 +228,18 @@ impl Http<'_> {
 }
 struct Timed<H>(H);
 impl<H: download::Http> download::Http for Timed<H> {
+    async fn journey_plan(
+        &self,
+        builder: &mut timetable_display::feed::Builder,
+        source: &mut impl timetable_display::feed::Tables,
+        mask: u8,
+        config: &timetable_display::Config,
+        workspace: &mut gtfs::zip::Workspace,
+    ) -> Result<(), gtfs::Error> {
+        self.0
+            .journey_plan(builder, source, mask, config, workspace)
+            .await
+    }
     async fn unchanged(&self, url: &str, validator: &download::Validator) -> Result<bool, Error> {
         with_timeout(Duration::from_secs(300), self.0.unchanged(url, validator))
             .await
@@ -235,6 +264,17 @@ impl<H: download::Http> download::Http for Timed<H> {
 }
 struct Device;
 impl Observe for Device {
+    fn journey_scratch(
+        &self,
+        today: gtfs::Date,
+    ) -> Result<impl AsMut<[timetable_display::journey::DevicePlanner]>, gtfs::Error> {
+        let mut planner = alloc::vec::Vec::new();
+        planner
+            .try_reserve_exact(1)
+            .map_err(|_| gtfs::Error::BufferTooSmall)?;
+        planner.push(timetable_display::journey::DevicePlanner::new(today));
+        Ok(planner)
+    }
     fn millis(&self) -> u64 {
         Instant::now().as_millis()
     }

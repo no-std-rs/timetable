@@ -1,4 +1,5 @@
 import { FeedLoader, downloadFeed } from "./feed-loader.js";
+import { searchJourneys } from "./journey-search.js";
 let loader;
 function database() {
   return new Promise((resolve,reject)=>{
@@ -33,5 +34,10 @@ self.onmessage=async({data})=>{
       if(!hit)await remember(feed.id,bytes);
       self.postMessage({request,catalog});
     }else if(kind==="paths")self.postMessage({request,patterns:await loader.paths(route,progress)});
+    else if(kind==="journey"){
+      if(!loader)throw new Error("Load a transport network first.");
+      const result=await searchJourneys(loader,data.journey,{now:data.now,maxTransfers:data.depth,onProgress:result=>self.postMessage({request,journeyProgress:result})});
+      self.postMessage({request,result});
+    }
   }catch(error){self.postMessage({request,error:error.message});}
 };

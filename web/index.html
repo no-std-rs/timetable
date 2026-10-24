@@ -82,6 +82,17 @@
           <div id="group-panel" role="tabpanel" aria-labelledby="group-tab-0">
           <div class="group-toolbar"><label class="name-label" for="group-name">Group name<input id="group-name" maxlength="24" value="Morning" required></label><button type="button" id="remove-group" class="text-button danger">Remove group</button></div>
           <div id="undo-area" class="undo-notice" role="status" hidden><span id="undo-message"></span><button type="button" id="undo-removal" class="text-button">Undo</button></div>
+          <label>Group mode<select id="group-mode"><option value="departures">Departure board</option><option value="journey">Journey planner (advanced)</option></select></label>
+          <section id="journey-editor" hidden aria-label="Journey settings">
+            <p>Compare walking to different starting stops and travelling to any target. The tablet or ESP32 calculates scheduled journeys itself.</p>
+            <div class="journey-endpoints">
+              <section><h3>Starting stops</h3><div id="journey-origins"></div><label>Find a starting stop<input id="journey-origin-search" type="search" placeholder="Stop name or platform code" autocomplete="off"></label><div id="journey-origin-matches" class="journey-matches"></div></section>
+              <section><h3>Target stops</h3><div id="journey-targets"></div><label>Find a target stop<input id="journey-target-search" type="search" placeholder="Stop name or platform code" autocomplete="off"></label><div id="journey-target-matches" class="journey-matches"></div></section>
+            </div>
+            <div class="field-pair"><label>Minimum transfer time (minutes)<input id="journey-slack" type="number" min="0" max="30" value="3"></label><label>On-device search depth<select id="journey-depth"><option value="0">Direct only</option><option value="1" selected>Up to 1 transfer</option><option value="2">Up to 2 transfers</option></select></label></div>
+            <p class="fine-print">The transfer minimum includes time to change platforms. A longer minimum declared by the timetable takes precedence. Only the same stop, platforms in the same declared station, or explicit timetable transfer links are used; nearby stops are not automatically connected. ETAs are scheduled, not live traffic predictions.</p>
+            <details><summary>Explore a journey in this browser</summary><p>The optional browser search can look up to four transfers deep and handle service-specific transfer rules. Devices calculate their own journeys within their stricter limits.</p><label>Website search depth<select id="journey-preview-depth"><option value="1">Up to 1 transfer</option><option value="2" selected>Up to 2 transfers</option><option value="3">Up to 3 transfers</option><option value="4">Up to 4 transfers</option></select></label><button type="button" id="journey-preview" class="text-button">Calculate journey</button><p id="journey-preview-status" role="status"></p><div id="journey-preview-result"></div></details>
+          </section>
           <div class="picks" id="picks"></div>
           <p id="catalog-feedback" class="fine-print" role="status">Loading line and stop choices…</p><button type="button" id="retry-catalog" class="text-button" hidden>Retry route choices</button>
           <button type="button" id="add-pick" class="add-pick" disabled><span>+</span> Add a line &amp; stop</button>

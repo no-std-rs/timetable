@@ -26,3 +26,21 @@ pub async fn idle(
         Either::Second(_) => Wake::Refresh,
     }
 }
+
+/// Prepare both startup slots before transferring the radio or leaking storage.
+/// A failed second allocation drops the first slot and returns the same token.
+pub fn prepare_startup<R, A, B, E>(
+    radio: R,
+    first: impl FnOnce() -> Result<A, E>,
+    second: impl FnOnce() -> Result<B, E>,
+) -> Result<(R, A, B), (R, E)> {
+    let a = match first() {
+        Ok(a) => a,
+        Err(error) => return Err((radio, error)),
+    };
+    let b = match second() {
+        Ok(b) => b,
+        Err(error) => return Err((radio, error)),
+    };
+    Ok((radio, a, b))
+}

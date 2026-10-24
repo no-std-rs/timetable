@@ -11,6 +11,15 @@ settings only, never Wi-Fi credentials.
 off for touch-only selection without deleting time windows; imported manual
 settings can be inspected and switched back to automatic mode here.
 
+## Journey groups
+
+Choose **Journey planner (advanced)** to configure starting stops, walking times
+and targets. The display recommends a complete connection with ETA, allowing
+one transfer and at least three minutes to change by default. Advanced device
+settings allow direct-only or two transfers; optional local website exploration
+can progressively check up to four. See [journey behaviour and limits](../docs/journeys.md),
+including ESP32 restart connectivity and supported transfer rules.
+
 ## Countries and transport networks
 
 Open **Transport network**, choose a country and city/region, then search for an

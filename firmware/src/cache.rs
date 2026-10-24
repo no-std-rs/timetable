@@ -19,9 +19,10 @@ pub const SIZE: u32 = 0xf0000;
 pub const BANK_SIZE: u32 = SIZE / 2;
 pub const FILTER_BYTES: usize = 16 * 1024;
 const SECTOR: u32 = 4096;
-const SOURCE_BYTES: usize = 352;
+const SOURCE_BYTES: usize = 384;
+const SOURCE_V2_BYTES: usize = 352;
+const TABLE_END: usize = 20 + Table::COUNT * 20;
 const HEADER: usize = 48 + SOURCES * SOURCE_BYTES;
-const LEGACY_HEADER: usize = 528;
 const SOURCES: usize = 3;
 const COMMIT: u32 = 0x434f4d54;
 const EMPTY: i64 = i64::MIN;
@@ -127,12 +128,13 @@ impl Source {
     }
     fn encode(&self, out: &mut [u8]) {
         if let Some(snapshot) = self.snapshot {
-            out[160..172].copy_from_slice(snapshot.timestamp().as_bytes());
+            out[TABLE_END..TABLE_END + 12].copy_from_slice(snapshot.timestamp().as_bytes());
             let id = snapshot.feed_id().as_bytes();
-            out[172] = id.len() as u8;
-            out[173..173 + id.len()].copy_from_slice(id);
+            out[TABLE_END + 12] = id.len() as u8;
+            out[TABLE_END + 13..TABLE_END + 13 + id.len()].copy_from_slice(id);
         }
-        self.validator.encode(&mut out[253..319]);
+        self.validator
+            .encode(&mut out[TABLE_END + 93..TABLE_END + 159]);
         put(out, 0, self.start);
         put(out, 4, self.end);
         put(out, 8, self.present);
@@ -142,12 +144,18 @@ impl Source {
             put(out, 20 + i * 8, self.original[i][0]);
             put(out, 24 + i * 8, self.original[i][1]);
             let b = self.tables[i];
-            put(out, 76 + i * 12, b.offset);
-            put(out, 80 + i * 12, b.length);
-            put(out, 84 + i * 12, b.crc);
+            put(out, 20 + Table::COUNT * 8 + i * 12, b.offset);
+            put(out, 24 + Table::COUNT * 8 + i * 12, b.length);
+            put(out, 28 + Table::COUNT * 8 + i * 12, b.crc);
         }
     }
     fn decode(bytes: &[u8]) -> Self {
+        let tables = if bytes.len() >= SOURCE_BYTES {
+            Table::COUNT
+        } else {
+            7
+        };
+        let table_end = 20 + tables * 20;
         let mut s = Self {
             start: get(bytes, 0),
             end: get(bytes, 4),
@@ -155,28 +163,37 @@ impl Source {
             updated: i64::from_le_bytes(bytes[12..20].try_into().unwrap()),
             ..Self::default()
         };
-        for t in Table::ALL {
+        for t in Table::ALL.into_iter().take(tables) {
             let i = t as usize;
             s.original[i] = [get(bytes, 20 + i * 8), get(bytes, 24 + i * 8)];
             s.tables[i] = Block {
-                offset: get(bytes, 76 + i * 12),
-                length: get(bytes, 80 + i * 12),
-                crc: get(bytes, 84 + i * 12),
+                offset: get(bytes, 20 + tables * 8 + i * 12),
+                length: get(bytes, 24 + tables * 8 + i * 12),
+                crc: get(bytes, 28 + tables * 8 + i * 12),
             };
         }
-        if bytes.len() >= SOURCE_BYTES {
-            let len = bytes[172] as usize;
+        if bytes.len() >= SOURCE_V2_BYTES {
+            let len = bytes[table_end + 12] as usize;
             if len <= gtfs::mobility::MAX_ID {
-                s.snapshot = core::str::from_utf8(&bytes[173..173 + len])
+                s.snapshot = core::str::from_utf8(&bytes[table_end + 13..table_end + 13 + len])
                     .ok()
-                    .zip(core::str::from_utf8(&bytes[160..172]).ok())
+                    .zip(core::str::from_utf8(&bytes[table_end..table_end + 12]).ok())
                     .and_then(|(id, stamp)| gtfs::mobility::Snapshot::from_parts(id, stamp).ok());
                 if s.snapshot.is_some() {
-                    s.validator = crate::download::Validator::decode(&bytes[253..319]).for_ranges();
+                    s.validator =
+                        crate::download::Validator::decode(&bytes[table_end + 93..table_end + 159])
+                            .for_ranges();
                 }
             }
         }
         s
+    }
+}
+fn source_size(version: u32) -> usize {
+    match version {
+        1 => 160,
+        2 => SOURCE_V2_BYTES,
+        _ => SOURCE_BYTES,
     }
 }
 fn date(d: Date) -> u32 {
@@ -212,7 +229,7 @@ impl Bank {
             return Err(Error::InvalidZip);
         }
         let mut b = [0; SOURCE_BYTES];
-        let size = if self.version == 1 { 160 } else { SOURCE_BYTES };
+        let size = source_size(self.version);
         flash.read(self.offset + 48 + (i * size) as u32, &mut b[..size])?;
         Ok(Source::decode(&b[..size]))
     }
@@ -240,12 +257,12 @@ impl Bank {
 async fn validate(flash: &impl Storage, offset: u32) -> Result<Bank, Error> {
     let mut b = [0; HEADER];
     flash.read(offset, &mut b)?;
-    if &b[..4] != b"TTFC" || !matches!(get(&b, 4), 1 | 2) || get(&b, 44) != COMMIT {
+    if &b[..4] != b"TTFC" || !matches!(get(&b, 4), 1..=3) || get(&b, 44) != COMMIT {
         return Err(Error::InvalidZip);
     }
     let version = get(&b, 4);
-    let size = if version == 1 { 160 } else { SOURCE_BYTES };
-    let header = if version == 1 { LEGACY_HEADER } else { HEADER };
+    let size = source_size(version);
+    let header = 48 + SOURCES * size;
     let expected = get(&b, 40);
     b[40..48].fill(0);
     if crc32fast::hash(&b[..header]) != expected {
@@ -274,7 +291,7 @@ async fn validate(flash: &impl Storage, offset: u32) -> Result<Bank, Error> {
         if !valid_date(s.start)
             || !valid_date(s.end)
             || s.start > s.end
-            || s.present & !127 != 0
+            || s.present & !((1 << Table::COUNT) - 1) != 0
             || (s.updated != EMPTY && !(0..=bank.checked).contains(&s.updated))
         {
             return Err(Error::InvalidZip);
@@ -708,7 +725,7 @@ impl<'a, F: Storage> Writer<'a, F> {
             length: self.pos,
             key_length: self.key_length(),
             count: self.count as u32,
-            version: 2,
+            version: 3,
             checked: self
                 .flash
                 .checked_at()
@@ -717,7 +734,7 @@ impl<'a, F: Storage> Writer<'a, F> {
         };
         let mut h = [0; HEADER];
         h[..4].copy_from_slice(b"TTFC");
-        put(&mut h, 4, 2);
+        put(&mut h, 4, 3);
         put(&mut h, 8, bank.generation);
         put(&mut h, 12, bank.length);
         put(&mut h, 16, self.hash.clone().finalize());
@@ -771,6 +788,16 @@ fn columns(t: Table) -> &'static [C] {
         ],
         Table::CalendarDates => &[C::ServiceId, C::Date, C::ExceptionType],
         Table::FeedInfo => &[C::FeedStartDate, C::FeedEndDate],
+        Table::Transfers => &[
+            C::FromStopId,
+            C::ToStopId,
+            C::TransferType,
+            C::MinTransferTime,
+            C::FromRouteId,
+            C::ToRouteId,
+            C::FromTripId,
+            C::ToTripId,
+        ],
     }
 }
 
@@ -1153,6 +1180,26 @@ pub struct Http<'a, H, F> {
     pub enabled: bool,
 }
 impl<H: crate::download::Http, F: Storage> crate::download::Http for Http<'_, H, F> {
+    async fn official_tables(
+        &self,
+        builder: &mut Builder,
+        workspace: &mut zip::Workspace,
+        config: &Config,
+    ) -> Result<Freshness, crate::download::Error> {
+        self.inner.official_tables(builder, workspace, config).await
+    }
+    async fn journey_plan(
+        &self,
+        builder: &mut Builder,
+        source: &mut impl Tables,
+        mask: u8,
+        config: &Config,
+        workspace: &mut zip::Workspace,
+    ) -> Result<(), Error> {
+        self.inner
+            .journey_plan(builder, source, mask, config, workspace)
+            .await
+    }
     fn feed_id(&self) -> &str {
         self.inner.feed_id()
     }

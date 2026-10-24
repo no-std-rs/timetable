@@ -8,6 +8,12 @@ pub struct Headings {
     spans: Vec<(u16, u8), MAX_HEADSIGNS>,
 }
 impl Headings {
+    pub const fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            spans: Vec::new(),
+        }
+    }
     pub(crate) fn checkpoint(&self) -> (usize, usize) {
         (self.bytes.len(), self.spans.len())
     }
@@ -109,6 +115,7 @@ pub struct App {
     pub freshness: crate::freshness::Freshness,
     pub departures: Departures,
     pub headsigns: Headings,
+    pub journeys: crate::journey::Cache,
 }
 
 impl Default for App {
@@ -131,6 +138,7 @@ impl Default for App {
             freshness: crate::freshness::Freshness::default(),
             departures: Departures::new(0),
             headsigns: Headings::default(),
+            journeys: crate::journey::Cache::default(),
         }
     }
 }
@@ -138,6 +146,21 @@ impl Default for App {
 impl App {
     pub fn can_retry(&self) -> bool {
         !self.save_failed && matches!(self.status, Status::Offline | Status::Failed)
+    }
+
+    /// A completed empty/expired journey window can be recalculated by touch.
+    pub fn can_refresh(&self, config: &Config) -> bool {
+        self.can_retry()
+            || !self.save_failed
+                && config
+                    .groups
+                    .get(self.group)
+                    .is_some_and(|g| g.journey.is_some())
+                && (self.status == Status::Capacity
+                    || self.status == Status::Ready
+                        && self
+                            .clock
+                            .is_some_and(|now| self.journeys.best(self.group, now).is_none()))
     }
 
     pub fn tick(&mut self, config: &Config, now: i64) {

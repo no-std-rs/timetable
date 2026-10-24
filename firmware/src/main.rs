@@ -212,8 +212,11 @@ fn has_cache_partition(flash: &mut FlashStorage<'_>) -> bool {
 static NET: StaticCell<StackResources<4>> = StaticCell::new();
 static SETTINGS: StaticCell<[u8; config::IMAGE_SIZE]> = StaticCell::new();
 const _: () = assert!(panel::TILE_BYTES <= config::IMAGE_SIZE);
-static FEED: StaticCell<Builder> = StaticCell::new();
-static QUERY_CONFIG: ConstStaticCell<Config> = ConstStaticCell::new(Config::empty());
+static FEED: ConstStaticCell<Builder> =
+    ConstStaticCell::new(Builder::unstarted(match gtfs::Date::new(2000, 1, 1) {
+        Ok(date) => date,
+        Err(_) => panic!("invalid initial date"),
+    }));
 static WORKSPACE: ConstStaticCell<gtfs::zip::Workspace> =
     ConstStaticCell::new(gtfs::zip::Workspace::new());
 static REFRESH: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -235,6 +238,9 @@ fn log_heap() {
 // temporaries out of the async radio caller while it later verifies TLS.
 #[inline(never)]
 fn publish_departures(app: &mut App, builder: &mut Builder) {
+    if let Some(cache) = builder.journeys.as_deref_mut() {
+        app.journeys = core::mem::take(cache);
+    }
     app.publish(
         core::mem::take(&mut builder.events),
         core::mem::take(&mut builder.headsigns),
@@ -494,7 +500,10 @@ async fn main(spawner: Spawner) -> ! {
     let mut radio = Some(p.WIFI);
     if connect {
         info!("Boot: settings ready; starting network");
-        start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
+        radio = start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
+        if radio.is_some() {
+            startup_failed(&mut shared.try_lock().unwrap());
+        }
     }
     info!("Boot: application ready");
     log_heap();
@@ -605,7 +614,10 @@ async fn main(spawner: Spawner) -> ! {
                 if request {
                     s.network_busy = true;
                     if let Some(wifi) = radio.take() {
-                        start_network(spawner, wifi, shared, flash, cache_enabled);
+                        radio = start_network(spawner, wifi, shared, flash, cache_enabled);
+                        if radio.is_some() {
+                            startup_failed(&mut s);
+                        }
                     } else {
                         REFRESH.signal(());
                     }
@@ -658,7 +670,10 @@ async fn main(spawner: Spawner) -> ! {
                 )
             {
                 s.network_busy = true;
-                start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
+                radio = start_network(spawner, radio.take().unwrap(), shared, flash, cache_enabled);
+                if radio.is_some() {
+                    startup_failed(&mut s);
+                }
             }
             if let Some(seconds) = s.completed_delay.take() {
                 next_refresh_rtc = rtc
@@ -838,7 +853,9 @@ fn initialize_state(
     } else {
         None
     };
-    let connect = !s.config.battery || restored.as_ref().is_none_or(|r| r.refresh_in_us == 0);
+    let connect = !s.config.battery
+        || s.config.groups.iter().any(|g| g.journey.is_some())
+        || restored.as_ref().is_none_or(|r| r.refresh_in_us == 0);
     s.network_busy = connect;
     drop(s);
     Some(Boot {
@@ -850,6 +867,19 @@ fn initialize_state(
     })
 }
 
+fn heap_slot<T>(value: T) -> Result<alloc::vec::Vec<T>, gtfs::Error> {
+    let mut storage = alloc::vec::Vec::new();
+    storage
+        .try_reserve_exact(1)
+        .map_err(|_| gtfs::Error::BufferTooSmall)?;
+    storage.push(value);
+    Ok(storage)
+}
+fn startup_failed(state: &mut State) {
+    state.network_busy = false;
+    state.app.status = Status::Failed;
+    state.completed_delay = Some(60);
+}
 #[inline(never)]
 fn start_network(
     spawner: Spawner,
@@ -857,18 +887,30 @@ fn start_network(
     shared: &'static Shared,
     flash: &'static FlashMutex,
     cache_enabled: bool,
-) {
+) -> Option<esp_hal::peripherals::WIFI<'static>> {
+    let (wifi, query_config, journey_cache) = match power::prepare_startup(
+        wifi,
+        || heap_slot(Config::empty()),
+        || heap_slot(timetable_display::journey::Cache::default()),
+    ) {
+        Ok(slots) => slots,
+        Err((wifi, error)) => {
+            warn!("Network startup allocation failed: {error:?}; retaining radio for retry");
+            return Some(wifi);
+        }
+    };
+    let query_config = query_config.leak().first_mut().unwrap();
+    let journey_cache = journey_cache.leak().first_mut().unwrap();
+    let builder = FEED.take();
+    builder.zone = catalog_slot::profile().zone();
+    builder.journeys = Some(journey_cache);
     spawner.spawn(
         network_service(
             wifi,
             shared,
             NET.init(StackResources::new()),
-            QUERY_CONFIG.take(),
-            FEED.init_with(|| {
-                let mut builder = Builder::new("20261017".parse().unwrap());
-                builder.zone = catalog_slot::profile().zone();
-                builder
-            }),
+            query_config,
+            builder,
             WORKSPACE.take(),
             CachePartition {
                 flash,
@@ -878,6 +920,7 @@ fn start_network(
         .unwrap(),
     );
     info!("Wi-Fi: update task started; CPU 80 MHz; radio sleeps between updates");
+    None
 }
 
 #[embassy_executor::task]
@@ -1005,6 +1048,10 @@ async fn restore_saved_board(
         state.app.status = Status::Restoring;
         copy_query(&state, query_config)
     };
+    if query_config.groups.iter().any(|g| g.journey.is_some()) {
+        shared.lock().await.app.status = Status::Connecting;
+        return;
+    }
     let storage = CacheFlash {
         flash: cache.flash,
         shared,
@@ -1190,6 +1237,7 @@ async fn update_once(
         approval: Cell::new(None),
     };
     if cache.enabled
+        && !query_config.groups.iter().any(|g| g.journey.is_some())
         && let Ok(Some(bank)) = cache::load(&storage).await
     {
         match cache::restore(
@@ -1219,7 +1267,7 @@ async fn update_once(
     let cached = cache::Http {
         inner: &transport,
         flash: &storage,
-        enabled: cache.enabled,
+        enabled: cache.enabled && !query_config.groups.iter().any(|g| g.journey.is_some()),
     };
     let mut confirmed = false;
     let result = loop {

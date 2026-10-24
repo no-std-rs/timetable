@@ -55,11 +55,12 @@ export class NetworkPicker {
 }
 export class FeedClient {
   constructor(progress){this.worker=new Worker(new URL("./feed-worker.js",import.meta.url),{type:"module"});this.jobs=new Map();this.routeJobs=new Map();this.id=0;this.progress=progress;
-    this.worker.onmessage=({data})=>{const job=this.jobs.get(data.request);if(!job)return;if(data.progress){this.progress(data.progress,data.count);return;}this.jobs.delete(data.request);if(data.error)job.reject(new Error(data.error));else job.resolve(data);};
+    this.worker.onmessage=({data})=>{const job=this.jobs.get(data.request);if(!job)return;if(data.progress){this.progress(data.progress,data.count);return;}if(data.journeyProgress){job.update?.(data.journeyProgress);return;}this.jobs.delete(data.request);if(data.error)job.reject(new Error(data.error));else job.resolve(data);};
     this.worker.onerror=()=>this.close(new Error("The timetable worker stopped. Retry the selected network."));
   }
-  request(kind,values){const request=++this.id;return new Promise((resolve,reject)=>{this.jobs.set(request,{resolve,reject});this.worker.postMessage({request,kind,...values});});}
-  load(feed){return this.request("load",{feed});}
+  request(kind,values,update){const request=++this.id;return new Promise((resolve,reject)=>{this.jobs.set(request,{resolve,reject,update});this.worker.postMessage({request,kind,...values});});}
+  journey(journey,depth,now,update){return this.request("journey",{journey,depth,now},update).then(data=>data.result);}
+  load(feed){return this.request("load",{feed}).then(result=>{this.feedId=feed.id;return result;});}
   paths(route){
     if(!this.routeJobs.has(route))this.routeJobs.set(route,this.request("paths",{route}).finally(()=>this.routeJobs.delete(route)));
     return this.routeJobs.get(route);

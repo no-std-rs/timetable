@@ -6,6 +6,7 @@ pub mod config;
 pub mod departures;
 pub mod feed;
 pub mod freshness;
+pub mod journey;
 pub mod model;
 pub mod profile;
 pub mod render;

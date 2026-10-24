@@ -41,6 +41,8 @@ fn run<T>(future: impl Future<Output = T>) -> T {
 struct Client {
     calls: RefCell<Vec<(String, Option<ByteRange>)>>,
     mirror: Option<&'static [u8]>,
+    original: Option<&'static [u8]>,
+    next: Option<&'static [u8]>,
     disable: bool,
     split: bool,
     corrupt: bool,
@@ -50,6 +52,19 @@ struct Client {
     fallback: Cell<bool>,
 }
 impl Http for Client {
+    async fn journey_plan(
+        &self,
+        builder: &mut Builder,
+        source: &mut impl timetable_display::feed::Tables,
+        mask: u8,
+        config: &Config,
+        workspace: &mut zip::Workspace,
+    ) -> Result<(), gtfs::Error> {
+        let mut planner = timetable_display::journey::DevicePlanner::new(builder.dates[1]);
+        builder
+            .device_journeys_with(&mut planner, source, mask, config, workspace)
+            .await
+    }
     fn fallback(&self, _: &Error) {
         self.fallback.set(true);
     }
@@ -82,11 +97,11 @@ impl Http for Client {
             if self.fail_original {
                 return Err(Error::Network);
             }
-            op.read(Body(ORIGINAL)).await?;
+            op.read(Body(self.original.unwrap_or(ORIGINAL))).await?;
             return Ok(Metadata::default());
         }
         let data = if url == NEXT {
-            TOMORROW
+            self.next.unwrap_or(TOMORROW)
         } else {
             assert_eq!(url, OLD);
             self.mirror.unwrap_or(MIRROR)
@@ -178,7 +193,9 @@ fn mirror_fetches_each_table_once_and_matches_the_official_join() {
     let mut directory_source = Slice(MIRROR, 0);
     let directory = run(zip::Directory::read(&mut directory_source, &mut [0; 128])).unwrap();
     for table in Table::ALL {
-        let member = directory.member(table).unwrap();
+        let Some(member) = directory.member(table) else {
+            continue;
+        };
         let payload = member.record_range();
         assert_eq!(
             client
@@ -452,4 +469,50 @@ fn mirror_decoded_work_yields_even_with_an_always_ready_http_source() {
         longest <= 32,
         "too many CSV callbacks without returning to the runner: {longest}"
     );
+}
+
+#[test]
+fn journey_only_groups_use_both_raw_mirror_and_original_without_a_routing_server() {
+    let bytes = include_bytes!("../../display/tests/fixtures/journey.zip").as_slice();
+    let mut config = settings();
+    config.groups[0].picks.clear();
+    let endpoint = |stop: &str, walk| timetable_display::config::JourneyStop {
+        stop: stop.try_into().unwrap(),
+        walk,
+    };
+    config.groups[0].journey = Some(timetable_display::config::Journey {
+        origins: [endpoint("A", 6), endpoint("B", 12)].into_iter().collect(),
+        targets: [endpoint("Z", 0)].into_iter().collect(),
+        transfer_minutes: 3,
+        max_transfers: 1,
+    });
+    for (disable, split) in [(false, false), (true, false), (false, true)] {
+        let client = Client {
+            split,
+            mirror: Some(bytes),
+            original: Some(bytes),
+            next: Some(include_bytes!(
+                "../../display/tests/fixtures/journey-handover.zip"
+            )),
+            disable,
+            ..Default::default()
+        };
+        let cache = Box::leak(Box::new(timetable_display::journey::Cache::default()));
+        let mut builder = Builder::new("20261017".parse().unwrap());
+        builder.journeys = Some(cache);
+        let freshness = run(download::refresh(
+            &client,
+            &mut builder,
+            &mut zip::Workspace::new(),
+            &config,
+            1792216800,
+        ))
+        .unwrap();
+        assert_eq!(freshness.checked_at, Some(1792216800));
+        let cache = builder.journeys.as_deref().unwrap();
+        let best = cache.best(0, 1792216800).unwrap();
+        assert_eq!((best.len, best.arrival), (2, 30 * 60));
+        assert!(builder.events.is_empty());
+        assert_eq!(client.fallback.get(), disable || split);
+    }
 }

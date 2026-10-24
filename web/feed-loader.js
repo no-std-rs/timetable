@@ -26,7 +26,7 @@ export class FeedLoader {
     const stops=[];progress("Reading stops…");
     for await(const s of this.rows("stops.txt")){
       if(!validId(s.stop_id))throw new Error("Invalid stop ID in feed.");
-      stops.push({id:s.stop_id,name:label(s.stop_name||s.stop_id,64),code:utf8.encode(s.stop_code||"").length<=16?s.stop_code||"":""});
+      stops.push({id:s.stop_id,name:label(s.stop_name||s.stop_id,64),code:utf8.encode(s.stop_code||"").length<=16?s.stop_code||"":"",parent:s.parent_station||"",location_type:Number(s.location_type||0)});
       if(stops.length>2000000)throw new Error("This feed exceeds the browser catalogue limit.");
     }
     stops.sort((a,b)=>compare(a.name,b.name)||compare(a.code,b.code)||compare(a.id,b.id));
@@ -39,8 +39,8 @@ export class FeedLoader {
     const heads=routes.map(()=>[new Map(),new Map()]);progress("Reading journeys…");
     for await(const t of this.rows("trips.txt")){
       const route=routeIds.get(t.route_id),direction=t.direction_id===""||t.direction_id===undefined?-1:Number(t.direction_id);
-      if(route===undefined||!validId(t.trip_id)||![-1,0,1].includes(direction)||this.trips.has(t.trip_id))throw new Error("Invalid journey in feed.");
-      const headsign=label(t.trip_headsign||"",64);this.trips.set(t.trip_id,{route,direction,headsign});
+      if(route===undefined||!validId(t.trip_id)||!validId(t.service_id)||![-1,0,1].includes(direction)||this.trips.has(t.trip_id))throw new Error("Invalid journey in feed.");
+      const headsign=label(t.trip_headsign||"",64);this.trips.set(t.trip_id,{route,direction,headsign,service_id:t.service_id});
       if(utf8.encode(t.trip_id).length>255)routes[route].device_error="Journey IDs on this line exceed the display’s 255-byte limit.";
       if(direction>=0){const map=heads[route][direction];map.set(headsign,(map.get(headsign)||0)+1);}
       if(this.trips.size>3000000)throw new Error("This feed exceeds the browser journey limit.");
