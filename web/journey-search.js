@@ -46,7 +46,7 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   }
   const stops=new Map(loader.catalog.stops.map(s=>[s.id,s]));
   for(const stop of[...settings.origins,...settings.targets])if(!stops.has(stop.stop))throw new Error("A journey stop changed. Reload the network and select it again.");
-  const calls=new Map();let count=0;
+  const calls=new Map(),identities=new Map();let count=0;
   for await(const row of loader.rows("stop_times.txt")){
     const trip=loader.trips.get(row.trip_id);if(!trip)fail();
     const mask=services.get(trip.service_id)?.active??0;if(!mask)continue;
@@ -59,7 +59,7 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
       const a=days[day].epoch+arrival,d=days[day].epoch+departure;
       if(d<now||a>now+HORIZON)continue;
       const key=JSON.stringify([row.trip_id,day]);let list=calls.get(key);
-      if(!list){list=[];calls.set(key,list);}
+      if(!list){list=[];calls.set(key,list);identities.set(key,{trip:row.trip_id,route:loader.catalog.routes[trip.route].id});}
       list.push({sequence,arrival:a,departure:d,pickup:d>now+HORIZON?1:pickup,dropoff:a<now?1:dropoff,stop,trip:key,line:loader.catalog.routes[trip.route].line});
       if(++count>300000)throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");
     }
@@ -68,78 +68,99 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
     list.sort((a,b)=>a.sequence-b.sequence);
     if(list.some((c,i)=>i&&(c.sequence===list[i-1].sequence||c.arrival<list[i-1].departure)))fail();
   }
-  const rules=new Map();
+  const scopeFields=["from_route_id","to_route_id","from_trip_id","to_trip_id"];
+  const rules=new Map(),allRules=[];
+  const specificity=r=>r.from_trip_id&&r.to_trip_id?6:
+    r.from_trip_id&&r.to_route_id||r.from_route_id&&r.to_trip_id?5:
+    r.from_trip_id||r.to_trip_id?4:r.from_route_id&&r.to_route_id?3:
+    r.from_route_id||r.to_route_id?2:1;
   if(loader.zip.members.has("transfers.txt"))for await(const row of loader.rows("transfers.txt")){
-    const scoped=[row.from_route_id,row.to_route_id,row.from_trip_id,row.to_trip_id].some(Boolean);
     const type=uint(row.transfer_type||"0",5);
-    const error=scoped?"Journey routing does not yet support route-specific transfers.":type>3?"Journey routing does not yet support in-seat transfer rules.":null;
-    const seconds=error?0:type===2?uint(row.min_transfer_time):uint(row.min_transfer_time||"0");
-    const key=JSON.stringify([row.from_stop_id,row.to_stop_id]),old=rules.get(key);
-    if(old&&!old.error&&!error)fail();
-    // Unsupported scoped/in-seat rules matter only if a reachable label tries
-    // to use their stop pair. Keep their identity without disabling remote trips.
-    const rule={from:row.from_stop_id,to:row.to_stop_id,seconds,forbidden:!error&&type===3,error:error||old?.error};
-    if(rule.error)rule.forbidden=false;
-    rules.set(key,rule);
+    const error=type>3?"Journey routing does not yet support in-seat transfer rules.":null;
+    if(!row.from_stop_id||!row.to_stop_id){if(error)throw new Error(error);fail();}
+    const seconds=type===2?uint(row.min_transfer_time):uint(row.min_transfer_time||"0");
+    const scopes=Object.fromEntries(scopeFields.map(field=>[field,row[field]||""]));
+    const key=JSON.stringify([row.from_stop_id,row.to_stop_id]),signature=JSON.stringify(scopes);
+    const list=rules.get(key)??[];
+    if(list.some(rule=>rule.signature===signature))fail();
+    const rule={from:row.from_stop_id,to:row.to_stop_id,seconds,forbidden:type===3,error,signature,...scopes};
+    list.push(rule);rules.set(key,list);allRules.push(rule);
   }
   const children=new Map();
   for(const stop of stops.values())if(stop.parent){
     if(!stops.has(stop.parent))fail();
     const list=children.get(stop.parent)??[];list.push(stop.id);children.set(stop.parent,list);
   }
-  const applicable=(from,to)=>{
+  const applicable=(from,to,arriving,departing)=>{
+    const a=identities.get(arriving),b=identities.get(departing);
     const keys=[[from,to],[from,stops.get(to)?.parent],[stops.get(from)?.parent,to],[stops.get(from)?.parent,stops.get(to)?.parent]];
-    let chosen=null,error=null;
-    for(const[a,b]of keys)if(a&&b){const rule=rules.get(JSON.stringify([a,b]));if(rule){chosen??=rule;error??=rule.error;}}
-    return error?{...chosen,error,forbidden:false}:chosen;
+    let chosen=null,score=-1;
+    for(const[x,y]of keys)if(x&&y)for(const rule of rules.get(JSON.stringify([x,y]))??[]){
+      if(rule.from_trip_id&&rule.from_trip_id!==a?.trip||rule.to_trip_id&&rule.to_trip_id!==b?.trip||
+         rule.from_route_id&&rule.from_route_id!==a?.route||rule.to_route_id&&rule.to_route_id!==b?.route)continue;
+      const rank=specificity(rule)*4+Number(rule.from===from)+Number(rule.to===to);
+      if(rank===score&&chosen!==rule)fail();
+      if(rank>score){chosen=rule;score=rank;}
+    }
+    return chosen;
   };
   const links=new Map();
   const connect=(from,to)=>{
-    const rule=applicable(from,to);if(rule?.forbidden)return;
-    let incoming=links.get(to);if(!incoming){incoming=new Map();links.set(to,incoming);}
-    incoming.set(from,{seconds:rule?.error?0:Math.max(settings.transfer_minutes*60,rule?.seconds??0),error:rule?.error});
+    let incoming=links.get(to);if(!incoming){incoming=new Set();links.set(to,incoming);}
+    incoming.add(from);
   };
   for(const siblings of children.values())for(const from of siblings)for(const to of siblings)if(from!==to)connect(from,to);
-  for(const rule of rules.values()){
+  for(const rule of allRules){
     const from=children.get(rule.from)??[rule.from],to=children.get(rule.to)??[rule.to];
     for(const a of from)for(const b of to)if(a!==b)connect(a,b);
   }
+  const tripSensitive=allRules.some(rule=>scopeFields.some(field=>rule[field]));
+  // Scoped rules distinguish arriving trips. Preserve their prefixes, including
+  // different access walks, rather than letting one forbidden trip hide another.
+  const offer=(map,stop,label)=>{
+    let list=map.get(stop);if(!list){list=new Map();map.set(stop,list);}
+    const key=JSON.stringify([tripSensitive?label.legs.at(-1)?.trip??null:null,label.walk]),old=list.get(key);
+    if(!old||compare(label,old)<0)list.set(key,label);
+    return old?0:1;
+  };
+  const budget=()=>{throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");};
   let previous=new Map();
-  for(const origin of settings.origins)previous.set(origin.stop,{arrival:now+origin.walk*60,walk:origin.walk,origin:stops.get(origin.stop),legs:[]});
+  for(const origin of settings.origins)offer(previous,origin.stop,{arrival:now+origin.walk*60,walk:origin.walk,origin:stops.get(origin.stop),legs:[]});
   const best=new Map();
   const publish=(depth,complete)=>({depth,complete,now,timezone:loader.timezone,paths:[...best.values()].sort(compare)});
   for(let depth=0;depth<=maxTransfers;depth++){
-    const next=new Map();
+    const next=new Map();let labels=0;
     for(const list of calls.values()){
       let boarded=null;
       for(const call of list){
         if(boarded&&call.dropoff!==1&&call.sequence>boarded.call.sequence){
-          const label={...boarded.label,conditional:boarded.label.conditional||boarded.call.pickup>=2||call.dropoff>=2,arrival:call.arrival,legs:[...boarded.label.legs,{trip:call.trip,line:call.line,from:boarded.call.stop,to:call.stop,departure:boarded.call.departure,arrival:call.arrival}]};
-          if(!next.has(call.stop.id)||compare(label,next.get(call.stop.id))<0)next.set(call.stop.id,label);
+          const label={...boarded.label,error:boarded.error,conditional:boarded.label.conditional||boarded.call.pickup>=2||call.dropoff>=2,arrival:call.arrival,legs:[...boarded.label.legs,{trip:call.trip,line:call.line,from:boarded.call.stop,to:call.stop,departure:boarded.call.departure,arrival:call.arrival}]};
+          labels+=offer(next,call.stop.id,label);if(labels>300000)budget();
         }
         if(call.pickup===1)continue;
-        const options=[];const same=previous.get(call.stop.id);
-        const sameRule=applicable(call.stop.id,call.stop.id);
-        if(same&&(!depth||!sameRule?.forbidden))options.push({label:same,seconds:depth&&!sameRule?.error?Math.max(settings.transfer_minutes*60,sameRule?.seconds??0):0,error:depth?sameRule?.error:null});
-        if(depth)for(const[from,link]of links.get(call.stop.id)??[]){
-          const label=previous.get(from);if(label)options.push({label,...link});
-        }
-        for(const {label,seconds,error}of options){
-          if(label.arrival+seconds>call.departure||label.legs.at(-1)?.trip===call.trip)continue;
-          if(error)throw new Error(error);
+        const options=[...(previous.get(call.stop.id)?.values()??[])].map(label=>({label,from:call.stop.id}));
+        if(depth)for(const from of links.get(call.stop.id)??[])for(const label of previous.get(from)?.values()??[])options.push({label,from});
+        for(const {label,from}of options){
+          if(label.legs.at(-1)?.trip===call.trip)continue;
+          const rule=depth?applicable(from,call.stop.id,label.legs.at(-1)?.trip,call.trip):null;
+          if(rule?.forbidden)continue;
+          const samePlace=from===call.stop.id||stops.get(from)?.parent&&stops.get(from).parent===call.stop.parent;
+          if(depth&&!rule&&!samePlace)continue;
+          // Timed guarantees do not waive the user's chosen minimum margin.
+          const seconds=depth?Math.max(settings.transfer_minutes*60,rule?.seconds??0):0;
+          if(label.arrival+seconds>call.departure)continue;
           // Every previous label has exactly `depth` rides in this round.
-          if(!boarded||label.walk<boarded.label.walk)boarded={call,label};
+          if(!boarded||label.walk<boarded.label.walk)boarded={call,label,error:label.error||rule?.error};
         }
       }
     }
-    for(const target of settings.targets){
-      const label=next.get(target.stop);if(!label)continue;
+    for(const target of settings.targets)for(const label of next.get(target.stop)?.values()??[]){
       const candidate={...label,arrival:label.arrival+target.walk*60,target:stops.get(target.stop),egress:target.walk};
+      if(candidate.arrival<=now+HORIZON&&candidate.error)throw new Error(candidate.error);
       if(candidate.arrival<=now+HORIZON&&candidate.conditional)throw new Error("Journey routing does not yet support conditional boarding or alighting.");
       if(candidate.arrival<=now+HORIZON&&(!best.has(target.stop)||compare(candidate,best.get(target.stop))<0))best.set(target.stop,candidate);
     }
     previous=next;onProgress(publish(depth,depth===maxTransfers));
-    // Let the optional exploration UI paint its completed-depth result.
     await new Promise(resolve=>setTimeout(resolve,0));
   }
   return publish(maxTransfers,true);

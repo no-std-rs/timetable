@@ -154,3 +154,17 @@ write_archive('journey-conditional-alight.zip',{**journey,'stop_times.txt':journ
 write_archive('journey-conditional-through.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('W,2,0,0','W,2,3,2')})
 
 write_archive('journey-timed.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,X,1\n'})
+
+write_archive('journey-scope-unrelated.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,X,3,D,T\n'})
+write_archive('journey-scope-precedence.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,X,3,,\nX,X,0,A,T\n'})
+write_archive('journey-scope-trip.zip',{**journey,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id,from_trip_id,to_trip_id\nX,X,3,A,T,,\nX,X,0,,,a,legal\n'})
+write_archive('journey-scope-alternative.zip',{**journey,
+    'routes.txt':journey['routes.txt']+'Q,Alt,3\n',
+    'trips.txt':journey['trips.txt']+'Q,ALL,q\n',
+    'stop_times.txt':journey['stop_times.txt'].replace('legal,08:20:00,08:20:00','legal,08:21:00,08:21:00')+'q,08:08:00,08:08:00,A,1,0,0\nq,08:18:00,08:18:00,X,2,0,0\n',
+    'transfers.txt':'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,X,3,A,T\n'})
+
+for name,route in [('matching','A'),('unrelated','D')]:
+    write_archive(f'journey-scope-link-{name}.zip',{**station,
+        'stops.txt':station['stops.txt'].replace('XP,Interchange platform 2,X02,P,0','XP,Interchange platform 2,X02,,0'),
+        'transfers.txt':f'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,XP,0,{route},T\n'})

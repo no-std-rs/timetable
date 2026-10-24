@@ -44,7 +44,7 @@ test("dwell calls spanning either window boundary remain usable",async()=>{
 test("unsupported rules fail only for reachable transfers, and conditional boarding is explicit",async()=>{
   assert.equal((await searchJourneys(await loader("journey-conditional-through.zip"),config(),{now:NOW,maxTransfers:0})).paths[0].arrival,NOW+35*60);
   assert.equal((await searchJourneys(await loader("journey-remote-rule.zip"),config(),{now:NOW})).paths[0].arrival,NOW+30*60);
-  for(const file of["journey-scoped-rule.zip","journey-inseat-rule.zip","journey-conditional.zip","journey-conditional-alight.zip"]){
+  for(const file of["journey-inseat-rule.zip","journey-conditional.zip","journey-conditional-alight.zip"]){
     await assert.rejects(searchJourneys(await loader(file),config(),{now:NOW}),/does not yet support/);
   }
 });
@@ -52,4 +52,27 @@ test("unsupported rules fail only for reachable transfers, and conditional board
 test("a timed-transfer guarantee does not waive the configured user margin",async()=>{
   const c=config();c.transfer_minutes=2;
   assert.equal((await searchJourneys(await loader("journey-timed.zip"),c,{now:NOW})).paths[0].arrival,NOW+25*60);
+});
+
+test("scoped rules apply to matching trips and override less-specific rules",async()=>{
+  for(const file of["journey-scoped-rule.zip","journey-scope-unrelated.zip","journey-scope-precedence.zip"]){
+    const result=await searchJourneys(await loader(file),config(),{now:NOW});
+    assert.equal(result.paths[0].arrival,NOW+30*60,file);
+  }
+  const c=config();c.transfer_minutes=2;
+  const trips=await searchJourneys(await loader("journey-scope-trip.zip"),c,{now:NOW});
+  assert.equal(trips.paths[0].arrival,NOW+30*60,"trip override permits legal but route prohibition still excludes tight");
+  assert.equal(trips.paths[0].legs[1].trip,JSON.stringify(["legal",1]));
+});
+test("a later arriving service remains available when the earlier trip cannot transfer",async()=>{
+  const result=await searchJourneys(await loader("journey-scope-alternative.zip"),config(),{now:NOW});
+  assert.equal(result.paths[0].arrival,NOW+30*60);
+  assert.equal(result.paths[0].legs[0].line,"Alt");
+});
+
+test("a scoped cross-stop link never creates a transfer for unrelated services",async()=>{
+  for(const [name,minutes]of[["matching",30],["unrelated",35]]){
+    const result=await searchJourneys(await loader(`journey-scope-link-${name}.zip`),config(),{now:NOW});
+    assert.equal(result.paths[0].arrival,NOW+minutes*60,name);
+  }
 });

@@ -21,7 +21,10 @@ Both Android and ESP32 calculate independently from downloaded static GTFS.
 The installer supplies settings, never precomputed routes. The optional website
 explorer runs locally in a worker and reports completed depths progressively,
 up to four transfers. Its depth does not change the installed device setting.
-There is no routing server. The ordinary departure-board group mode remains
+The website explorer can also apply route/trip-scoped stop-transfer rules and
+keeps different arriving services when those rules distinguish them. Installed
+devices retain the stricter rule limits described below. There is no routing
+server. The ordinary departure-board group mode remains
 available.
 
 The device builds a six-hour departure/arrival profile. As time advances, the
@@ -57,7 +60,8 @@ The planner uses fixed storage and fails visibly when a selection exceeds it:
 | Relevant routes | 32 | 64 |
 
 Both profiles retain at most 64 nondominated future connections across groups,
-with 32 shared labels in a 1 KiB arena. Capacity exhaustion never returns a
+with 32 shared labels in a 1 KiB arena. Browser exploration separately bounds
+active calls and retained prefixes at 300,000 each. Capacity exhaustion never returns a
 silently shortened complete result. Yesterday, today and tomorrow's service
 days include calendar exceptions and after-24:00 times, using the installed
 network timezone. Feeds extending beyond that service-day policy are unsupported.

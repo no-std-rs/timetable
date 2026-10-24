@@ -19,7 +19,7 @@ export const polish = {
   "Up to 4 transfers": "Do 4 przesiadek",
   "The transfer minimum includes time to change platforms. A longer minimum declared by the timetable takes precedence. Only the same stop, platforms in the same declared station, or explicit timetable transfer links are used; nearby stops are not automatically connected. ETAs are scheduled, not live traffic predictions.": "Minimum obejmuje czas przejścia między peronami. Dłuższe minimum określone w rozkładzie ma pierwszeństwo. Przesiadki odbywają się na tym samym przystanku, między peronami tej samej stacji lub po połączeniach zapisanych w rozkładzie; pobliskie przystanki nie są łączone automatycznie. Czas dotarcia wynika z rozkładu i nie uwzględnia bieżących opóźnień.",
   "Explore a journey in this browser": "Sprawdź podróż w tej przeglądarce",
-  "The optional browser search can look up to four transfers deep. Both devices still calculate their own journeys at the on-device depth above.": "Opcjonalne wyszukiwanie w przeglądarce obejmuje do czterech przesiadek. Oba rodzaje urządzeń nadal samodzielnie obliczają podróże w wybranym wyżej zakresie.",
+  "The optional browser search can look up to four transfers deep and handle service-specific transfer rules. Devices calculate their own journeys within their stricter limits.": "Opcjonalne wyszukiwanie w przeglądarce uwzględnia do czterech przesiadek i reguły dla konkretnych kursów. Urządzenia obliczają własne połączenia w ramach bardziej ograniczonych możliwości.",
   "Website search depth": "Zakres wyszukiwania na stronie",
   "Calculate journey": "Oblicz podróż",
   "Walk there (min)": "Dojście (min)",
