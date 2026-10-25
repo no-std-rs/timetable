@@ -1,8 +1,8 @@
 // Optional exploration on the user's computer. Device routing is independent:
 // both firmware and Android run the bounded Rust planner on their own GTFS data.
-import { stopPlaces } from "./stop-places.js";
+import { stopPlaces, walkableStops } from "./stop-places.js";
 import { validateJourney } from "./config.js";
-const HORIZON=6*3600;
+const HORIZON=6*3600,PREFIXES=3,SEQUENCES=12;
 const fail=()=>{throw new Error("The timetable contains unsupported journey data.");};
 function dateParts(zone,now){
   const formatter=new Intl.DateTimeFormat("en-CA",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit"});
@@ -29,11 +29,13 @@ const time=value=>{
   const parts=value.split(":");if(parts.length!==3)fail();
   return uint(parts[0])*3600+uint(parts[1],59)*60+uint(parts[2],59);
 };
-function compare(a,b){return a.arrival-b.arrival||a.legs.length-b.legs.length||a.walk-b.walk;}
+function compare(a,b){return a.arrival-b.arrival||a.legs.length-b.legs.length||a.walk+(a.egress??0)-b.walk-(b.egress??0);}
 
-export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/1000),maxTransfers=settings.max_transfers,onProgress=()=>{}}={}){
+// extraWalk also explores places within that many minutes (straight line at
+// 75 m/min) of a configured start or target. Configured walks always win.
+export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/1000),maxTransfers=settings.max_transfers,extraWalk=0,onProgress=()=>{}}={}){
   validateJourney(settings);
-  if(!Number.isInteger(maxTransfers)||maxTransfers<0||maxTransfers>4||!Number.isSafeInteger(now))throw new Error("Invalid journey search depth or time.");
+  if(!Number.isInteger(maxTransfers)||maxTransfers<0||maxTransfers>4||!Number.isSafeInteger(now)||!Number.isFinite(extraWalk)||extraWalk<0||extraWalk>60)throw new Error("Invalid journey search depth or time.");
   const days=dateParts(loader.timezone,now),services=new Map();
   const service=id=>{if(!id)fail();if(!services.has(id))services.set(id,{active:0,removed:0});return services.get(id);};
   if(loader.zip.members.has("calendar.txt"))for await(const row of loader.rows("calendar.txt")){
@@ -48,6 +50,14 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   const stops=new Map(loader.catalog.stops.map(s=>[s.id,s]));
   const places=stopPlaces(loader.catalog);
   for(const stop of[...settings.origins,...settings.targets])if(!places.byId.has(stop.stop))throw new Error("A journey stop changed. Reload the network and select it again.");
+  const endpoints=(list,boarding)=>{
+    const chosen=new Map();
+    for(const s of list){const place=places.byId.get(s.stop),old=chosen.get(place);if(!old||s.walk<old.walk)chosen.set(place,{place,walk:s.walk,configured:true});}
+    if(extraWalk>0)for(const near of walkableStops(places,list,{extraMinutes:extraWalk,boarding}))if(!chosen.has(near.place))chosen.set(near.place,{place:near.place,walk:near.walk,configured:false});
+    return [...chosen.values()];
+  };
+  const origins=endpoints(settings.origins,true),targets=endpoints(settings.targets,false);
+  const summary=end=>({key:end.place.key,name:end.place.name,walk:end.walk,configured:end.configured,stop:end.place.stops[0].id});
   const calls=new Map(),identities=new Map(),untimed=new Map();let count=0,untimedCount=0;
   for await(const row of loader.rows("stop_times.txt")){
     const trip=loader.trips.get(row.trip_id);if(!trip)fail();
@@ -136,22 +146,90 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
     for(const a of from)for(const b of to)if(a!==b)connect(a,b);
   }
   const routeSegments=legs=>legs.map(leg=>[leg.route,leg.stops.map(call=>call.stop.id)]);
-  // Keep every route prefix and arriving trip (for scoped transfer rules).
-  // Earlier services of an identical prefix can share their onward ride.
+  // Keep every route prefix. Scoped transfer rules also need the arriving
+  // trip; otherwise earlier services of an identical prefix share onward rides.
+  const scoped=allRules.some(rule=>scopeFields.some(field=>rule[field]));
+  // A stop keeps the earliest few prefixes of its earliest line sequences.
+  // Later copies only lead to slower routes, and dense networks would explode.
+  const lines=label=>label.legs.map(leg=>leg.route).join("\n");
   const offer=(map,stop,label)=>{
     let list=map.get(stop);if(!list){list=new Map();map.set(stop,list);}
-    const key=JSON.stringify([label.origin.id,label.walk,routeSegments(label.legs),label.legs.at(-1)?.trip,label.error,!!label.conditional]),old=list.get(key);
-    if(!old||compare(label,old)<0)list.set(key,label);
-    return old?0:1;
+    const key=JSON.stringify([label.origin.id,label.walk,routeSegments(label.legs),scoped?label.legs.at(-1)?.trip:"",label.error]),old=list.get(key);
+    if(old){if(compare(label,old)<0)list.set(key,label);return 0;}
+    const group=lines(label),best=new Map();let worst=null;
+    for(const [k,l]of list){const g=lines(l);if(!best.has(g)||compare(l,best.get(g))<0)best.set(g,l);if(g===group&&(!worst||compare(l,worst[1])>0))worst=[k,l];}
+    if(worst&&[...list.values()].filter(l=>lines(l)===group).length>=PREFIXES){
+      if(compare(label,worst[1])>=0)return 0;
+      list.delete(worst[0]);list.set(key,label);return 0;
+    }
+    if(!worst&&best.size>=SEQUENCES){
+      let last=null;for(const [g,l]of best)if(!last||compare(l,last[1])>0)last=[g,l];
+      if(compare(label,last[1])>=0)return 0;
+      for(const [k,l]of list)if(lines(l)===last[0])list.delete(k);
+    }
+    list.set(key,label);return 1;
   };
   const budget=()=>{throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");};
   let previous=new Map();
-  for(const origin of settings.origins)for(const stop of places.byId.get(origin.stop).stops)offer(previous,stop.id,{arrival:now+origin.walk*60,walk:origin.walk,origin:stop,legs:[]});
+  for(const origin of origins)for(const stop of origin.place.stops)offer(previous,stop.id,{arrival:now+origin.walk*60,walk:origin.walk,origin:stop,start:summary(origin),legs:[]});
   const best=new Map();
   // Repeated services of the same ordered route are one choice: show its
   // earliest feasible itinerary, while retaining every distinct stop pattern.
   const routeKey=path=>JSON.stringify([places.byId.get(path.origin.id).key,places.byId.get(path.target.id).key,routeSegments(path.legs)]);
-  const publish=(depth,complete)=>({depth,complete,now,until:now+HORIZON,timezone:loader.timezone,paths:[...best.values()].sort(compare)});
+  const targetAt=new Map();for(const target of targets)for(const stop of target.place.stops)targetAt.set(stop.id,target);
+  const leave=path=>path.legs[0].departure-path.walk*60;
+  // Any target counts as arrival: a ride or change that already reached one
+  // earlier makes continuing to another target a worse duplicate.
+  const reachedEarlier=path=>path.legs.some((leg,i)=>leg.stops.some((call,at)=>at>0&&!(i===path.legs.length-1&&at===leg.stops.length-1)&&call.dropoff!==1&&call.arrival!==null&&targetAt.has(call.stop.id)&&call.arrival+targetAt.get(call.stop.id).walk*60<=path.arrival));
+  // Riding away and back (a repeated place across rides, back through the
+  // start, or two consecutive rides of one line) only adds waiting time.
+  const placeOf=stop=>places.byId.get(stop.id)?.key??stop.id;
+  const loops=path=>{
+    const seen=new Set([placeOf(path.origin)]);
+    return path.legs.some((leg,k)=>{
+      if(k&&leg.route===path.legs[k-1].route)return true;
+      const own=new Set();
+      for(const [at,call]of leg.stops.entries()){if(at&&seen.has(placeOf(call.stop)))return true;own.add(placeOf(call.stop));}
+      for(const place of own)seen.add(place);
+      return false;
+    });
+  };
+  // The same vehicles boarded or left at a different place only differ by
+  // walking. Keep the one with the later departure from home and earlier arrival.
+  const trips=path=>JSON.stringify(path.legs.map(leg=>leg.trip));
+  const tie=(a,b)=>Number(b.start.configured&&b.end.configured)-Number(a.start.configured&&a.end.configured)||a.walk+a.egress-b.walk-b.egress||(routeKey(a)<routeKey(b)?-1:1);
+  const better=(a,b)=>leave(a)>=leave(b)&&a.arrival<=b.arrival&&(leave(a)>leave(b)||a.arrival<b.arrival||tie(a,b)<0);
+  // Searching keeps the earliest arrival for each route prefix, which can mean
+  // boarding early and waiting. Walk back through later services of the same
+  // ordered routes: leave as late as possible for that same arrival.
+  let byRoute;
+  const tighten=path=>{
+    if(!byRoute){byRoute=new Map();for(const [key,list]of calls){const route=identities.get(key).route,trips=byRoute.get(route)??[];trips.push(list);byRoute.set(route,trips);}}
+    const legs=[...path.legs];
+    for(let k=legs.length-2;k>=0;k--){
+      const leg=legs[k],after=legs[k+1],ids=leg.stops.map(call=>call.stop.id);let chosen=leg;
+      for(const list of byRoute.get(leg.route)??[]){
+        for(let i=0;i+ids.length<=list.length;i++){
+          if(!ids.every((id,n)=>list[i+n].stop.id===id))continue;
+          const board=list[i],alight=list[i+ids.length-1];
+          if(board.trip===after.trip||board.pickup===1||alight.dropoff===1||board.departure===null||alight.arrival===null||board.departure<=chosen.departure)continue;
+          if(k===0&&board.departure-path.walk*60<now)continue;
+          const rule=applicable(alight.stop.id,after.from.id,board.trip,after.trip);
+          if(rule?.forbidden||alight.arrival+Math.max(settings.transfer_minutes*60,rule?.seconds??0)>after.departure)continue;
+          chosen={...leg,trip:board.trip,departure:board.departure,arrival:alight.arrival,requestBoard:board.pickup>=2,requestAlight:alight.dropoff>=2,stops:list.slice(i,i+ids.length).map(c=>({stop:c.stop,arrival:c.arrival,departure:c.departure,pickup:c.pickup,dropoff:c.dropoff}))};
+        }
+      }
+      legs[k]=chosen;
+    }
+    return legs.every((leg,k)=>leg===path.legs[k])?path:{...path,legs};
+  };
+  const publish=(depth,complete)=>{
+    const paths=[...best.values()].filter(path=>!reachedEarlier(path)&&!loops(path)).map(tighten),groups=new Map();
+    for(const path of paths){const key=trips(path),list=groups.get(key)??[];list.push(path);groups.set(key,list);}
+    // An extra change is only an alternative when it saves time somewhere.
+    const kept=paths.filter(path=>!groups.get(trips(path)).some(other=>other!==path&&better(other,path)));
+    return {depth,complete,now,until:now+HORIZON,timezone:loader.timezone,extraWalk,paths:kept.filter(path=>!kept.some(other=>other.legs.length<path.legs.length&&leave(other)>=leave(path)&&other.arrival<=path.arrival)).sort(compare)};
+  };
   for(let depth=0;depth<=maxTransfers;depth++){
     const next=new Map();let labels=0;
     for(const list of calls.values()){
@@ -159,8 +237,9 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
       for(const [at,call] of list.entries()){
         if(call.arrival===null||call.departure===null)continue;
         if(call.dropoff!==1)for(const boarded of boardings){
-          const leg={trip:call.trip,route:identities.get(call.trip).route,line:call.line,from:boarded.call.stop,to:call.stop,departure:boarded.call.departure,arrival:call.arrival,stops:list.slice(boarded.at,at+1).map(c=>({stop:c.stop,arrival:c.arrival,departure:c.departure}))};
-          const label={...boarded.label,error:boarded.error,conditional:boarded.label.conditional||boarded.call.pickup>=2||call.dropoff>=2,arrival:call.arrival,legs:[...boarded.label.legs,leg]};
+          // Types 2/3 are request stops (phone or signal the driver), not errors.
+          const leg={trip:call.trip,route:identities.get(call.trip).route,line:call.line,from:boarded.call.stop,to:call.stop,departure:boarded.call.departure,arrival:call.arrival,requestBoard:boarded.call.pickup>=2,requestAlight:call.dropoff>=2,stops:list.slice(boarded.at,at+1).map(c=>({stop:c.stop,arrival:c.arrival,departure:c.departure,pickup:c.pickup,dropoff:c.dropoff}))};
+          const label={...boarded.label,error:boarded.error,arrival:call.arrival,legs:[...boarded.label.legs,leg]};
           labels+=offer(next,call.stop.id,label);if(labels>300000)budget();
         }
         if(call.pickup===1)continue;
@@ -176,15 +255,22 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
           // Timed guarantees do not waive the user's chosen minimum margin.
           const seconds=depth?Math.max(settings.transfer_minutes*60,rule?.seconds??0):0;
           if(label.arrival+seconds>call.departure)continue;
-          boardings.push({at,call,label,error:label.error||rule?.error});
+          // Every boarding reaches later stops at the same time; keep a few per
+          // line sequence, preferring less walking, like the per-stop prefixes.
+          const group=lines(label),same=boardings.filter(b=>b.group===group);
+          if(same.length>=PREFIXES){
+            const worst=same.reduce((a,b)=>b.label.walk>a.label.walk?b:a);
+            if(worst.label.walk<=label.walk)continue;
+            boardings.splice(boardings.indexOf(worst),1);
+          }else if(!same.length&&new Set(boardings.map(b=>b.group)).size>=SEQUENCES)continue;
+          boardings.push({at,call,label,group,error:label.error||rule?.error});
           if(boardings.length>300000)budget();
         }
       }
     }
-    for(const target of settings.targets)for(const stop of places.byId.get(target.stop).stops)for(const label of next.get(stop.id)?.values()??[]){
-      const candidate={...label,arrival:label.arrival+target.walk*60,target:stop,egress:target.walk};
+    for(const [stopId,target] of targetAt)for(const label of next.get(stopId)?.values()??[]){
+      const candidate={...label,arrival:label.arrival+target.walk*60,target:label.legs.at(-1).to,end:summary(target),egress:target.walk};
       if(candidate.arrival<=now+HORIZON&&candidate.error)throw new Error(candidate.error);
-      if(candidate.arrival<=now+HORIZON&&candidate.conditional)throw new Error("Journey routing does not yet support conditional boarding or alighting.");
       const key=routeKey(candidate);
       if(candidate.arrival<=now+HORIZON&&(!best.has(key)||compare(candidate,best.get(key))<0))best.set(key,candidate);
       if(best.size>300000)budget();

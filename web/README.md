@@ -16,8 +16,10 @@ settings can be inspected and switched back to automatic mode here.
 Choose **Journey planner (advanced)** to configure starting stops, walking times
 and targets. The display recommends a complete connection with ETA, allowing
 one transfer and at least three minutes to change by default. Advanced device
-settings allow direct-only or two transfers; optional local website exploration
-can progressively check up to four. See [journey behaviour and limits](../docs/journeys.md),
+settings allow direct-only or two transfers. **Routes between your stops**
+searches locally in the browser, including nearby walkable stops, and shows each
+route as tappable stop dots: tap a stop to add it as a start or target. It checks
+one transfer by default and up to four on request. See [journey behaviour and limits](../docs/journeys.md),
 including ESP32 restart connectivity and supported transfer rules.
 
 ## Countries and transport networks

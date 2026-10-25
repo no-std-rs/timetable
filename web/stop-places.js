@@ -56,35 +56,32 @@ export function distanceMetres(a,b){
   const h=Math.sin(dlat/2)**2+Math.cos(radians(a.lat))*Math.cos(radians(b.lat))*Math.sin(dlon/2)**2;
   return 6371000*2*Math.asin(Math.sqrt(Math.min(1,Math.max(0,h))));
 }
-function between(point,a,b){
-  const project=stop=>[radians(longitude(a.lon,stop.lon))*Math.cos(radians((a.lat+b.lat)/2))*6371000,radians(stop.lat-a.lat)*6371000];
-  const [x,y]=project(point),[dx,dy]=project(b),length=dx*dx+dy*dy;
-  if(length<1)return false;
-  const t=(x*dx+y*dy)/length;
-  return t>=0&&t<=1&&Math.hypot(x-t*dx,y-t*dy)<=150;
-}
-// Estimates follow a known walk to a chosen start, then a straight line at
-// 75 m/min. They are editable access walks, never inferred transfer links.
-export function walkableStops(places,origins,{mode="nearby",extraMinutes=10}={}){
+// Estimates follow a known walk to a chosen stop, then a straight line at
+// 75 m/min. They are editable access/egress walks, never inferred transfer links.
+export function walkableStops(places,anchors,{extraMinutes=10,boarding=true}={}){
   if(!Number.isFinite(extraMinutes)||extraMinutes<0||extraMinutes>60)return [];
-  const anchors=origins.slice(0,mode==="between"?2:1).map(origin=>({origin,stops:places.byId.get(origin.stop)?.stops.filter(position)??[]}));
-  if(!anchors[0]?.stops.length||mode==="between"&&(anchors.length<2||!anchors[1].stops.length))return [];
-  const chosen=new Set(origins.map(s=>places.byId.get(s.stop)));
+  const from=anchors.map(anchor=>({anchor,stops:places.byId.get(anchor.stop)?.stops.filter(position)??[]})).filter(a=>a.stops.length);
+  const chosen=new Set(anchors.map(s=>places.byId.get(s.stop)));
   const suggestions=[];
   for(const place of places.groups){
-    if(chosen.has(place)||!place.stops.some(s=>places.boarding.has(s.id)))continue;
+    if(chosen.has(place)||boarding&&!place.stops.some(s=>places.boarding.has(s.id)))continue;
     let best=null;
-    for(const stop of place.stops.filter(position)){
-      if(mode==="between"&&!anchors[0].stops.some(a=>anchors[1].stops.some(b=>between(stop,a,b))))continue;
-      for(const anchor of anchors)for(const from of anchor.stops){
-        const metres=distanceMetres(from,stop),extra=Math.ceil(metres/75),walk=anchor.origin.walk+extra;
-        if(extra>extraMinutes||walk>60)continue;
-        if(!best||walk<best.walk||walk===best.walk&&metres<best.metres)best={place,walk,extra,metres,via:anchor.origin.stop,point:stop};
-      }
+    for(const stop of place.stops.filter(position))for(const {anchor,stops}of from)for(const near of stops){
+      const metres=distanceMetres(near,stop),extra=Math.ceil(metres/75),walk=anchor.walk+extra;
+      if(extra>extraMinutes||walk>60)continue;
+      if(!best||walk<best.walk||walk===best.walk&&metres<best.metres)best={place,walk,extra,metres,via:anchor.stop,point:stop};
     }
     if(best)suggestions.push(best);
   }
   return suggestions.sort((a,b)=>a.walk-b.walk||a.metres-b.metres||a.place.name.localeCompare(b.place.name));
+}
+// The chosen endpoint with the shortest estimated walk, for adding a route stop.
+export function nearestEndpoint(places,place,endpoints){
+  let best=null;
+  for(const endpoint of endpoints)for(const a of places.byId.get(endpoint.stop)?.stops.filter(position)??[])for(const b of place.stops.filter(position)){
+    const metres=distanceMetres(a,b),walk=endpoint.walk+Math.ceil(metres/75);if(!best||walk<best.walk||walk===best.walk&&metres<best.metres)best={endpoint,metres,walk};
+  }
+  return best;
 }
 
 function idOrder(a,b){

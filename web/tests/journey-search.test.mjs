@@ -42,12 +42,15 @@ test("dwell calls spanning either window boundary remain usable",async()=>{
   assert.equal(result.paths[0].legs[0].departure,NOW+7*60);
   assert.equal(result.paths[0].arrival,NOW+359*60);
 });
-test("unsupported rules fail only for reachable transfers, and conditional boarding is explicit",async()=>{
+test("unsupported rules fail only for reachable transfers, and request stops are ordinary marked calls",async()=>{
   assert.equal((await searchJourneys(await loader("journey-conditional-through.zip"),config(),{now:NOW,maxTransfers:0})).paths[0].arrival,NOW+35*60);
   assert.equal((await searchJourneys(await loader("journey-remote-rule.zip"),config(),{now:NOW})).paths[0].arrival,NOW+30*60);
-  for(const file of["journey-inseat-rule.zip","journey-conditional.zip","journey-conditional-alight.zip"]){
-    await assert.rejects(searchJourneys(await loader(file),config(),{now:NOW}),/does not yet support/);
-  }
+  await assert.rejects(searchJourneys(await loader("journey-inseat-rule.zip"),config(),{now:NOW}),/does not yet support/);
+  // pickup/drop_off types 2 and 3 mean phoning or signalling the driver.
+  const board=(await searchJourneys(await loader("journey-conditional.zip"),config(),{now:NOW})).paths.find(p=>p.legs[0].from.id==="A");
+  assert.deepEqual([board.arrival,board.legs[0].requestBoard,board.legs[0].requestAlight],[NOW+30*60,true,false]);
+  const alight=(await searchJourneys(await loader("journey-conditional-alight.zip"),config(),{now:NOW})).paths[0];
+  assert.deepEqual([alight.arrival,alight.legs.at(-1).requestAlight,alight.legs.at(-1).requestBoard],[NOW+30*60,true,false]);
 });
 
 test("a timed-transfer guarantee does not waive the configured user margin",async()=>{
@@ -82,8 +85,10 @@ test("one named endpoint searches every platform and retains distinct routes to 
   for(const name of ["journey-places.zip","journey-places-shuffled.zip"]){
     const feed=await loader(name),c=config();c.origins.length=1;
     const result=await searchJourneys(feed,c,{now:NOW});
-    assert.equal(result.paths.length,2);
+    // The 911 transfer leaves earlier and arrives later with an extra change.
+    assert.equal(result.paths.length,1);
     assert.ok(result.paths.every(path=>["Z","Z2"].includes(path.target.id)));
+    assert.deepEqual((await searchJourneys(feed,c,{now:NOW,maxTransfers:0})).paths.map(path=>path.target.id),["Z2"]);
     assert.equal(result.paths[0].arrival,NOW+22*60);
     assert.equal(result.paths[0].legs[0].from.id,"A2");
     assert.equal(result.paths[0].legs[0].to.id,"Z2");
@@ -157,16 +162,19 @@ test("place grouping excludes stations, preserves full names and coalesces old p
   assert.deepEqual(walkableStops(terminal,[{stop:"A",walk:6}]),[],"drop-off-only stops are not suggested for boarding");
 });
 
-test("walkable suggestions include all nearby places and the corridor between chosen starts",async()=>{
-  const {walkableStops}=await import("../stop-places.js");
+test("walkable suggestions measure from every chosen stop and keep their configured walk",async()=>{
+  const {walkableStops,nearestEndpoint}=await import("../stop-places.js");
   const feed=await loader("journey-places.zip"),places=stopPlaces(feed.catalog),c=config();
-  const nearby=walkableStops(places,c.origins);
-  assert.deepEqual(nearby.map(s=>[s.place.stops[0].id,s.walk]),[["Y",11],["W",15]]);
-  const between=walkableStops(places,c.origins,{mode:"between",extraMinutes:20});
-  assert.deepEqual(between.map(s=>s.place.stops[0].id),["Y","W"]);
-  assert.ok(!between.some(s=>s.place.stops.some(p=>p.id==="X")),"off-corridor stops are excluded");
-  assert.deepEqual(walkableStops(places,c.origins.slice(0,1),{mode:"between"}),[]);
+  assert.deepEqual(walkableStops(places,c.origins).map(s=>[s.place.stops[0].id,s.walk]),[["Y",11],["W",15]]);
+  // Chosen places are never suggested; each place keeps its shortest total walk.
+  assert.deepEqual(walkableStops(places,c.origins.slice(0,1),{extraMinutes:20}).map(s=>s.place.stops[0].id),["Y","W","X","B"]);
+  assert.deepEqual(walkableStops(places,c.origins,{extraMinutes:20}).map(s=>[s.place.stops[0].id,s.walk,s.via]),[["Y",11,"A"],["W",15,"A"],["X",24,"A"]]);
+  assert.deepEqual(walkableStops(places,c.origins.slice(1),{extraMinutes:20}).map(s=>[s.place.stops[0].id,s.via]),[["W","B"],["Y","B"],["X","B"],["A","B"]]);
   assert.deepEqual(walkableStops(places,c.origins,{extraMinutes:0}),[]);
+  assert.deepEqual(walkableStops(places,c.targets,{boarding:false}).map(s=>s.place.stops[0].id),[],"no other place is near the target");
+  const near=nearestEndpoint(places,places.byId.get("Y"),c.origins);
+  assert.deepEqual([near.endpoint.stop,near.walk],["A",11]);
+  assert.equal(nearestEndpoint(places,places.byId.get("U"),c.origins),null,"missing coordinates give no estimate");
   assert.deepEqual(walkableStops(places,[{stop:"U",walk:0}]),[],"missing coordinates never become zero coordinates");
   const many=stopPlaces({stops:Array.from({length:32},(_,i)=>({id:String(i),name:String(i),lat:52.4,lon:16.9+i*.00001}))});
   assert.equal(walkableStops(many,[{stop:"0",walk:6}]).length,31,"all walkable places remain available, beyond a search's 20-result limit");
@@ -195,12 +203,16 @@ test("homonymous places stay separate by distance and declared station, with exa
     assert.equal((await searchJourneys(feed,config(),{now:NOW})).paths[0].arrival,NOW+minutes*60,name);
   }
 });
-test("dot positions preserve geographic order and remain finite for colocated stops and the dateline",async()=>{
-  const {projectDots}=await import("../stop-dot-map.js");
-  const points=[{point:{lat:52.4,lon:16.9}},{point:{lat:52.4,lon:16.92}},{point:{lat:52.4,lon:16.91}}];
-  const dots=projectDots(points);assert.ok(dots[0].x<dots[2].x&&dots[2].x<dots[1].x);
-  for(const p of projectDots([points[0],points[0]]))assert.ok(Number.isFinite(p.x)&&Number.isFinite(p.y));
-  for(const p of projectDots([{point:{lat:0,lon:179.999}},{point:{lat:0,lon:-179.999}}]))assert.ok(p.x>=28&&p.x<=452&&p.y>=28&&p.y<=172);
+test("route diagrams show walks, every ride stop and changes in order, wrapped to the card width",async()=>{
+  const {diagramTokens,layoutTokens}=await import("../route-diagram.js");
+  const path=(await searchJourneys(await loader("journey-walkable.zip"),{origins:[{stop:"A",walk:6}],targets:[{stop:"S",walk:0}],transfer_minutes:3,max_transfers:1},{now:NOW})).paths[0];
+  const tokens=diagramTokens(path);
+  assert.deepEqual(tokens.map(t=>t.kind==="stop"?t.call.stop.id:t.kind==="line"?t.line:`${t.kind}:${t.minutes}`),["walk:6","911","A2","K","P","change:6","397","P","S"]);
+  assert.deepEqual(tokens.filter(t=>t.kind==="stop").map(t=>[t.board,t.alight,t.request]),[[true,false,true],[false,false,true],[false,true,false],[true,false,false],[false,true,true]]);
+  const wide=layoutTokens(tokens,700),narrow=layoutTokens(tokens,200);
+  assert.ok(wide.tokens.every(t=>t.row===0));
+  assert.ok(narrow.tokens.at(-1).row>0&&narrow.tokens.every(t=>t.x>=14&&t.x+t.w<=200-14||t.x===14));
+  assert.ok(narrow.height>wide.height);
 });
 
 test("overlapping halos keep one global partition for selected peers and intermediate changes",async()=>{
@@ -252,4 +264,33 @@ test("glyph inputs match native bounded labels without hidden suffixes",async()=
   for(const c of ["·","番","二","三","四","五","界"])assert.ok(text.includes(c),c);
   for(const c of ["一","耀","語","六"])assert.ok(!text.includes(c),c);
   assert.ok(new Set(feed.catalog.stops.flatMap(s=>[...(s.place_name+s.platform_code)])).size>4096);
+});
+
+const walkable=()=>({origins:[{stop:"A",walk:6}],targets:[{stop:"S",walk:0}],transfer_minutes:3,max_transfers:1});
+const summary=path=>[path.start.name,path.start.walk,path.start.configured,path.legs.map(leg=>leg.line).join("+"),path.end.name,path.egress,path.end.configured,path.arrival-NOW];
+test("nearby walkable stops reveal a direct bus that beats the nearer request stop with a transfer",async()=>{
+  const feed=await loader("journey-walkable.zip");
+  const own=await searchJourneys(feed,walkable(),{now:NOW});
+  assert.deepEqual(own.paths.map(summary),[["Maków Polnych",6,true,"911+397","Bolechowo-Os./Szkoła",0,true,50*60]]);
+  const legs=own.paths[0].legs;
+  assert.deepEqual([legs[0].from.id,legs[0].requestBoard,legs[0].requestAlight,legs[1].requestBoard,legs[1].requestAlight],["A2",true,false,false,true]);
+  assert.deepEqual(legs[0].stops.map(call=>[call.stop.id,call.pickup,call.dropoff]),[["A2",3,3],["K",3,3],["P",1,0]]);
+  // n0 reaches the change first, but n1 still connects and leaves home later.
+  assert.deepEqual([legs[0].trip,legs[0].departure-6*60-NOW],[JSON.stringify(["n1",1]),2*60]);
+  const result=await searchJourneys(feed,walkable(),{now:NOW,extraWalk:10});
+  assert.equal(result.extraWalk,10);
+  assert.deepEqual(result.paths.map(summary),[
+    ["UAM Wydział Geografii",13,false,"348","Bolechowo-Os./Wojska Polskiego",2,false,37*60],
+    ["Maków Polnych",6,true,"911+397","Bolechowo-Os./Szkoła",0,true,50*60],
+  ],"boarding the same 911 at Kresowa only adds walking; the 348 ride on to the school is a worse copy");
+  assert.equal(result.paths[0].legs[0].departure-result.paths[0].walk*60,NOW);
+});
+test("any target counts as arrival, so rides and changes past an earlier target are not alternatives",async()=>{
+  const feed=await loader("journey-walkable.zip"),c=walkable(),lines=result=>result.paths.map(path=>[path.legs.map(leg=>leg.line).join("+"),path.target.id,path.arrival-NOW]);
+  c.targets.push({stop:"W",walk:2});
+  assert.deepEqual(lines(await searchJourneys(feed,c,{now:NOW,maxTransfers:2})),[["911+397","S",50*60]],"without the nearby start the 348 is out of reach");
+  c.origins.push({stop:"G",walk:13});
+  const both=await searchJourneys(feed,c,{now:NOW,maxTransfers:2});
+  assert.deepEqual(lines(both),[["348","W",37*60],["911+397","S",50*60]]);
+  assert.ok(both.paths.every(path=>path.start.configured&&path.end.configured));
 });

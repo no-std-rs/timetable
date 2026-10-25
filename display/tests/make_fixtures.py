@@ -321,3 +321,24 @@ def city_fixture():
         'stop_times.txt': '\n'.join(calls) + '\n',
     }
 write_archive('journey-city.zip', city_fixture())
+
+# The requested Maków Polnych case with request stops (types 2/3): a nearer stop
+# needs a transfer, a further walkable stop has a direct bus to a stop beside
+# the school. The direct ride also passes that stop before reaching the school.
+walkable = {**journey,
+    'routes.txt': 'route_id,route_short_name,route_type\nN,911,3\nL,348,3\nB,397,3\nX,312,3\n',
+    'stops.txt': 'stop_id,stop_name,stop_code,stop_lat,stop_lon\n'
+        'A,Maków Polnych,A01,52.4635751,16.9479684\nA2,Maków Polnych,A02,52.4636006,16.9477802\n'
+        'G,UAM Wydział Geografii,G01,52.4636,16.9548\nK,Kresowa,K01,52.4677,16.9479684\n'
+        'P,Biedrusko/Park,P01,52.53,16.95\nS,Bolechowo-Os./Szkoła,S01,52.5409309,16.9732407\n'
+        'W,Bolechowo-Os./Wojska Polskiego,W01,52.5417104,16.9724616\n',
+    'trips.txt': 'route_id,service_id,trip_id\nN,ALL,n0\nN,ALL,n1\nB,ALL,b1\nL,ALL,l1\nX,ALL,x1\n',
+    # n0 reaches the change first; n1 still connects and leaves home later.
+    'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\n'
+        'n0,08:06:00,08:06:00,A2,1,3,3\nn0,08:07:00,08:07:00,K,2,3,3\nn0,08:27:00,08:27:00,P,3,1,0\n'
+        'n1,08:08:00,08:08:00,A2,1,3,3\nn1,08:09:00,08:09:00,K,2,3,3\nn1,08:30:00,08:30:00,P,3,1,0\n'
+        'b1,08:36:00,08:36:00,P,1,0,1\nb1,08:50:00,08:50:00,S,2,3,3\n'
+        'l1,08:13:00,08:13:00,G,1,0,0\nl1,08:35:00,08:35:00,W,2,0,0\nl1,08:52:00,08:52:00,S,3,0,0\n'
+        'x1,09:10:00,09:10:00,W,1,0,0\nx1,09:11:00,09:11:00,S,2,0,0\n',
+}
+write_archive('journey-walkable.zip', walkable)

@@ -59,7 +59,7 @@ export class FeedClient {
     this.worker.onerror=()=>this.close(new Error("The timetable worker stopped. Retry the selected network."));
   }
   request(kind,values,update){const request=++this.id;return new Promise((resolve,reject)=>{this.jobs.set(request,{resolve,reject,update});this.worker.postMessage({request,kind,...values});});}
-  journey(journey,depth,now,update){return this.request("journey",{journey,depth,now},update).then(data=>data.result);}
+  journey(journey,depth,now,update,extraWalk=0){return this.request("journey",{journey,depth,now,extraWalk},update).then(data=>data.result);}
   load(feed){return this.request("load",{feed}).then(result=>{this.feedId=feed.id;return result;});}
   paths(route){
     if(!this.routeJobs.has(route))this.routeJobs.set(route,this.request("paths",{route}).finally(()=>this.routeJobs.delete(route)));

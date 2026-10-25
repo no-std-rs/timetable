@@ -19,16 +19,23 @@ The display recommends the catchable connection with the earliest arrival,
 including access walking, waiting, all bus/train legs and destination walking.
 It can therefore prefer a 12-minute walk to a direct bus over a nearer stop.
 
-After selecting two starting places, **Stops between your starting stops**
-shows their positions and intermediate stops as a local dot diagram, with matching
-quick-add buttons below. Tap or keyboard-activate an intermediate dot to add or
-remove that starting place. The diagram uses feed coordinates without map tiles
-or location services. Places within a 150-metre corridor between the first two
-starts are shown, including selected intermediate starts. The extra-walk limit
-defaults to ten minutes. Editable estimates add straight-line walking at 75
-metres/minute to a chosen start's configured walk. Adjust for real streets and
-crossings. Missing feed coordinates leave manual stop search available. This
-installer helper supplies access walks, never new transfer links.
+With at least one starting place and one target, **Routes between your stops**
+lists every route the timetable offers in the next six hours, including routes
+that need a transfer. Each alternative is a dot diagram of every stop on every
+ride, with walks, line labels, change minutes and request stops (a dashed ring:
+signal the driver). The first search downloads the network once in the browser;
+later edits refresh the routes automatically. The search also starts from
+places within the extra-walk limit (default ten minutes) of a chosen start and
+ends at places within that limit of a chosen target. This finds a further stop
+with a direct bus, such as walking about 13 minutes to Kresowa for the 348
+instead of taking the 911 from Maków Polnych and changing. Alternatives that use
+such an estimated place say so and offer **Add these stops**. Tap or
+keyboard-activate any stop dot to add it: it joins the starting stops when it is
+nearer a chosen start, otherwise the targets. Tap one of your stops to remove it.
+Editable estimates add straight-line walking at 75 metres/minute to the nearest
+chosen stop's walk; adjust them for real streets and crossings. Without feed
+coordinates, nearby places are not suggested and manual stop search remains.
+This helper supplies access and egress walks, never new transfer links.
 
 The normal setting allows **one transfer**. The minimum change defaults to
 **three minutes**: exactly three is allowed; less is rejected. The GTFS minimum
@@ -41,15 +48,23 @@ scheduled ETAs; live delays and the likelihood of catching a vehicle are not
 estimated.
 
 Both Android and ESP32 calculate independently from downloaded static GTFS.
-The installer supplies settings, never precomputed routes. The optional website
-explorer runs locally in a worker and reports completed depths progressively,
-up to four transfers. Its depth does not change the installed device setting.
-It lists every distinct route within the six-hour window and selected transfer
-limit, ordered by arrival time. Each route shows its earliest feasible journey,
-each transfer's platform and waiting time, and every ordered stop along each
-ride, including calls that do not allow boarding or alighting. Different lines,
-interchange choices, and intermediate stop patterns remain separate alternatives;
-repeated services of an identical route share one result.
+The installer supplies settings, never precomputed routes. The website route
+search runs locally in a worker and reports completed depths progressively. It
+checks one transfer by default and up to four on request. Its depth does not
+change the installed device setting. It lists distinct routes within the
+six-hour window and selected transfer limit, ordered by arrival including the
+final walk. Each route shows its earliest arrival with the latest departure that
+still achieves it, each transfer's platform and waiting time, and every ordered
+stop along each ride, including calls that do not allow boarding or alighting.
+Different lines, interchange choices, and intermediate stop patterns remain
+separate alternatives; repeated services of an identical route share one result.
+Any target counts as arrival, so a ride or change continuing past an earlier
+target is not listed. Boarding the same vehicles at another nearby place, riding
+away and back, and routes with an extra change but no earlier arrival or later
+departure are left out. Pickup/drop-off types 2 and 3 are request stops: they
+are used and marked, not rejected. Dense networks keep the earliest few prefixes
+of the earliest line sequences at each stop, so very slow alternatives can be
+omitted. The first eight alternatives are shown, with the rest on request.
 Intermediate calls with missing times remain in the stop list and distinguish
 route alternatives; missing times are labelled rather than interpolated.
 The website explorer can also apply route/trip-scoped stop-transfer rules and
