@@ -62,6 +62,18 @@ class CatalogPaths(unittest.TestCase):
         self.assertNotIn('lat', extended['via_stops'][0])
         self.assertNotIn('lat', plain['stops'][0])
 
+    def test_browser_catalogue_retains_uncalled_parent_station_without_changing_flash(self):
+        times = 'T1,1,A,0,\nT1,2,B,0,\n'
+        platform_rows = 'stop_id,stop_name,stop_code,parent_station,location_type\nA,Platform 1,C01,P,0\nB,Platform 2,C02,P,0\n'
+        catalogue, binary = self.generate(times, {'stops.txt': platform_rows + 'P,Central station,,,1\n'})
+        plain, same_binary = self.generate(times, {'stops.txt': platform_rows.replace(',P,0', ',,0')})
+        self.assertEqual(binary, same_binary)
+        self.assertEqual([s['id'] for s in catalogue['stops']], ['A', 'B'])
+        self.assertEqual([(s['id'], s['name'], s['location_type']) for s in catalogue['via_stops']],
+                         [('P', 'Central station', 1)])
+        self.assertEqual(plain['via_stops'], [])
+        self.assertEqual([c[0] for c in catalogue['patterns'][0]['calls']], [0, 1])
+
     def test_duplicate_stop_sequence_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'duplicate trip stop_sequence'):
             self.generate('T1,1,A,0,\nT1,1,B,0,\n')

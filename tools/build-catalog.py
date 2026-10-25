@@ -110,7 +110,9 @@ def build(source, destination, date):
         browser_stops.append(browser_stop(s, key, name, code))
     # Browser-only route geometry: keep the flash catalogue byte-for-byte stable.
     # Non-boarding terminals still belong in a path, but never become choices.
-    via_ids = sorted({call[1] for calls in trip_calls.values() for call in calls} - si.keys())
+    called_ids = {call[1] for calls in trip_calls.values() for call in calls}
+    parents = {stops[key].get('parent_station') for key in called_ids}
+    via_ids = sorted((called_ids | (parents - {None, ''})) - si.keys())
     via_stops = [browser_stop(stops[key], key, label(stops[key].get('stop_name', ''), 64), stops[key].get('stop_code', '')) for key in via_ids]
     graph_indices = {**si, **{key: len(si) + i for i, key in enumerate(via_ids)}}
     patterns = Counter()
