@@ -1,13 +1,18 @@
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { template } from "./world-fixtures.mjs";
 import { FeedLoader } from "../feed-loader.js";
 const zip=await readFile(new URL("../../display/tests/fixtures/journey.zip",import.meta.url));
 const catalog=await new FeedLoader().load(new Uint8Array(zip),{id:"mdb-982",provider:"Synthetic transit"});
-async function prepare(page){
+async function prepare(page,fixtureZip=zip,fixtureCatalog=catalog,installable=false){
   await page.clock.setFixedTime(new Date(1792216800000));
-  await page.route("**/catalog.json",r=>r.fulfill({json:catalog}));
-  await page.route("**/latest.json",r=>r.fulfill({status:404}));
-  await page.route("https://files.mobilitydatabase.org/mdb-982/latest.zip",r=>r.fulfill({body:zip,contentType:"application/zip"}));
+  await page.route("**/catalog.json",r=>r.fulfill({json:fixtureCatalog}));
+  await page.route("**/latest.json",r=>r.fulfill(installable?{json:template.release}:{status:404}));
+  if(installable){
+    await page.addInitScript(()=>Object.defineProperty(navigator,"serial",{value:{getPorts:async()=>[]},configurable:true}));
+    await page.route("**/timetable-display.bin",r=>r.fulfill({body:Buffer.from(template.bytes),contentType:"application/octet-stream"}));
+  }
+  await page.route("https://files.mobilitydatabase.org/mdb-982/latest.zip",r=>r.fulfill({body:fixtureZip,contentType:"application/zip"}));
   await page.goto("/");await expect(page.locator("#add-pick")).toBeEnabled();
   await page.locator("#group-mode").selectOption("journey");
   await expect(page.locator("#journey-depth")).toHaveValue("1");
@@ -50,4 +55,77 @@ test("changing journey settings invalidates a browser result and Polish controls
   await expect(page.locator("#group-mode option:checked")).toHaveText("Planowanie podróży (zaawansowane)");
   await expect(page.locator("#journey-slack")).toHaveValue("4");
   await expect(page.locator("#journey-targets")).toContainText("Bolechowo-Os./Szkoła");
+});
+
+const groupedZip=await readFile(new URL("../../display/tests/fixtures/journey-places.zip",import.meta.url));
+const groupedCatalog=await new FeedLoader().load(new Uint8Array(groupedZip),{id:"mdb-982",provider:"Synthetic transit"});
+test("same-name platforms are one endpoint and quick-add shows every walkable stop between starts",async({page})=>{
+  await prepare(page,groupedZip,groupedCatalog);
+  await page.locator("#journey-origin-search").fill("A02");
+  await expect(page.locator("#journey-origin-matches button")).toHaveCount(1);
+  await page.locator("#journey-origin-matches button").click();
+  await expect(page.locator("#journey-origins .journey-stop")).toHaveCount(1);
+  await expect(page.locator("#journey-origins small")).toHaveText("2 platforms");
+  await page.locator("#journey-origin-search").fill("A02");
+  await expect(page.locator("#journey-origin-matches button")).toHaveCount(0);
+  await add(page,"origin","further","Further stop · B01");
+  await page.locator("#journey-origins input").nth(1).fill("12");
+  await expect(page.locator("#journey-quick-map [role=button]")).toHaveCount(2);
+  await expect(page.locator("#journey-quick-matches button")).toHaveCount(2);
+  await expect(page.locator("#journey-quick-matches")).not.toContainText("Interchange ·");
+  const dot=page.locator("#journey-quick-map").getByRole("button",{name:"Add Second interchange · about 11 min walk",exact:true});
+  await dot.focus();await page.keyboard.press("Enter");
+  await expect(page.locator("#journey-quick-map").getByRole("button",{name:"Remove Second interchange",exact:true})).toHaveAttribute("aria-pressed","true");
+  await expect(page.locator("#journey-origins .journey-stop")).toHaveCount(3);
+  await expect(page.locator("#journey-origins input").nth(2)).toHaveValue("11");
+  await add(page,"target","Z02","Bolechowo-Os./Szkoła · 2 platforms");
+  await page.locator("#journey-editor details > summary").click();await page.locator("#journey-preview").click();
+  await expect(page.locator("#journey-preview-result")).toContainText("08:22");
+  await expect(page.locator("#journey-preview-result")).toContainText("A02");
+  await expect(page.locator("#journey-preview-result")).toContainText("Z02");
+  const draft=await page.evaluate(()=>JSON.parse(localStorage.getItem("timetable.settings.v1")));
+  expect(draft.config.groups[0].journey.origins.map(s=>s.walk)).toEqual([6,12,11]);
+  await page.reload();
+  await expect(page.locator("#group-mode")).toHaveValue("journey");
+  await expect(page.locator("#journey-origins .journey-stop")).toHaveCount(3);
+  await page.locator(".masthead [data-language=pl]").click();
+  await expect(page.locator("#journey-quick-add h3")).toHaveText("Przystanki między wybranymi początkami podróży");
+  await page.screenshot({path:`/tmp/timetable-stop-dots-${page.viewportSize().width}.png`,fullPage:true});
+  await page.locator("#journey-quick-add").screenshot({path:`/tmp/timetable-stop-dot-map-${page.viewportSize().width}.png`});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+const glyphZip=await readFile(new URL("../../display/tests/fixtures/journey-places-glyphs.zip",import.meta.url));
+const glyphCatalog=await new FeedLoader().load(new Uint8Array(glyphZip),{id:"mdb-982",provider:"Synthetic transit"});
+test("station-name search selects child platforms and installed profiles cover generated labels and unselected peer codes",async({page})=>{
+  await prepare(page,glyphZip,glyphCatalog,true);
+  await page.locator("#journey-origin-search").fill("番二三四五六七八九十");
+  await expect(page.locator("#journey-origin-matches").getByRole("button",{name:"Central station · 2 platforms",exact:true})).toHaveCount(1);
+  await add(page,"origin","central station","Central station · 2 platforms");
+  await expect(page.locator("#journey-origins strong")).toHaveText("Central station");
+  await add(page,"target","Z01","Bolechowo-Os./Szkoła · 2 platforms");
+  await expect(page.locator("#release-state")).toHaveText("Firmware verified");
+  await page.locator("#wifi-ssid").fill("journey-local");await page.locator("#prepare").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+  await expect(page.locator("#network-scope")).toContainText("selected lines");
+  const glyphs=await page.locator("#installer").evaluate(async installer=>{
+    const manifest=await(await fetch(installer.manifest)).json(),bytes=new Uint8Array(await(await fetch(manifest.builds[0].parts[0].path)).arrayBuffer());
+    const signature=new TextEncoder().encode("TTGLY001"),offset=bytes.findIndex((_,i)=>signature.every((b,j)=>bytes[i+j]===b)),view=new DataView(bytes.buffer);
+    return offset<0?[]:Array.from({length:view.getUint16(offset+8,true)},(_,i)=>String.fromCodePoint(view.getUint32(offset+10+24*i,true)));
+  });
+  expect(glyphs).toEqual(expect.arrayContaining(["·","番","二","三","四","五","界"]));
+  for(const hidden of ["一","耀"])expect(glyphs).not.toContain(hidden);
+});
+
+
+test("a short selectable anchor cannot hide an unsupported platform peer",async({page})=>{
+  const incompatible=structuredClone(groupedCatalog);
+  incompatible.stops.find(s=>s.id==="A2").id="x".repeat(33);
+  await prepare(page,groupedZip,incompatible);
+  await page.locator("#journey-origin-search").fill("maków");
+  const choice=page.locator("#journey-origin-matches").getByRole("button",{name:"Maków Polnych · 2 platforms",exact:true});
+  await expect(choice).toBeDisabled();
+  await expect(choice).toHaveAttribute("title",/32-byte/);
+  await page.locator("#journey-target-search").fill("maków");
+  await expect(page.locator("#journey-target-matches").getByRole("button",{name:"Maków Polnych · 2 platforms",exact:true})).toBeDisabled();
 });

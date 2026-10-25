@@ -1,3 +1,5 @@
+import { journeyGlyphText } from "./journey-labels.js";
+import { stopPlaces, coalesceJourneyStops, validateJourneyPlaces } from "./stop-places.js";
 import { JourneyEditor } from "./journey-editor.js";
 import { AndroidInstaller } from "./android-installer.js";
 import { device, DEFAULT_DEVICE } from "./devices.js";
@@ -147,6 +149,7 @@ devicePreview.load();
 
 function renderTabs() {
   const tabs = $("group-tabs");
+  const focused = tabs.contains(document.activeElement) ? document.activeElement.id : null;
   tabs.replaceChildren();
   state.groups.forEach((g, i) => {
     const b = element("button", g.name || t("Your group"), "group-tab");
@@ -172,6 +175,7 @@ function renderTabs() {
     });
     tabs.append(b);
   });
+  if (focused) $(focused)?.focus();
   $("add-group").hidden = state.groups.length >= 4;
   $("group-panel").setAttribute("aria-labelledby", `group-tab-${state.active}`);
 }
@@ -193,6 +197,10 @@ function validateGroupName() {
   name.setCustomValidity(groupNameError(name.value));
 }
 function renderGroup(preserveInputs = false) {
+  const places=stopPlaces(state.catalog);
+  let merged=false;
+  for(const g of state.groups)if(g.journey)merged=coalesceJourneyStops(g.journey,places)||merged;
+  if(merged)persistSettings();
   renderTabs();
   $("automatic").checked = state.automatic;
   $("automatic-hint").textContent = state.automatic ? t("Switch by time of day. Turn off to choose groups by touch.") : t("Schedules are paused. Choose groups by touch; saved time windows stay here.");
@@ -683,6 +691,7 @@ function currentBundle() {
   if (!state.catalog) throw new Error("Load a transport network first.");
   const picks=state.groups.flatMap(g=>g.picks);
   const journeys=state.groups.flatMap(g=>g.journey?[g.journey]:[]);
+  for(const journey of journeys)validateJourneyPlaces(journey,stopPlaces(state.catalog));
   const routes=new Set(picks.map(p=>state.catalog.routes.findIndex(r=>r.id===p.route)));
   if(journeys.length){
     const endpoints=new Set(journeys.flatMap(j=>[...j.origins,...j.targets].map(s=>s.stop)));
@@ -690,7 +699,7 @@ function currentBundle() {
   }
   const routeKey=[...routes].sort((a,b)=>a-b).join(",");
   const characters=texts=>[...new Set(texts.flatMap(text=>[...String(text||"")]).filter(needsGlyph))].sort((a,b)=>a.codePointAt(0)-b.codePointAt(0)).join("");
-  if(journeys.length && state.journeyGlyphs===undefined)state.journeyGlyphs=characters([...state.catalog.stops.map(s=>s.name),...state.catalog.routes.map(r=>r.line)]);
+  if(journeys.length && state.journeyGlyphs===undefined)state.journeyGlyphs=characters(journeyGlyphText(state.catalog));
   const userChars=characters([...state.groups.map(g=>g.name),...picks.flatMap(p=>[p.line,p.stop_name,p.headsign]),...journeys.flatMap(j=>[...j.origins,...j.targets].map(s=>s.stop_name)),journeys.length?state.journeyGlyphs:""]);
   if(state.bundle && state.bundleUserChars===userChars && (state.bundleFull || state.bundleKey===routeKey))return state.bundle;
   if(state.fullBytes===undefined){try{state.fullBytes=catalogBytes(state.catalog);}catch{state.fullBytes=null;}}
@@ -1020,4 +1029,7 @@ networkPicker.load(false,state.feed.id).then(()=>{
 });
 loadRelease();
 
-new AndroidInstaller($("android-panel"), () => ({ feed_id: state.feed.id, timezone: state.catalog?.timezone, groups: state.groups, automatic: state.automatic, wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value }));
+new AndroidInstaller($("android-panel"), () => {
+  for(const group of state.groups)if(group.journey)validateJourneyPlaces(group.journey,stopPlaces(state.catalog));
+  return { feed_id: state.feed.id, timezone: state.catalog?.timezone, groups: state.groups, automatic: state.automatic, wifi_ssid: $("wifi-ssid").value, wifi_password: $("wifi-password").value };
+});

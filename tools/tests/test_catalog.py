@@ -51,6 +51,38 @@ class CatalogPaths(unittest.TestCase):
         west = next(p for p in catalog['patterns'] if p['direction'] == 1)
         self.assertEqual(ids[west['calls'][0][0]], 'B')
 
+    def test_browser_coordinates_and_full_place_names_preserve_flash_catalogue(self):
+        times = 'T1,1,A,0,\nT1,2,Z,1,\n'
+        plain, binary = self.generate(times)
+        extended, same_binary = self.generate(times, {
+            'stops.txt': 'stop_id,stop_name,stop_code,stop_lat,stop_lon\nA,Central,C01,52.4,16.9\nZ,Terminal,Z01,nan,16.9\n'})
+        self.assertEqual(binary, same_binary)
+        self.assertEqual(extended['stops'][0]['place_name'], 'Central')
+        self.assertEqual(extended['stops'][0]['platform_code'], 'C01')
+        self.assertEqual((extended['stops'][0]['lat'], extended['stops'][0]['lon']), (52.4, 16.9))
+        self.assertNotIn('lat', extended['via_stops'][0])
+        self.assertNotIn('lat', plain['stops'][0])
+
+    def test_browser_catalogue_retains_uncalled_parent_station_without_changing_flash(self):
+        times = 'T1,1,A,0,\nT1,2,B,0,\n'
+        platform_rows = 'stop_id,stop_name,stop_code,parent_station,location_type\nA,Platform 1,C01,P,0\nB,Platform 2,C02,P,0\n'
+        catalogue, binary = self.generate(times, {'stops.txt': platform_rows + 'P,Central station,,,1\n'})
+        plain, same_binary = self.generate(times, {'stops.txt': platform_rows.replace(',P,0', ',,0')})
+        self.assertEqual(binary, same_binary)
+        self.assertEqual([s['id'] for s in catalogue['stops']], ['A', 'B'])
+        self.assertEqual([(s['id'], s['name'], s['location_type']) for s in catalogue['via_stops']],
+                         [('P', 'Central station', 1)])
+        self.assertEqual(plain['via_stops'], [])
+        self.assertEqual([c[0] for c in catalogue['patterns'][0]['calls']], [0, 1])
+
+    def test_uncalled_platform_code_glyph_source_survives_device_field_limit(self):
+        code = '番二三四五六七八九十'
+        catalogue, binary = self.generate('T1,1,A,0,\nT1,2,Z,1,\n', {
+            'stops.txt': f'stop_id,stop_name,stop_code\nA,Start,A01\nZ,Terminal,{code}\n'})
+        self.assertEqual(catalogue['via_stops'][0]['code'], '')
+        self.assertEqual(catalogue['via_stops'][0]['platform_code'], code)
+        self.assertTrue(binary.startswith(b'TTCAT001'))
+
     def test_duplicate_stop_sequence_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'duplicate trip stop_sequence'):
             self.generate('T1,1,A,0,\nT1,1,B,0,\n')

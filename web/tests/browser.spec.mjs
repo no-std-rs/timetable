@@ -247,8 +247,16 @@ test("one named stop chooses either platform by destination and keeps route prev
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
 });
 test("keyboard groups and undo retain selections without overwriting later edits", async ({ page }) => {
+  // Catalogue arrival refreshes the tabs while a keyboard user may already
+  // have focused one. Release that response only after focus is established.
+  let releaseCatalog;
+  const catalogReady = new Promise(resolve => { releaseCatalog = resolve; });
+  await page.route("**/catalog.json", async route => { await catalogReady; await route.fulfill({ json: catalog }); });
   await prepare(page);
   await page.getByRole("tab", { name: "Morning", exact: true }).focus();
+  releaseCatalog();
+  await expect(page.locator("#add-pick")).toBeEnabled();
+  await expect(page.getByRole("tab", { name: "Morning", exact: true })).toBeFocused();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("tab", { name: "Evening", exact: true })).toBeFocused();
   await expect(page.locator("#group-name")).toHaveValue("Evening");

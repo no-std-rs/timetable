@@ -10,6 +10,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 from pathlib import Path
 import re
 import struct
@@ -83,6 +84,19 @@ def build(source, destination, date):
         return data.ljust(size, b'\0')
     def label(value, size):
         return field(value, size, True).rstrip(b'\0').decode('utf-8')
+    def browser_stop(s, key, name, code):
+        browser_stop = {'id': key, 'name': name,
+                        'code': code if len(code.encode('utf-8')) <= 16 else '',
+                        'place_name': s.get('stop_name') or key, 'platform_code': s.get('stop_code') or '',
+                        'parent': s.get('parent_station') or '',
+                        'location_type': int(s.get('location_type') or '0')}
+        try:
+            lat, lon = float(s.get('stop_lat', '')), float(s.get('stop_lon', ''))
+            if math.isfinite(lat) and math.isfinite(lon) and abs(lat) <= 90 and abs(lon) <= 180:
+                browser_stop.update(lat=lat, lon=lon)
+        except ValueError:
+            pass
+        return browser_stop
     browser_routes, browser_stops = [], []
     payload = bytearray()
     for key in route_ids:
@@ -90,16 +104,18 @@ def build(source, destination, date):
         directions = [label(heads[(key, d)].most_common(1)[0][0], 64) if heads[(key, d)] else '' for d in [0, 1]]
         line = r.get('route_short_name') or key
         payload += field(key, 32) + field(line, 8) + b''.join(field(h, 64, True) for h in directions)
-        browser_routes.append({'id': key, 'line': line, 'headsigns': directions})
+        browser_routes.append({'id': key, 'line': line, 'route_name': line, 'headsigns': directions})
     for key in stop_ids:
         s = stops[key]
         name, code = label(s.get('stop_name', ''), 64), s.get('stop_code', '')
         payload += field(key, 32) + field(name, 64) + field(code, 16)
-        browser_stops.append({'id': key, 'name': name, 'code': code})
+        browser_stops.append(browser_stop(s, key, name, code))
     # Browser-only route geometry: keep the flash catalogue byte-for-byte stable.
     # Non-boarding terminals still belong in a path, but never become choices.
-    via_ids = sorted({call[1] for calls in trip_calls.values() for call in calls} - si.keys())
-    via_stops = [{'id': key, 'name': label(stops[key].get('stop_name', ''), 64), 'code': stops[key].get('stop_code', '')} for key in via_ids]
+    called_ids = {call[1] for calls in trip_calls.values() for call in calls}
+    parents = {stops[key].get('parent_station') for key in called_ids}
+    via_ids = sorted((called_ids | (parents - {None, ''})) - si.keys())
+    via_stops = [browser_stop(stops[key], key, label(stops[key].get('stop_name', ''), 64), stops[key].get('stop_code', '')) for key in via_ids]
     graph_indices = {**si, **{key: len(si) + i for i, key in enumerate(via_ids)}}
     patterns = Counter()
     for trip, calls in trip_calls.items():

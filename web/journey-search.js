@@ -1,5 +1,6 @@
 // Optional exploration on the user's computer. Device routing is independent:
 // both firmware and Android run the bounded Rust planner on their own GTFS data.
+import { stopPlaces } from "./stop-places.js";
 import { validateJourney } from "./config.js";
 const HORIZON=6*3600;
 const fail=()=>{throw new Error("The timetable contains unsupported journey data.");};
@@ -45,7 +46,8 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
     days.forEach((day,i)=>{if(day.date===row.date){const s=service(row.service_id);if(type===1)s.active|=1<<i;else{s.active&=~(1<<i);s.removed|=1<<i;}}});
   }
   const stops=new Map(loader.catalog.stops.map(s=>[s.id,s]));
-  for(const stop of[...settings.origins,...settings.targets])if(!stops.has(stop.stop))throw new Error("A journey stop changed. Reload the network and select it again.");
+  const places=stopPlaces(loader.catalog);
+  for(const stop of[...settings.origins,...settings.targets])if(!places.byId.has(stop.stop))throw new Error("A journey stop changed. Reload the network and select it again.");
   const calls=new Map(),identities=new Map();let count=0;
   for await(const row of loader.rows("stop_times.txt")){
     const trip=loader.trips.get(row.trip_id);if(!trip)fail();
@@ -109,6 +111,7 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
     let incoming=links.get(to);if(!incoming){incoming=new Set();links.set(to,incoming);}
     incoming.add(from);
   };
+  for(const place of places.groups)for(const from of place.stops)for(const to of place.stops)if(from!==to)connect(from.id,to.id);
   for(const siblings of children.values())for(const from of siblings)for(const to of siblings)if(from!==to)connect(from,to);
   for(const rule of allRules){
     const from=children.get(rule.from)??[rule.from],to=children.get(rule.to)??[rule.to];
@@ -125,7 +128,7 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   };
   const budget=()=>{throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");};
   let previous=new Map();
-  for(const origin of settings.origins)offer(previous,origin.stop,{arrival:now+origin.walk*60,walk:origin.walk,origin:stops.get(origin.stop),legs:[]});
+  for(const origin of settings.origins)for(const stop of places.byId.get(origin.stop).stops)offer(previous,stop.id,{arrival:now+origin.walk*60,walk:origin.walk,origin:stop,legs:[]});
   const best=new Map();
   const publish=(depth,complete)=>({depth,complete,now,timezone:loader.timezone,paths:[...best.values()].sort(compare)});
   for(let depth=0;depth<=maxTransfers;depth++){
@@ -144,7 +147,8 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
           if(label.legs.at(-1)?.trip===call.trip)continue;
           const rule=depth?applicable(from,call.stop.id,label.legs.at(-1)?.trip,call.trip):null;
           if(rule?.forbidden)continue;
-          const samePlace=from===call.stop.id||stops.get(from)?.parent&&stops.get(from).parent===call.stop.parent;
+          const place=places.byId.get(from);
+          const samePlace=from===call.stop.id||place&&place===places.byId.get(call.stop.id)||stops.get(from)?.parent&&stops.get(from).parent===call.stop.parent;
           if(depth&&!rule&&!samePlace)continue;
           // Timed guarantees do not waive the user's chosen minimum margin.
           const seconds=depth?Math.max(settings.transfer_minutes*60,rule?.seconds??0):0;
@@ -154,11 +158,12 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
         }
       }
     }
-    for(const target of settings.targets)for(const label of next.get(target.stop)?.values()??[]){
-      const candidate={...label,arrival:label.arrival+target.walk*60,target:stops.get(target.stop),egress:target.walk};
+    for(const target of settings.targets)for(const stop of places.byId.get(target.stop).stops)for(const label of next.get(stop.id)?.values()??[]){
+      const candidate={...label,arrival:label.arrival+target.walk*60,target:stop,egress:target.walk};
       if(candidate.arrival<=now+HORIZON&&candidate.error)throw new Error(candidate.error);
       if(candidate.arrival<=now+HORIZON&&candidate.conditional)throw new Error("Journey routing does not yet support conditional boarding or alighting.");
-      if(candidate.arrival<=now+HORIZON&&(!best.has(target.stop)||compare(candidate,best.get(target.stop))<0))best.set(target.stop,candidate);
+      const key=places.byId.get(target.stop).key;
+      if(candidate.arrival<=now+HORIZON&&(!best.has(key)||compare(candidate,best.get(key))<0))best.set(key,candidate);
     }
     previous=next;onProgress(publish(depth,depth===maxTransfers));
     await new Promise(resolve=>setTimeout(resolve,0));

@@ -42,6 +42,7 @@ pub struct Group {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct JourneyStop {
+    /// One platform ID anchors a named place; journey search includes its peers.
     pub stop: String<32>,
     pub walk: u8,
 }

@@ -18,7 +18,7 @@ export class FeedLoader {
     const routes=[];progress("Reading lines…");
     for await(const r of this.rows("routes.txt")){
       if(!validId(r.route_id))throw new Error("Invalid route ID in feed.");
-      routes.push({id:r.route_id,line:label(r.route_short_name||r.route_long_name||r.route_id,8),headsigns:["",""]});
+      routes.push({id:r.route_id,route_name:r.route_short_name||r.route_id,line:label(r.route_short_name||r.route_long_name||r.route_id,8),headsigns:["",""]});
       if(routes.length>200000)throw new Error("This feed exceeds the browser catalogue limit.");
     }
     routes.sort((a,b)=>compare(a.line,b.line)||compare(a.id,b.id));
@@ -26,7 +26,9 @@ export class FeedLoader {
     const stops=[];progress("Reading stops…");
     for await(const s of this.rows("stops.txt")){
       if(!validId(s.stop_id))throw new Error("Invalid stop ID in feed.");
-      stops.push({id:s.stop_id,name:label(s.stop_name||s.stop_id,64),code:utf8.encode(s.stop_code||"").length<=16?s.stop_code||"":"",parent:s.parent_station||"",location_type:Number(s.location_type||0)});
+      const lat=s.stop_lat?.trim()?Number(s.stop_lat):NaN,lon=s.stop_lon?.trim()?Number(s.stop_lon):NaN;
+      const coordinates=Number.isFinite(lat)&&Math.abs(lat)<=90&&Number.isFinite(lon)&&Math.abs(lon)<=180?{lat,lon}:{};
+      stops.push({...coordinates,id:s.stop_id,name:label(s.stop_name||s.stop_id,64),place_name:s.stop_name||s.stop_id,platform_code:s.stop_code||"",code:utf8.encode(s.stop_code||"").length<=16?s.stop_code||"":"",parent:s.parent_station||"",location_type:Number(s.location_type||0)});
       if(stops.length>2000000)throw new Error("This feed exceeds the browser catalogue limit.");
     }
     stops.sort((a,b)=>compare(a.name,b.name)||compare(a.code,b.code)||compare(a.id,b.id));

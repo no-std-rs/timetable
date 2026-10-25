@@ -168,3 +168,79 @@ for name,route in [('matching','A'),('unrelated','D')]:
     write_archive(f'journey-scope-link-{name}.zip',{**station,
         'stops.txt':station['stops.txt'].replace('XP,Interchange platform 2,X02,P,0','XP,Interchange platform 2,X02,,0'),
         'transfers.txt':f'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,XP,0,{route},T\n'})
+
+# One place has several platform IDs, unordered rows and spelling whitespace/case
+# differences. Only the other platforms carry the fastest direct service.
+places = {**journey,
+    'stops.txt': journey['stops.txt'] + 'A2,  MAKÓW   POLNYCH  ,A02\nZ2,bolechowo-os./szkoła,Z02\nAP,Maków Polnych,Station\nU,Makow Polnych,U01\n',
+    'routes.txt': journey['routes.txt'] + 'P,Platform,3\n',
+    'trips.txt': journey['trips.txt'] + 'P,ALL,p\n',
+    'stop_times.txt': journey['stop_times.txt'] + journey_calls([('p','08:09:00','A2',1),('p','08:22:00','Z2',2)]).split('\n',1)[1],
+}
+# A station row must not become a boarding endpoint; lack of accents is a
+# different name, even though accent-insensitive search can find both.
+places['stops.txt'] = 'stop_id,stop_name,stop_code,location_type\n' + ''.join(row + (',1\n' if row.startswith('AP,') else ',0\n') for row in places['stops.txt'].splitlines()[1:])
+coords = {'A': (52.4, 16.9), 'A2': (52.4, 16.9001), 'B': (52.4, 16.92), 'Z': (52.5, 16.95), 'Z2': (52.5, 16.9501), 'W': (52.4, 16.91), 'X': (52.41, 16.91), 'Y': (52.4, 16.905)}
+places['stops.txt'] = places['stops.txt'].splitlines()[0]+',stop_lat,stop_lon\n'+''.join(row+','+','.join(map(str,coords.get(row.split(',')[0], ('',''))))+'\n' for row in places['stops.txt'].splitlines()[1:])
+write_archive('journey-places.zip',places)
+write_archive('journey-places-shuffled.zip',{**places,'stops.txt': places['stops.txt'].split('\n',1)[0]+'\n'+'\n'.join(places['stops.txt'].splitlines()[1:][::-1])+'\n'})
+
+# Interchanges are also single named places when the feed has no parent_station.
+same_place = {**station, 'stops.txt': station['stops.txt'].replace('Interchange platform 1,X01,P,0', 'Interchange,X01,,0').replace('Interchange platform 2,X02,P,0','  INTERCHANGE  ,X02,,0')}
+def positioned(tables):
+    result={**tables}
+    points={'A':(52.4,16.9),'B':(52.4,16.92),'X':(52.41,16.91),'XP':(52.41,16.9101),'Y':(52.42,16.92),'YP':(52.42,16.9201),'Z':(52.5,16.95),'W':(52.4,16.91)}
+    rows=result['stops.txt'].splitlines()
+    result['stops.txt']=rows[0]+',stop_lat,stop_lon\n'+''.join(row+','+','.join(map(str,points.get(row.split(',')[0],('',''))))+'\n' for row in rows[1:])
+    return result
+same_place=positioned(same_place)
+write_archive('journey-place-transfer.zip',same_place)
+write_archive('journey-place-transfer-forbidden.zip',{**same_place,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,XP,3\n'})
+write_archive('journey-place-transfer-minimum.zip',{**same_place,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,min_transfer_time\nX,XP,2,240\n'})
+
+middle_places=positioned({**journey,
+    'stops.txt': journey['stops.txt']+'XP,INTERCHANGE,X02\nYP,Second interchange,Y02\n',
+    'stop_times.txt': journey_calls([('a','08:07:00','A',1),('a','08:17:00','X',2),('d','08:15:00','B',1),('d','08:35:00','Z',2),('m','08:20:00','XP',1),('m','08:25:00','YP',2),('f','08:28:00','Y',1),('f','08:29:00','Z',2)])})
+write_archive('journey-place-middle.zip',middle_places)
+write_archive('journey-place-middle-blocked.zip',{**middle_places,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,XP,3\n'})
+write_archive('journey-place-middle-inseat-stops.zip',{**middle_places,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nXP,YP,3\n'})
+
+# Homonymous platforms must not teleport to another location or declared station.
+far_places={**places,'stops.txt':places['stops.txt'].replace('A2,  MAKÓW   POLNYCH  ,A02,0,52.4,16.9001','A2,  MAKÓW   POLNYCH  ,A02,0,53.4,16.9001')}
+write_archive('journey-places-far.zip',far_places)
+write_archive('journey-places-unlocated.zip',{**places,'stops.txt':places['stops.txt'].replace('A2,  MAKÓW   POLNYCH  ,A02,0,52.4,16.9001','A2,  MAKÓW   POLNYCH  ,A02,0,,')})
+for separate in (False,True):
+    rows=places['stops.txt'].splitlines()
+    parents={'A':'PA','A2':'PB' if separate else 'PA'}
+    text=rows[0]+',parent_station\n'+''.join(row+','+parents.get(row.split(',')[0],'')+'\n' for row in rows[1:])
+    text+='PA,Station A,,1,52.4,16.9,\nPB,Station B,,1,52.4,16.9001,\n'
+    if not separate:text=text.replace('A2,  MAKÓW   POLNYCH  ,A02','A2,Another platform name,A02')
+    write_archive('journey-places-'+('parents' if separate else 'shared-parent')+'.zip',{**places,'stops.txt':text})
+write_archive('journey-place-transfer-far.zip',{**same_place,'stops.txt':same_place['stops.txt'].replace('XP,  INTERCHANGE  ,X02,,0,52.41,16.9101','XP,  INTERCHANGE  ,X02,,0,53.41,16.9101')})
+
+# Overlapping halos have one byte-ID-ordered partition, not one group per query.
+overlap={**places,'stops.txt':places['stops.txt'].replace('A2,  MAKÓW   POLNYCH  ,A02,0,52.4,16.9001','A2,  MAKÓW   POLNYCH  ,A02,0,52.4009,16.9')+'A3,Maków Polnych,A03,0,52.4018,16.9\n'}
+write_archive('journey-places-overlap.zip',overlap)
+rows=overlap['stops.txt'].splitlines()
+write_archive('journey-places-overlap-shuffled.zip',{**overlap,'stops.txt':rows[0]+'\n'+'\n'.join(rows[1:][::-1])+'\n'})
+middle_overlap={**middle_places,'stops.txt':middle_places['stops.txt'].replace('XP,INTERCHANGE,X02,52.41,16.9101','XP,INTERCHANGE,X02,52.4109,16.91')+'XQ,Interchange,X03,52.4118,16.91\n','stop_times.txt':middle_places['stop_times.txt'].replace('a,08:17:00,08:17:00,X,2','a,08:17:00,08:17:00,XQ,2')}
+write_archive('journey-place-middle-overlap.zip',middle_overlap)
+# Parent label differs from every platform name; only the unselected peer's
+# platform code needs Japanese glyphs in the installed profile.
+glyphs={**places}
+rows=places['stops.txt'].splitlines()
+glyphs['stops.txt']=rows[0]+',parent_station\n'+''.join(row.replace(',A02,',',番二三四五六七八九十,').replace('X,Interchange,X01','X,'+'A'*61+'界語,X01')+(','+'PA' if row.split(',')[0] in ('A','A2') else ',')+'\n' for row in rows[1:])+'PA,Central station,,1,52.4,16.9,\n'
+# A remote line exceeds the ROM trip-ID bound, forcing a projected catalogue.
+# The usable peer-platform line is absent from that projection, so only the
+# journey-wide glyph profile can supply its non-ASCII platform code.
+long_trip='q'*256
+glyphs['routes.txt']+='Q,Remote,3\n'
+glyphs['trips.txt']+=f'Q,ALL,{long_trip}\n'
+# Each raw CSV row stays below the parser's 8192-byte record limit. Hidden
+# suffixes together exceed the 4096-glyph budget but never render on device.
+hidden_name=''.join(chr(0x4e00+i) for i in range(2200))
+hidden_code=''.join(chr(0x8000+i) for i in range(2200))
+glyphs['stops.txt']=glyphs['stops.txt'].replace(',U01,', ','+'C'*16+hidden_code+',')
+glyphs['stops.txt']+='V,'+'R'*64+hidden_name+',V01,0,53.4,17.0,\n'
+glyphs['stop_times.txt']+=journey_calls([(long_trip,'08:05:00','U',1),(long_trip,'08:10:00','V',2)]).split('\n',1)[1]
+write_archive('journey-places-glyphs.zip',glyphs)
