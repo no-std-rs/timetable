@@ -536,7 +536,6 @@ impl<
         &mut self,
         source: &mut impl Tables,
         workspace: &mut zip::Workspace,
-        expand: bool,
     ) -> Result<(), Error> {
         let manifest = self.manifest;
         let ids_end = self.ids.len();
@@ -544,63 +543,84 @@ impl<
         for _ in 0..self.stops.len() {
             self.stop_lookup.push(NONE).map_err(|_| Error::IndexFull)?;
         }
-        // The unused tail of the trip-ID arena holds exact names temporarily;
-        // the stop lookup is also idle in this phase. Neither adds a RAM arena.
+        // Store exact keys in the idle trip-ID tail. Collect the whole relevant
+        // name/station cohort, including distant homonyms, before partitioning:
+        // choosing only a selected anchor's halo would give different groups.
+        source
+            .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
+                let stop = row.stop()?;
+                if stop.location_type == 0
+                    && let Some(i) = self.stop_index(stop.id)
+                {
+                    self.store_place_key(i, stop)?;
+                }
+                Ok(())
+            })
+            .await?;
         source
             .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
                 let stop = row.stop()?;
                 if stop.location_type != 0 {
                     return Ok(());
                 }
-                let Some(index) = self.stop_index(stop.id) else {
+                if self.stop_index(stop.id).is_some_and(|i| {
+                    self.stop_lookup
+                        .get(i as usize)
+                        .is_some_and(|&offset| offset != NONE)
+                }) {
                     return Ok(());
-                };
-                if let Some(previous) = self.named_place(stop) {
-                    self.places[index as usize] = self.places[previous];
-                    self.stop_lookup[index as usize] = self.stop_lookup[previous];
-                } else {
-                    let offset = self.ids.len();
-                    self.ids
-                        .extend_from_slice(&[0, 0])
-                        .map_err(|_| Error::IndexFull)?;
-                    let (start, end) = self.endpoint_key(stop)?;
-                    let length = u16::try_from(end - start).map_err(|_| Error::IndexFull)?;
-                    self.ids[offset..offset + 2].copy_from_slice(&length.to_le_bytes());
-                    self.stop_lookup[index as usize] =
-                        u16::try_from(offset).map_err(|_| Error::IndexFull)?;
-                    self.places[index as usize] = index;
+                }
+                if self
+                    .stop_lookup
+                    .iter()
+                    .any(|&offset| offset != NONE && same_cohort(self.place_key(offset), stop))
+                {
+                    let i = self.stop(stop.id)?;
+                    while self.stop_lookup.len() < self.stops.len() {
+                        self.stop_lookup.push(NONE).map_err(|_| Error::IndexFull)?;
+                    }
+                    self.store_place_key(i, stop)?;
                 }
                 Ok(())
             })
             .await?;
-        if expand {
-            source
-                .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
-                    let stop = row.stop()?;
-                    if stop.location_type == 0
-                        && let Some(previous) = self.named_place(stop)
-                    {
-                        let place = self.places[previous];
-                        let index = self.stop(stop.id)?;
-                        self.places[index as usize] = place;
-                    }
-                    Ok(())
+        self.places.fill(NONE);
+        // Byte-order stop IDs define the same greedy representatives on every
+        // platform, independently of file order and which endpoints were chosen.
+        while let Some(i) = (0..self.stops.len())
+            .filter(|&i| self.stop_lookup[i] != NONE && self.places[i] == NONE)
+            .min_by(|&a, &b| self.stops[a].cmp(&self.stops[b]))
+        {
+            let representative = (0..self.stops.len())
+                .filter(|&j| {
+                    self.places[j] == j as u16
+                        && same_place_keys(
+                            self.place_key(self.stop_lookup[i]),
+                            self.place_key(self.stop_lookup[j]),
+                        )
                 })
-                .await?;
+                .min_by(|&a, &b| self.stops[a].cmp(&self.stops[b]));
+            self.places[i] = representative.unwrap_or(i) as u16;
         }
         self.ids.truncate(ids_end);
         self.stop_lookup.clear();
         Ok(())
     }
-    fn named_place(&self, stop: gtfs::Stop<'_>) -> Option<usize> {
-        self.stop_lookup.iter().position(|&offset| {
-            if offset == NONE {
-                return false;
-            }
-            let at = offset as usize;
-            let length = u16::from_le_bytes(self.ids[at..at + 2].try_into().unwrap()) as usize;
-            matches_place(&self.ids[at + 2..at + 2 + length], stop)
-        })
+    fn store_place_key(&mut self, index: u16, stop: gtfs::Stop<'_>) -> Result<(), Error> {
+        let offset = self.ids.len();
+        self.ids
+            .extend_from_slice(&[0, 0])
+            .map_err(|_| Error::IndexFull)?;
+        let (start, end) = self.endpoint_key(stop)?;
+        let length = u16::try_from(end - start).map_err(|_| Error::IndexFull)?;
+        self.ids[offset..offset + 2].copy_from_slice(&length.to_le_bytes());
+        self.stop_lookup[index as usize] = u16::try_from(offset).map_err(|_| Error::IndexFull)?;
+        Ok(())
+    }
+    fn place_key(&self, offset: u16) -> &[u8] {
+        let at = offset as usize;
+        let length = u16::from_le_bytes(self.ids[at..at + 2].try_into().unwrap()) as usize;
+        &self.ids[at + 2..at + 2 + length]
     }
     fn join(&self, a: Ride, b: Ride, slack: u8) -> bool {
         (a.trip != b.trip || a.day & !CONDITIONAL != b.day & !CONDITIONAL)
@@ -869,9 +889,7 @@ impl<
                 .ok_or(Error::InvalidDate)?;
         }
         self.endpoints.fill(0);
-        // Trip IDs are not loaded yet: reuse their existing byte arena for the
-        // full normalized endpoint names, rather than retaining another buffer.
-        let mut names = [(0usize, 0usize); 8];
+        // The selected IDs seed a global, bounded place partition below.
         let mut found_origins = 0u8;
         let mut found_targets = 0u8;
         let manifest = source
@@ -889,7 +907,7 @@ impl<
                                         "duplicate or non-boarding journey stop",
                                     ));
                                 }
-                                names[i] = self.endpoint_key(stop)?;
+                                self.stop(stop.id)?;
                                 found_origins |= 1 << i;
                             }
                         }
@@ -900,7 +918,7 @@ impl<
                                         "duplicate or non-boarding journey stop",
                                     ));
                                 }
-                                names[i + 4] = self.endpoint_key(stop)?;
+                                self.stop(stop.id)?;
                                 found_targets |= 1 << i;
                             }
                         }
@@ -950,26 +968,22 @@ impl<
         }
         self.manifest = Some(manifest);
         let manifest = self.manifest;
-        source
-            .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
-                let stop = row.stop()?;
-                if stop.location_type != 0 {
-                    return Ok(());
+        self.group_places(source, workspace).await?;
+        for i in 0..self.stops.len() {
+            for (bit, endpoint) in config
+                .origins
+                .iter()
+                .enumerate()
+                .chain(config.targets.iter().enumerate().map(|(i, s)| (i + 4, s)))
+            {
+                let anchor = self
+                    .stop_index(&endpoint.stop)
+                    .ok_or(Error::InvalidField("journey endpoint"))?;
+                if self.places[i] == self.places[anchor as usize] {
+                    self.endpoints[i] |= 1 << bit;
                 }
-                let mut members = 0;
-                for (i, &(start, end)) in names.iter().enumerate() {
-                    if start != end && matches_place(&self.ids[start..end], stop) {
-                        members |= 1 << i;
-                    }
-                }
-                if members != 0 {
-                    let index = self.stop(stop.id)?;
-                    self.endpoints[index as usize] = members;
-                }
-                Ok(())
-            })
-            .await?;
-        self.ids.clear();
+            }
+        }
         self.index_stops();
         source
             .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
@@ -995,17 +1009,28 @@ impl<
         self.metadata(source, workspace, 0).await?;
         self.collect_calls(source, workspace, false, calls).await?;
         if config.max_transfers != 0 {
+            self.group_places(source, workspace).await?;
             self.stations(source, workspace, false).await?;
-        }
-        if config.max_transfers != 0 {
-            let endpoint_stops = self.stops.len();
+            // The idle stop lookup marks actual endpoint-trip change anchors.
+            // Distant homonyms indexed for partitioning are not transfer anchors.
+            self.stop_lookup.clear();
+            for _ in 0..self.stops.len() {
+                self.stop_lookup.push(0).map_err(|_| Error::IndexFull)?;
+            }
+            for call in calls.iter() {
+                self.stop_lookup[call.stop as usize] = 1;
+                let parent = self.parents[call.stop as usize];
+                if parent != NONE {
+                    self.stop_lookup[parent as usize] = 1;
+                }
+            }
             source
                 .scan(&[Table::Transfers], manifest.as_ref(), workspace, |row| {
                     let from = row.required(C::FromStopId)?;
                     let to = row.required(C::ToStopId)?;
                     if ![from, to].iter().any(|s| {
                         self.stop_index(s)
-                            .is_some_and(|i| (i as usize) < endpoint_stops)
+                            .is_some_and(|i| self.stop_lookup.get(i as usize) == Some(&1))
                     }) {
                         return Ok(());
                     }
@@ -1056,7 +1081,7 @@ impl<
                 .await?;
         }
         if config.max_transfers != 0 {
-            self.group_places(source, workspace, false).await?;
+            self.group_places(source, workspace).await?;
         }
         self.endpoint_paths(calls, config)?;
         if config.max_transfers == 2 {
@@ -1064,7 +1089,7 @@ impl<
             // first.to -> middle.from, then middle.to -> last.from. Therefore
             // an applicable rule already touches the earlier endpoint stop set.
             self.stations(source, workspace, true).await?;
-            self.group_places(source, workspace, true).await?;
+            self.group_places(source, workspace).await?;
             // Same-name expansion can introduce platforms in other declared
             // stations. Preserve their parent-specific transfer restrictions.
             self.stations(source, workspace, false).await?;
@@ -1391,33 +1416,55 @@ fn place_chars(value: &str) -> impl Iterator<Item = char> + '_ {
     })
 }
 
-fn coordinates(stop: gtfs::Stop<'_>) -> Option<(f32, f32)> {
+// Quantized coordinates and the same explicit distance polynomial are used by
+// the browser. Partition decisions do not depend on target float precision or
+// a platform-specific trigonometry approximation.
+fn coordinates(stop: gtfs::Stop<'_>) -> Option<(i32, i32)> {
     let (lat, lon) = (stop.latitude?, stop.longitude?);
     (lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0)
-        .then_some((lat as f32, lon as f32))
+        .then_some(((lat * 1_000_000.0) as i32, (lon * 1_000_000.0) as i32))
 }
-fn matches_place(key: &[u8], stop: gtfs::Stop<'_>) -> bool {
+fn same_cohort(key: &[u8], stop: gtfs::Stop<'_>) -> bool {
     match key.first() {
         Some(b'P') => stop
             .parent_station
             .is_some_and(|parent| parent.as_bytes() == &key[1..]),
         Some(b'I') => stop.parent_station.is_none() && stop.id.as_bytes() == &key[1..],
-        Some(b'N') if key.len() >= 9 && stop.parent_station.is_none() => {
-            let Some((lat, lon)) = coordinates(stop) else {
-                return false;
-            };
-            let a = f32::from_le_bytes(key[1..5].try_into().unwrap());
-            let b = f32::from_le_bytes(key[5..9].try_into().unwrap());
-            let dy = (a - lat) * 111195.0;
-            let delta = (b - lon).abs();
-            let delta = if delta > 180.0 { 360.0 - delta } else { delta };
-            let dx = delta
-                * 111195.0
-                * micromath::F32Ext::cos((a + lat) * core::f32::consts::PI / 360.0);
-            dx * dx + dy * dy <= 125.0 * 125.0
+        Some(b'N') if key.len() >= 9 => {
+            stop.parent_station.is_none()
+                && coordinates(stop).is_some()
                 && core::str::from_utf8(&key[9..])
                     .is_ok_and(|name| place_chars(stop.name.unwrap_or(stop.id)).eq(name.chars()))
         }
         _ => false,
     }
+}
+fn same_place_keys(a: &[u8], b: &[u8]) -> bool {
+    if a.first() != b.first() {
+        return false;
+    }
+    if a.first() != Some(&b'N') {
+        return a == b;
+    }
+    if a[9..] != b[9..] {
+        return false;
+    }
+    let lat_a = i32::from_le_bytes(a[1..5].try_into().unwrap());
+    let lat_b = i32::from_le_bytes(b[1..5].try_into().unwrap());
+    let lon_a = i32::from_le_bytes(a[5..9].try_into().unwrap());
+    let lon_b = i32::from_le_bytes(b[5..9].try_into().unwrap());
+    let radians = f64::from(lat_a + lat_b) * core::f64::consts::PI / 360_000_000.0;
+    let x2 = radians * radians;
+    let cos = 1.0
+        + x2 * (-0.5
+            + x2 * (1.0 / 24.0 + x2 * (-1.0 / 720.0 + x2 * (1.0 / 40320.0 - x2 / 3628800.0))));
+    let delta = (lon_a - lon_b).abs();
+    let delta = if delta > 180_000_000 {
+        360_000_000 - delta
+    } else {
+        delta
+    };
+    let dx = f64::from(delta) * (111195.0 / 1_000_000.0) * cos;
+    let dy = f64::from(lat_a - lat_b) * (111195.0 / 1_000_000.0);
+    dx * dx + dy * dy <= 125.0 * 125.0
 }

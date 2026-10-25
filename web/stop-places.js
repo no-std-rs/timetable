@@ -8,15 +8,17 @@ export function stopPlaces(catalog) {
   const groups=[],byName=new Map(),byId=new Map();
   const stops=[...catalog?.stops??[],...catalog?.via_stops??[]];
   const stations=new Map(stops.map(s=>[s.id,s]));
-  for(const stop of stops){
+  for(const stop of [...stops].sort((a,b)=>idOrder(a.id,b.id))){
     if((stop.location_type??0)!==0)continue;
     const name=placeName(stop.place_name??stop.name);
     const identity=stop.parent?`parent:${stop.parent}`:position(stop)?`name:${name}`:`id:${stop.id}`;
     const choices=byName.get(identity)??[];
-    let group=choices.find(g=>stop.parent||!position(stop)||distanceMetres(g.stops[0],stop)<=125);
+    let group=choices.find(g=>stop.parent||!position(stop)||nearPlace(g.stops[0],stop));
     if(!group){group={key:`place:${stop.parent||stop.id}`,name:stations.get(stop.parent)?.name||stop.name,stops:[]};choices.push(group);byName.set(identity,choices);groups.push(group);}
     group.stops.push(stop);byId.set(stop.id,group);
   }
+  const compare=new Intl.Collator(catalog?.language||"pl",{numeric:true,sensitivity:"base"}).compare;
+  groups.sort((a,b)=>compare(a.name,b.name));
   const boarding=catalog?.links?new Set(catalog.links.map(([,i])=>catalog.stops[i]?.id)):new Set(byId.keys());
   const index={groups,byId,boarding};
   if(catalog)indexes.set(catalog,index);
@@ -77,4 +79,18 @@ export function walkableStops(places,origins,{mode="nearby",extraMinutes=10}={})
     if(best)suggestions.push(best);
   }
   return suggestions.sort((a,b)=>a.walk-b.walk||a.metres-b.metres||a.place.name.localeCompare(b.place.name));
+}
+
+function idOrder(a,b){
+  let i=0,j=0;
+  while(i<a.length&&j<b.length){const x=a.codePointAt(i),y=b.codePointAt(j);if(x!==y)return x-y;i+=x>65535?2:1;j+=y>65535?2:1;}
+  return a.length-b.length;
+}
+function nearPlace(a,b){
+  const la=Math.trunc(a.lat*1e6),lb=Math.trunc(b.lat*1e6),lo=Math.trunc(a.lon*1e6),lp=Math.trunc(b.lon*1e6);
+  const radians=(la+lb)*Math.PI/360000000,x2=radians*radians;
+  const cos=1+x2*(-.5+x2*(1/24+x2*(-1/720+x2*(1/40320-x2/3628800))));
+  let delta=Math.abs(lo-lp);if(delta>180000000)delta=360000000-delta;
+  const dx=delta*(111195/1e6)*cos,dy=(la-lb)*(111195/1e6);
+  return dx*dx+dy*dy<=125*125;
 }

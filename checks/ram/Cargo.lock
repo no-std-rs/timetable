@@ -303,7 +303,6 @@ dependencies = [
  "embedded-io-async",
  "gtfs",
  "heapless 0.9.3",
- "micromath",
  "serde",
  "serde-json-core",
  "time",

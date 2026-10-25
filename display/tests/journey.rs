@@ -567,3 +567,47 @@ fn middle_platform_rules_apply_to_changes_rather_than_staying_on_the_bus() {
         }
     }
 }
+
+#[test]
+fn overlapping_place_halos_use_one_partition_for_every_endpoint_and_interchange() {
+    for device in [false, true] {
+        for bytes in [
+            include_bytes!("fixtures/journey-places-overlap.zip").as_slice(),
+            include_bytes!("fixtures/journey-places-overlap-shuffled.zip").as_slice(),
+        ] {
+            let mut config = settings(1);
+            config.origins[0].stop = "A3".try_into().unwrap();
+            // A/A2 is one place. A3 cannot gain A2's faster service merely
+            // because A2 is also inside A3's independently measured halo.
+            assert_eq!(
+                query_at(bytes, &config, NOW, device)
+                    .best(0, NOW)
+                    .unwrap()
+                    .arrival,
+                35 * 60
+            );
+            config.origins[0].stop = "A2".try_into().unwrap();
+            assert_eq!(
+                query_at(bytes, &config, NOW, device)
+                    .best(0, NOW)
+                    .unwrap()
+                    .arrival,
+                22 * 60
+            );
+        }
+        // X is unserved, but defines XP's global representative. It must not
+        // disappear from the partition when only XQ occurs on an endpoint trip.
+        assert_eq!(
+            query_at(
+                include_bytes!("fixtures/journey-place-middle-overlap.zip"),
+                &settings(2),
+                NOW,
+                device
+            )
+            .best(0, NOW)
+            .unwrap()
+            .arrival,
+            35 * 60
+        );
+    }
+}

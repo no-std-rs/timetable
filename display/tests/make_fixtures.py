@@ -217,3 +217,25 @@ for separate in (False,True):
     if not separate:text=text.replace('A2,  MAKÓW   POLNYCH  ,A02','A2,Another platform name,A02')
     write_archive('journey-places-'+('parents' if separate else 'shared-parent')+'.zip',{**places,'stops.txt':text})
 write_archive('journey-place-transfer-far.zip',{**same_place,'stops.txt':same_place['stops.txt'].replace('XP,  INTERCHANGE  ,X02,,0,52.41,16.9101','XP,  INTERCHANGE  ,X02,,0,53.41,16.9101')})
+
+# Overlapping halos have one byte-ID-ordered partition, not one group per query.
+overlap={**places,'stops.txt':places['stops.txt'].replace('A2,  MAKÓW   POLNYCH  ,A02,0,52.4,16.9001','A2,  MAKÓW   POLNYCH  ,A02,0,52.4009,16.9')+'A3,Maków Polnych,A03,0,52.4018,16.9\n'}
+write_archive('journey-places-overlap.zip',overlap)
+rows=overlap['stops.txt'].splitlines()
+write_archive('journey-places-overlap-shuffled.zip',{**overlap,'stops.txt':rows[0]+'\n'+'\n'.join(rows[1:][::-1])+'\n'})
+middle_overlap={**middle_places,'stops.txt':middle_places['stops.txt'].replace('XP,INTERCHANGE,X02,52.41,16.9101','XP,INTERCHANGE,X02,52.4109,16.91')+'XQ,Interchange,X03,52.4118,16.91\n','stop_times.txt':middle_places['stop_times.txt'].replace('a,08:17:00,08:17:00,X,2','a,08:17:00,08:17:00,XQ,2')}
+write_archive('journey-place-middle-overlap.zip',middle_overlap)
+# Parent label differs from every platform name; only the unselected peer's
+# platform code needs Japanese glyphs in the installed profile.
+glyphs={**places}
+rows=places['stops.txt'].splitlines()
+glyphs['stops.txt']=rows[0]+',parent_station\n'+''.join(row.replace(',A02,',',番二,')+(','+'PA' if row.split(',')[0] in ('A','A2') else ',')+'\n' for row in rows[1:])+'PA,Central station,,1,52.4,16.9,\n'
+# A remote line exceeds the ROM trip-ID bound, forcing a projected catalogue.
+# The usable peer-platform line is absent from that projection, so only the
+# journey-wide glyph profile can supply its non-ASCII platform code.
+long_trip='q'*256
+glyphs['routes.txt']+='Q,Remote,3\n'
+glyphs['trips.txt']+=f'Q,ALL,{long_trip}\n'
+glyphs['stops.txt']+='V,Remote terminal,V01,0,53.4,17.0,\n'
+glyphs['stop_times.txt']+=journey_calls([(long_trip,'08:05:00','U',1),(long_trip,'08:10:00','V',2)]).split('\n',1)[1]
+write_archive('journey-places-glyphs.zip',glyphs)

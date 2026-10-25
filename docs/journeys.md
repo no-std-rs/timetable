@@ -5,7 +5,9 @@ Add one to four starting stops, with walking minutes to each, and one to four
 acceptable target stops. Platforms in the same declared station are one entity.
 Without a station declaration, equal full names group within about 125 metres
 of a representative platform; case and whitespace are ignored, accents retained.
-Unrelated same-name stops stay separate. Without coordinates or a declared
+Stops are partitioned by exact stop-ID order with one representative per place,
+so overlapping neighborhoods use the same membership in the installer, browser
+search and both devices. Unrelated same-name stops stay separate. Without coordinates or a declared
 station, the exact platform ID remains the endpoint. Choose the place once,
 set one walk, and the planner considers its platforms at both ends.
 Searching a platform code finds its whole place. The itinerary identifies the
@@ -76,7 +78,7 @@ The planner uses fixed storage and fails visibly when a selection exceeds it:
 | Relevant endpoint trips | 256 | 1,024 |
 | Trip-ID / temporary place-name arena bytes | 4,096 | 16,384 |
 | Endpoint trip calls in the time window | 1,024 | 2,048 |
-| Stops including interchange platforms | 128 | 384 |
+| Stops including relevant name cohorts and interchange platforms | 128 | 384 |
 | Advanced middle-ride calls | 128 | 2,048 |
 | Active services | 16 | 64 |
 | Relevant routes | 32 | 64 |

@@ -158,3 +158,18 @@ test("dot positions preserve geographic order and remain finite for colocated st
   for(const p of projectDots([points[0],points[0]]))assert.ok(Number.isFinite(p.x)&&Number.isFinite(p.y));
   for(const p of projectDots([{point:{lat:0,lon:179.999}},{point:{lat:0,lon:-179.999}}]))assert.ok(p.x>=28&&p.x<=452&&p.y>=28&&p.y<=172);
 });
+
+test("overlapping halos keep one global partition for selected peers and intermediate changes",async()=>{
+  for(const file of["journey-places-overlap.zip","journey-places-overlap-shuffled.zip"]){
+    const feed=await loader(file),places=stopPlaces(feed.catalog);
+    assert.equal(places.byId.get("A"),places.byId.get("A2"));
+    assert.notEqual(places.byId.get("A3"),places.byId.get("A2"));
+    const c=config();c.origins[0].stop="A3";
+    assert.equal((await searchJourneys(feed,c,{now:NOW})).paths[0].arrival,NOW+35*60);
+    c.origins[0].stop="A2";
+    assert.equal((await searchJourneys(feed,c,{now:NOW})).paths[0].arrival,NOW+22*60);
+  }
+  assert.equal((await searchJourneys(await loader("journey-place-middle-overlap.zip"),config(),{now:NOW,maxTransfers:2})).paths[0].arrival,NOW+35*60);
+  const unicode=stopPlaces({stops:[{id:"𐀀",name:"Same",lat:52.4,lon:16.9},{id:"",name:"Same",lat:52.4,lon:16.9001}]});
+  assert.equal(unicode.byId.get("𐀀").stops[0].id,"","ID order follows Unicode scalar/UTF-8 ordering on Rust and JavaScript");
+});

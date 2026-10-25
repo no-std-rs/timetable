@@ -930,7 +930,6 @@ dependencies = [
  "futures",
  "gtfs",
  "heapless 0.9.3",
- "micromath",
  "serde",
  "serde-json-core",
  "stats_alloc",

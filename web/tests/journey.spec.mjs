@@ -1,12 +1,17 @@
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { template } from "./world-fixtures.mjs";
 import { FeedLoader } from "../feed-loader.js";
 const zip=await readFile(new URL("../../display/tests/fixtures/journey.zip",import.meta.url));
 const catalog=await new FeedLoader().load(new Uint8Array(zip),{id:"mdb-982",provider:"Synthetic transit"});
-async function prepare(page,fixtureZip=zip,fixtureCatalog=catalog){
+async function prepare(page,fixtureZip=zip,fixtureCatalog=catalog,installable=false){
   await page.clock.setFixedTime(new Date(1792216800000));
   await page.route("**/catalog.json",r=>r.fulfill({json:fixtureCatalog}));
-  await page.route("**/latest.json",r=>r.fulfill({status:404}));
+  await page.route("**/latest.json",r=>r.fulfill(installable?{json:template.release}:{status:404}));
+  if(installable){
+    await page.addInitScript(()=>Object.defineProperty(navigator,"serial",{value:{getPorts:async()=>[]},configurable:true}));
+    await page.route("**/timetable-display.bin",r=>r.fulfill({body:Buffer.from(template.bytes),contentType:"application/octet-stream"}));
+  }
   await page.route("https://files.mobilitydatabase.org/mdb-982/latest.zip",r=>r.fulfill({body:fixtureZip,contentType:"application/zip"}));
   await page.goto("/");await expect(page.locator("#add-pick")).toBeEnabled();
   await page.locator("#group-mode").selectOption("journey");
@@ -88,4 +93,23 @@ test("same-name platforms are one endpoint and quick-add shows every walkable st
   await page.screenshot({path:`/tmp/timetable-stop-dots-${page.viewportSize().width}.png`,fullPage:true});
   await page.locator("#journey-quick-add").screenshot({path:`/tmp/timetable-stop-dot-map-${page.viewportSize().width}.png`});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+const glyphZip=await readFile(new URL("../../display/tests/fixtures/journey-places-glyphs.zip",import.meta.url));
+const glyphCatalog=await new FeedLoader().load(new Uint8Array(glyphZip),{id:"mdb-982",provider:"Synthetic transit"});
+test("station-name search selects child platforms and installed profiles cover generated labels and unselected peer codes",async({page})=>{
+  await prepare(page,glyphZip,glyphCatalog,true);
+  await add(page,"origin","central station","Central station · 2 platforms");
+  await expect(page.locator("#journey-origins strong")).toHaveText("Central station");
+  await add(page,"target","Z01","Bolechowo-Os./Szkoła · 2 platforms");
+  await expect(page.locator("#release-state")).toHaveText("Firmware verified");
+  await page.locator("#wifi-ssid").fill("journey-local");await page.locator("#prepare").click();
+  await expect(page.locator("#install-area")).toBeVisible();
+  await expect(page.locator("#network-scope")).toContainText("selected lines");
+  const glyphs=await page.locator("#installer").evaluate(async installer=>{
+    const manifest=await(await fetch(installer.manifest)).json(),bytes=new Uint8Array(await(await fetch(manifest.builds[0].parts[0].path)).arrayBuffer());
+    const signature=new TextEncoder().encode("TTGLY001"),offset=bytes.findIndex((_,i)=>signature.every((b,j)=>bytes[i+j]===b)),view=new DataView(bytes.buffer);
+    return offset<0?[]:Array.from({length:view.getUint16(offset+8,true)},(_,i)=>String.fromCodePoint(view.getUint32(offset+10+24*i,true)));
+  });
+  expect(glyphs).toEqual(expect.arrayContaining(["·","番","二"]));
 });
