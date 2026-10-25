@@ -118,6 +118,20 @@ def journey_calls(rows):
     return 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\n'+''.join(f'{trip},{at},{at},{stop},{seq},0,0\n' for trip,at,stop,seq in rows)
 journey['stop_times.txt'] = journey_calls(journey_rows)
 write_archive('journey.zip',journey)
+alternatives = {**journey,
+    'routes.txt': journey['routes.txt'] + 'Q,Alt,3\n',
+    'stops.txt': journey['stops.txt'] + 'P,Via park,P01\nQ,Via square,Q01\nV,Through stop,V01\n',
+    'trips.txt': 'route_id,service_id,trip_id\nA,ALL,a\nA,ALL,a2\nQ,ALL,q\nT,ALL,last\n',
+    'stop_times.txt': journey_calls([
+        ('a','08:07:00','A',1),('a','08:10:00','P',2),('a','08:17:00','X',3),
+        ('a2','08:08:00','A',1),('a2','08:11:00','Q',2),('a2','08:18:00','X',3),
+        ('q','08:09:00','A',1),('q','08:19:00','X',2),
+        ('last','08:22:00','X',1),('last','08:25:00','V',2),('last','08:30:00','Z',3),
+    ]),
+}
+# The middle call cannot be used for boarding/alighting but must be displayed.
+alternatives['stop_times.txt'] = alternatives['stop_times.txt'].replace('V,2,0,0', 'V,2,1,1')
+write_archive('journey-alternatives.zip', alternatives)
 write_archive('journey-shuffled.zip',{**journey,'stop_times.txt':journey_calls(journey_rows[::-1])})
 write_archive('journey-direct.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('d,08:35:00,08:35:00','d,08:28:00,08:28:00')})
 write_archive('journey-no-service.zip',{**journey,'calendar_dates.txt':'service_id,date,exception_type\nALL,20261017,2\n'})

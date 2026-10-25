@@ -17,6 +17,7 @@ export class JourneyEditor {
     for(const kind of["origin","target"])this.$(`journey-${kind}-search`).addEventListener("input",()=>this.matches(kind));
     for(const id of["journey-quick-minutes"])this.$(id).addEventListener("input",()=>this.quickAdd());
     this.$("journey-preview").addEventListener("click",()=>void this.calculate());
+    this.$("journey-preview-depth").addEventListener("change",()=>this.invalidate());
   }
   invalidate(){this.generation++;this.$("journey-preview-status").textContent="";this.$("journey-preview-result").replaceChildren();this.$("journey-preview").disabled=false;}
   render(){
@@ -114,10 +115,22 @@ export class JourneyEditor {
     const list=this.$("journey-preview-result");list.replaceChildren();
     if(!result.paths.length){list.append(node("p",t(result.complete?"No reachable journey within the search window.":"No journey found at this depth yet.")));return;}
     const format=at=>new Intl.DateTimeFormat(undefined,{timeZone:result.timezone,hour:"2-digit",minute:"2-digit"}).format(new Date(at*1000));
+    list.append(node("p",t("{count} route alternatives · {from}–{until} · up to {depth} transfers",{count:result.paths.length,from:format(result.now),until:format(result.until),depth:result.depth}),"fine-print"));
     for(const path of result.paths){
       const card=node("article",undefined,"journey-result");card.append(node("strong",`${t("Arrive")} ${format(path.arrival)} · ${Math.ceil((path.arrival-result.now)/60)} min`));
-      card.append(node("p",`${path.walk} ${t("min walk")} · ${path.origin.name} → ${path.target.name}`));
-      const legs=node("ol");path.legs.forEach((leg,i)=>{const wait=i?`${Math.floor((leg.departure-path.legs[i-1].arrival)/60)} ${t("min transfer")} · `:"";legs.append(node("li",`${wait}${leg.line} · ${format(leg.departure)}–${format(leg.arrival)} · ${leg.from.name}${leg.from.code?` · ${leg.from.code}`:""} → ${leg.to.name}${leg.to.code?` · ${leg.to.code}`:""}`));});card.append(legs);list.append(card);
+      card.append(node("p",`${path.walk} ${t("min walk")} · ${t("Transfers: {count}",{count:path.legs.length-1})} · ${path.origin.name} → ${path.target.name}`));
+      const legs=node("ol");
+      path.legs.forEach((leg,i)=>{
+        const wait=i?`${Math.floor((leg.departure-path.legs[i-1].arrival)/60)} ${t("min transfer")} · `:"";
+        const ride=node("li");
+        ride.append(node("strong",`${wait}${leg.line} · ${format(leg.departure)}–${format(leg.arrival)}`));
+        const calls=node("ol",undefined,"journey-calls");
+        for(const [at,call]of leg.stops.entries()){
+          const action=at===0?t("Board here"):at===leg.stops.length-1?t("Alight here"):t("Pass through");
+          calls.append(node("li",`${format(at===0?call.departure:call.arrival)} · ${call.stop.name}${call.stop.code?` · ${call.stop.code}`:""} · ${action}`));
+        }
+        ride.append(calls);legs.append(ride);
+      });card.append(legs);list.append(card);
     }
   }
 }

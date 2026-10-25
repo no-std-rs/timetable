@@ -78,11 +78,12 @@ test("a scoped cross-stop link never creates a transfer for unrelated services",
   }
 });
 
-test("one named endpoint searches every platform and returns one target-place result",async()=>{
+test("one named endpoint searches every platform and retains distinct routes to that place",async()=>{
   for(const name of ["journey-places.zip","journey-places-shuffled.zip"]){
     const feed=await loader(name),c=config();c.origins.length=1;
     const result=await searchJourneys(feed,c,{now:NOW});
-    assert.equal(result.paths.length,1);
+    assert.equal(result.paths.length,2);
+    assert.ok(result.paths.every(path=>["Z","Z2"].includes(path.target.id)));
     assert.equal(result.paths[0].arrival,NOW+22*60);
     assert.equal(result.paths[0].legs[0].from.id,"A2");
     assert.equal(result.paths[0].legs[0].to.id,"Z2");
@@ -91,6 +92,33 @@ test("one named endpoint searches every platform and returns one target-place re
     c.origins[0].stop="U";
     assert.deepEqual((await searchJourneys(feed,c,{now:NOW})).paths,[]);
   }
+});
+
+test("all transfer routes survive a shared final ride and include ordered non-boarding stops",async()=>{
+  const feed=await loader("journey-alternatives.zip"),c=config();c.origins.length=1;
+  assert.deepEqual((await searchJourneys(feed,c,{now:NOW,maxTransfers:0})).paths,[],"the endpoints have no direct connection");
+  const result=await searchJourneys(feed,c,{now:NOW});
+  assert.equal(result.until,NOW+6*3600);
+  assert.deepEqual(result.paths.map(path=>path.legs.map(leg=>leg.line)),[["911","Transfer"],["911","Transfer"],["Alt","Transfer"]]);
+  assert.deepEqual(result.paths.map(path=>path.legs[0].stops.map(call=>call.stop.id)),[["A","P","X"],["A","Q","X"],["A","X"]]);
+  for(const path of result.paths){
+    assert.equal(path.arrival,NOW+30*60);
+    assert.deepEqual(path.legs[1].stops.map(call=>call.stop.id),["X","V","Z"]);
+    assert.equal(path.legs[1].stops[1].arrival,NOW+25*60);
+    assert.ok(path.legs[1].departure-path.legs[0].arrival>=3*60);
+  }
+  const rows=feed.rows.bind(feed);
+  // Input ordering must not select a single winning prefix by accident.
+  feed.rows=async function*(name){const data=await Array.fromAsync(rows(name));yield* name==="stop_times.txt"?data.reverse():data;};
+  const reversed=await searchJourneys(feed,c,{now:NOW});
+  assert.deepEqual(new Set(reversed.paths.map(p=>JSON.stringify(p.legs.map(l=>l.stops.map(c=>c.stop.id))))),new Set(result.paths.map(p=>JSON.stringify(p.legs.map(l=>l.stops.map(c=>c.stop.id))))));
+});
+
+test("direct and transfer alternatives remain together, with repeated services grouped by ordered route",async()=>{
+  const result=await searchJourneys(await loader(),config(),{now:NOW,maxTransfers:2});
+  assert.deepEqual(result.paths.map(path=>path.legs.map(leg=>leg.line)),[["911","Middle","Final"],["911","Transfer"],["Direct"],["Direct"]]);
+  assert.deepEqual(result.paths.slice(2).map(path=>path.legs[0].stops.map(c=>c.stop.id)),[["B","W","Z"],["B","Z"]]);
+  assert.equal(result.paths.filter(path=>path.legs.at(-1).line==="Transfer").length,1,"later identical services are one route alternative");
 });
 test("place grouping excludes stations, preserves full names and coalesces old platform selections",async()=>{
   const feed=await loader("journey-places.zip"),places=stopPlaces(feed.catalog);
