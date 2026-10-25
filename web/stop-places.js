@@ -6,11 +6,15 @@ const indexes=new WeakMap();
 export function stopPlaces(catalog) {
   if(catalog&&indexes.has(catalog))return indexes.get(catalog);
   const groups=[],byName=new Map(),byId=new Map();
-  for(const stop of [...catalog?.stops??[],...catalog?.via_stops??[]]){
+  const stops=[...catalog?.stops??[],...catalog?.via_stops??[]];
+  const stations=new Map(stops.map(s=>[s.id,s]));
+  for(const stop of stops){
     if((stop.location_type??0)!==0)continue;
-    const key=placeName(stop.place_name??stop.name);
-    let group=byName.get(key);
-    if(!group){group={key,name:stop.name,stops:[]};byName.set(key,group);groups.push(group);}
+    const name=placeName(stop.place_name??stop.name);
+    const identity=stop.parent?`parent:${stop.parent}`:position(stop)?`name:${name}`:`id:${stop.id}`;
+    const choices=byName.get(identity)??[];
+    let group=choices.find(g=>stop.parent||!position(stop)||distanceMetres(g.stops[0],stop)<=125);
+    if(!group){group={key:`place:${stop.parent||stop.id}`,name:stations.get(stop.parent)?.name||stop.name,stops:[]};choices.push(group);byName.set(identity,choices);groups.push(group);}
     group.stops.push(stop);byId.set(stop.id,group);
   }
   const boarding=catalog?.links?new Set(catalog.links.map(([,i])=>catalog.stops[i]?.id)):new Set(byId.keys());
@@ -67,7 +71,7 @@ export function walkableStops(places,origins,{mode="nearby",extraMinutes=10}={})
       for(const anchor of anchors)for(const from of anchor.stops){
         const metres=distanceMetres(from,stop),extra=Math.ceil(metres/75),walk=anchor.origin.walk+extra;
         if(extra>extraMinutes||walk>60)continue;
-        if(!best||walk<best.walk||walk===best.walk&&metres<best.metres)best={place,walk,extra,metres,via:anchor.origin.stop};
+        if(!best||walk<best.walk||walk===best.walk&&metres<best.metres)best={place,walk,extra,metres,via:anchor.origin.stop,point:stop};
       }
     }
     if(best)suggestions.push(best);

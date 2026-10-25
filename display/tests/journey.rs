@@ -516,3 +516,54 @@ fn deeper_search_discovers_middle_ride_on_other_same_name_platforms() {
         }
     }
 }
+
+#[test]
+fn repeated_names_respect_geography_and_declared_station_identity() {
+    for device in [false, true] {
+        for (bytes, minutes) in [
+            (
+                include_bytes!("fixtures/journey-places-far.zip").as_slice(),
+                30,
+            ),
+            (
+                include_bytes!("fixtures/journey-places-unlocated.zip").as_slice(),
+                30,
+            ),
+            (
+                include_bytes!("fixtures/journey-places-parents.zip").as_slice(),
+                30,
+            ),
+            (
+                include_bytes!("fixtures/journey-places-shared-parent.zip").as_slice(),
+                22,
+            ),
+            (
+                include_bytes!("fixtures/journey-place-transfer-far.zip").as_slice(),
+                35,
+            ),
+        ] {
+            let result = query_at(bytes, &settings(1), NOW, device);
+            assert_eq!(result.best(0, NOW).unwrap().arrival, minutes * 60);
+        }
+    }
+}
+#[test]
+fn middle_platform_rules_apply_to_changes_rather_than_staying_on_the_bus() {
+    for device in [false, true] {
+        for (bytes, minutes) in [
+            (
+                include_bytes!("fixtures/journey-place-middle-blocked.zip").as_slice(),
+                35,
+            ),
+            (
+                include_bytes!("fixtures/journey-place-middle-inseat-stops.zip").as_slice(),
+                29,
+            ),
+        ] {
+            // Each change has an endpoint-trip side. The XP->YP rule names two
+            // new middle stops; the passenger stays on one bus between them.
+            let result = query_at(bytes, &settings(2), NOW, device);
+            assert_eq!(result.best(0, NOW).unwrap().arrival, minutes * 60);
+        }
+    }
+}

@@ -90,8 +90,11 @@
               <section><h3>Target stops</h3><div id="journey-targets"></div><label>Find a target stop<input id="journey-target-search" type="search" placeholder="Stop name or platform code" autocomplete="off"></label><div id="journey-target-matches" class="journey-matches"></div></section>
             </div>
             <section id="journey-quick-add" hidden aria-label="Quick-add starting stops">
-              <h3>More walkable starting stops</h3>
-              <div class="field-pair"><label>Show stops<select id="journey-quick-mode"><option value="nearby">Near the first starting stop</option><option value="between">Between the first two starting stops</option></select></label><label>Extra walk (minutes)<input id="journey-quick-minutes" type="number" min="0" max="60" value="10"></label></div>
+              <h3>Stops between your starting stops</h3>
+              <label>Extra walk (minutes)<input id="journey-quick-minutes" type="number" min="0" max="60" value="10"></label>
+              <p id="journey-quick-legend" class="fine-print"></p>
+              <svg id="journey-quick-map" viewBox="0 0 480 200" role="group" aria-label="Starting stops and walkable intermediate stops"></svg>
+              <p id="journey-quick-hint" class="fine-print" aria-live="polite"></p>
               <p class="fine-print">Estimates add a straight-line walk at 75 m/min to your chosen starting stop's walking time. Adjust for streets and crossings.</p>
               <p id="journey-quick-count" class="fine-print" role="status"></p><div id="journey-quick-matches" class="journey-matches"></div>
             </section>

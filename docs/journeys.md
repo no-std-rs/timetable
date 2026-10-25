@@ -2,9 +2,12 @@
 
 Choose **Journey planner (advanced)** as a group's mode in the USB installer.
 Add one to four starting stops, with walking minutes to each, and one to four
-acceptable target stops. Platforms with the same full stop name are one entity:
-choose the place once, set one walk, and the planner considers all its platforms
-at both ends. Name identity ignores case and whitespace while retaining accents.
+acceptable target stops. Platforms in the same declared station are one entity.
+Without a station declaration, equal full names group within about 125 metres
+of a representative platform; case and whitespace are ignored, accents retained.
+Unrelated same-name stops stay separate. Without coordinates or a declared
+station, the exact platform ID remains the endpoint. Choose the place once,
+set one walk, and the planner considers its platforms at both ends.
 Searching a platform code finds its whole place. The itinerary identifies the
 actual boarding/alighting platform. Existing saved platform IDs expand to their
 place automatically; duplicate place selections in older installer drafts merge
@@ -14,14 +17,16 @@ The display recommends the catchable connection with the earliest arrival,
 including access walking, waiting, all bus/train legs and destination walking.
 It can therefore prefer a 12-minute walk to a direct bus over a nearer stop.
 
-After selecting a starting place, **More walkable starting stops** offers
-quick-add buttons for nearby places. With two starts selected, its **Between the
-first two starting stops** view includes places within a 150-metre corridor
-between their platforms. The extra-walk limit defaults to ten minutes. Estimates
-use straight-line distance at 75 metres/minute via a chosen start, added to that
-start's configured walking time; adjust them for real streets and crossings.
-Missing feed coordinates simply leave manual stop search available. This local
-installer helper supplies editable access walks, never new transfer links.
+After selecting two starting places, **Stops between your starting stops**
+shows their positions and intermediate stops as a local dot diagram, with matching
+quick-add buttons below. Tap or keyboard-activate an intermediate dot to add or
+remove that starting place. The diagram uses feed coordinates without map tiles
+or location services. Places within a 150-metre corridor between the first two
+starts are shown, including selected intermediate starts. The extra-walk limit
+defaults to ten minutes. Editable estimates add straight-line walking at 75
+metres/minute to a chosen start's configured walk. Adjust for real streets and
+crossings. Missing feed coordinates leave manual stop search available. This
+installer helper supplies access walks, never new transfer links.
 
 The normal setting allows **one transfer**. The minimum change defaults to
 **three minutes**: exactly three is allowed; less is rejected. The GTFS minimum

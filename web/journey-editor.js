@@ -1,3 +1,4 @@
+import { renderStopDots } from "./stop-dot-map.js";
 import { searchText } from "./catalog-search.js";
 import { stopPlaces, walkableStops } from "./stop-places.js";
 import { validateJourney } from "./config.js";
@@ -14,7 +15,7 @@ export class JourneyEditor {
     });
     for(const [id,key]of[["journey-slack","transfer_minutes"],["journey-depth","max_transfers"]])this.$(id).addEventListener("input",()=>{this.group().journey[key]=Number(this.$(id).value);this.invalidate();this.changed();});
     for(const kind of["origin","target"])this.$(`journey-${kind}-search`).addEventListener("input",()=>this.matches(kind));
-    for(const id of["journey-quick-mode","journey-quick-minutes"])this.$(id).addEventListener("input",()=>this.quickAdd());
+    for(const id of["journey-quick-minutes"])this.$(id).addEventListener("input",()=>this.quickAdd());
     this.$("journey-preview").addEventListener("click",()=>void this.calculate());
   }
   invalidate(){this.generation++;this.$("journey-preview-status").textContent="";this.$("journey-preview-result").replaceChildren();this.$("journey-preview").disabled=false;}
@@ -47,20 +48,37 @@ export class JourneyEditor {
   }
   quickAdd(){
     const j=this.group().journey,places=stopPlaces(this.catalog());
-    const hasCoordinates=origin=>places.byId.get(origin?.stop)?.stops.some(s=>Number.isFinite(s.lat)&&Number.isFinite(s.lon));
-    this.$("journey-quick-add").hidden=!j||!hasCoordinates(j.origins[0]);
-    if(!j)return;
-    const mode=this.$("journey-quick-mode");mode.options[1].disabled=!hasCoordinates(j.origins[1]);
-    if(mode.options[1].disabled&&mode.value==="between")mode.value="nearby";
-    const suggestions=walkableStops(places,j.origins,{mode:mode.value,extraMinutes:Number(this.$("journey-quick-minutes").value)});
-    this.$("journey-quick-count").textContent=suggestions.length?t("{count} walkable stops",{count:suggestions.length}):t("No more stops within this walking range.");
-    const list=this.$("journey-quick-matches");list.replaceChildren();
+    const point=origin=>places.byId.get(origin?.stop)?.stops.find(s=>Number.isFinite(s.lat)&&Number.isFinite(s.lon));
+    const ready=j&&point(j.origins[0])&&point(j.origins[1]);
+    this.$("journey-quick-add").hidden=!j||!point(j.origins[0]);
+    const list=this.$("journey-quick-matches"),map=this.$("journey-quick-map");list.replaceChildren();map.replaceChildren();
+    this.$("journey-quick-legend").textContent="";
+    this.$("journey-quick-hint").textContent=t(ready?"Tap a dot to add or remove a starting stop.":"Choose two starting stops to see stops between them.");
+    if(!ready){this.$("journey-quick-count").textContent="";return;}
+    const suggestions=walkableStops(places,j.origins.slice(0,2),{mode:"between",extraMinutes:Number(this.$("journey-quick-minutes").value)});
+    this.$("journey-quick-count").textContent=suggestions.length?t("{count} intermediate stops",{count:suggestions.length}):t("No more stops within this walking range.");
+    this.$("journey-quick-legend").textContent=j.origins.slice(0,2).map((s,i)=>`${i+1} · ${places.byId.get(s.stop).name}`).join(" → ");
+    const dots=j.origins.slice(0,2).map((s,i)=>({anchor:i+1,point:point(s),label:places.byId.get(s.stop).name}));
+    const toggle=suggestion=>{
+      const selected=j.origins.findIndex(s=>places.byId.get(s.stop)===suggestion.place);
+      if(selected>=2)j.origins.splice(selected,1);
+      else if(selected<0&&j.origins.length<4){
+        const stop=suggestion.place.stops.find(s=>new TextEncoder().encode(s.id).length<=32);
+        if(!stop)return;
+        j.origins.push({stop:stop.id,stop_name:suggestion.place.name,stop_code:stop.code,walk:suggestion.walk});
+      }
+      this.render();this.changed();
+    };
     for(const suggestion of suggestions){
       const stop=suggestion.place.stops.find(s=>new TextEncoder().encode(s.id).length<=32);
-      const button=node("button",t("Add {stop} · about {minutes} min walk",{stop:suggestion.place.name,minutes:suggestion.walk}),"text-button");button.type="button";
-      button.disabled=!stop||j.origins.length>=4;
-      button.addEventListener("click",()=>{j.origins.push({stop:stop.id,stop_name:suggestion.place.name,stop_code:stop.code,walk:suggestion.walk});this.render();this.changed();});list.append(button);
+      const selected=j.origins.some(s=>places.byId.get(s.stop)===suggestion.place);
+      const label=selected?t("Remove {stop}",{stop:suggestion.place.name}):t("Add {stop} · about {minutes} min walk",{stop:suggestion.place.name,minutes:suggestion.walk});
+      const disabled=!stop||!selected&&j.origins.length>=4;
+      const button=node("button",label,"text-button");button.type="button";button.disabled=disabled;
+      button.addEventListener("click",()=>toggle(suggestion));list.append(button);
+      dots.push({point:suggestion.point,label,selected,disabled,suggestion});
     }
+    renderStopDots(map,dots,{hint:this.$("journey-quick-hint"),activate:dot=>toggle(dot.suggestion)});
   }
   matches(kind){
     const list=this.$(`journey-${kind}-matches`);list.replaceChildren();

@@ -142,3 +142,19 @@ test("deeper exploration finds a middle ride whose platforms do not appear on ei
     assert.equal(result.paths[0].arrival,NOW+(depth===1?35:29)*60);
   }
 });
+
+test("homonymous places stay separate by distance and declared station, with exact-ID fallback without coordinates",async()=>{
+  for(const[name,minutes]of[["journey-places-far.zip",30],["journey-places-unlocated.zip",30],["journey-places-parents.zip",30],["journey-places-shared-parent.zip",22],["journey-place-transfer-far.zip",35]]){
+    const feed=await loader(name),places=stopPlaces(feed.catalog);
+    if(name.includes("shared-parent"))assert.equal(places.byId.get("A"),places.byId.get("A2"));
+    else if(name.startsWith("journey-places"))assert.notEqual(places.byId.get("A"),places.byId.get("A2"));
+    assert.equal((await searchJourneys(feed,config(),{now:NOW})).paths[0].arrival,NOW+minutes*60,name);
+  }
+});
+test("dot positions preserve geographic order and remain finite for colocated stops and the dateline",async()=>{
+  const {projectDots}=await import("../stop-dot-map.js");
+  const points=[{point:{lat:52.4,lon:16.9}},{point:{lat:52.4,lon:16.92}},{point:{lat:52.4,lon:16.91}}];
+  const dots=projectDots(points);assert.ok(dots[0].x<dots[2].x&&dots[2].x<dots[1].x);
+  for(const p of projectDots([points[0],points[0]]))assert.ok(Number.isFinite(p.x)&&Number.isFinite(p.y));
+  for(const p of projectDots([{point:{lat:0,lon:179.999}},{point:{lat:0,lon:-179.999}}]))assert.ok(p.x>=28&&p.x<=452&&p.y>=28&&p.y<=172);
+});

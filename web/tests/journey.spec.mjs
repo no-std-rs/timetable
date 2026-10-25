@@ -65,10 +65,12 @@ test("same-name platforms are one endpoint and quick-add shows every walkable st
   await expect(page.locator("#journey-origin-matches button")).toHaveCount(0);
   await add(page,"origin","further","Further stop · B01");
   await page.locator("#journey-origins input").nth(1).fill("12");
-  await page.locator("#journey-quick-mode").selectOption("between");
+  await expect(page.locator("#journey-quick-map [role=button]")).toHaveCount(2);
   await expect(page.locator("#journey-quick-matches button")).toHaveCount(2);
   await expect(page.locator("#journey-quick-matches")).not.toContainText("Interchange ·");
-  await page.locator("#journey-quick-matches").getByRole("button",{name:"Add Second interchange · about 11 min walk",exact:true}).click();
+  const dot=page.locator("#journey-quick-map").getByRole("button",{name:"Add Second interchange · about 11 min walk",exact:true});
+  await dot.focus();await page.keyboard.press("Enter");
+  await expect(page.locator("#journey-quick-map").getByRole("button",{name:"Remove Second interchange",exact:true})).toHaveAttribute("aria-pressed","true");
   await expect(page.locator("#journey-origins .journey-stop")).toHaveCount(3);
   await expect(page.locator("#journey-origins input").nth(2)).toHaveValue("11");
   await add(page,"target","Z02","Bolechowo-Os./Szkoła · 2 platforms");
@@ -82,6 +84,8 @@ test("same-name platforms are one endpoint and quick-add shows every walkable st
   await expect(page.locator("#group-mode")).toHaveValue("journey");
   await expect(page.locator("#journey-origins .journey-stop")).toHaveCount(3);
   await page.locator(".masthead [data-language=pl]").click();
-  await expect(page.locator("#journey-quick-add h3")).toHaveText("Inne przystanki w zasięgu spaceru");
+  await expect(page.locator("#journey-quick-add h3")).toHaveText("Przystanki między wybranymi początkami podróży");
+  await page.screenshot({path:`/tmp/timetable-stop-dots-${page.viewportSize().width}.png`,fullPage:true});
+  await page.locator("#journey-quick-add").screenshot({path:`/tmp/timetable-stop-dot-map-${page.viewportSize().width}.png`});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
