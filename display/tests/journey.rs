@@ -985,3 +985,21 @@ fn a_circular_ride_past_the_start_can_be_boarded_on_its_first_pass() {
         );
     }
 }
+#[test]
+fn remote_prohibitions_do_not_take_device_capacity() {
+    for (depth, minutes, legs) in [(1, 30, 2), (2, 29, 3)] {
+        let cache = query_at(
+            include_bytes!("fixtures/journey-remote-prohibitions.zip"),
+            &settings(depth),
+            NOW,
+            true,
+        );
+        let best = cache.best(0, NOW).unwrap();
+        assert_eq!(
+            (best.len, best.arrival),
+            (legs, minutes * 60),
+            "depth {depth}"
+        );
+        assert_eq!(cache.limits_for(0), 0, "depth {depth}");
+    }
+}

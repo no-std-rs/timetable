@@ -111,7 +111,8 @@ be boarded, in small Bloom sets. Only places both sides use become change
 places, and a third pass keeps calls there within each trip's useful range.
 An explicit `transfers.txt` link joins them only when such rides reach its
 from-stop and board at its to-stop (platform or station), so unrelated rules
-elsewhere in the network take no device capacity.
+elsewhere in the network take no device capacity. Prohibitions never add stops,
+and a rule naming a stop outside these change places is ignored.
 Trip and route IDs are compared as 64-bit keys; a colliding key appears as a
 duplicate ID in the feed and fails the search. Service IDs also carry an
 independent 16-bit check, so a colliding service key fails the search unless

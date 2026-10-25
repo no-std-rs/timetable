@@ -406,3 +406,10 @@ circular = {**journey,
 }
 write_archive('journey-circular-open.zip', circular)
 write_archive('journey-circular.zip', {**circular, 'stop_times.txt': circular['stop_times.txt'].replace('A,3,0,0', 'A,3,1,0')})
+
+# The reachable interchange prohibits changes to many remote stops. Those rules
+# can never enable a change and must not take device capacity.
+write_archive('journey-remote-prohibitions.zip', {**journey,
+    'stops.txt': journey['stops.txt'] + ''.join(f'R{n},Remote {n},R{n:03}\n' for n in range(160)),
+    'transfers.txt': 'from_stop_id,to_stop_id,transfer_type\n' + ''.join(f'X,R{n},3\n' for n in range(160)),
+})

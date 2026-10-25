@@ -1170,6 +1170,10 @@ impl<
         {
             source
                 .scan(&[Table::Transfers], manifest.as_ref(), workspace, |row| {
+                    // A prohibition never makes a change possible.
+                    if matches!(row.get(C::TransferType).map(str::parse::<u8>), Some(Ok(3))) {
+                        return Ok(());
+                    }
                     let from = row.required(C::FromStopId)?;
                     let to = row.required(C::ToStopId)?;
                     let filter = self.scratch.filter();
@@ -1300,12 +1304,20 @@ impl<
         let manifest = self.manifest;
         source
             .scan(&[Table::Transfers], manifest.as_ref(), workspace, |row| {
-                let from = row.required(C::FromStopId)?;
-                let to = row.required(C::ToStopId)?;
-                if ![from, to].iter().any(|s| {
-                    self.stop_index(s)
-                        .is_some_and(|i| self.stop_lookup.get(i as usize) == Some(&1))
-                }) {
+                // Every stop a considered change can use is indexed by now: the
+                // change places, their whole name/station cohorts and the stops
+                // of relevant links. A rule naming any other stop cannot apply,
+                // and indexing it would only take capacity.
+                let (Some(from), Some(to)) = (
+                    self.stop_index(row.required(C::FromStopId)?),
+                    self.stop_index(row.required(C::ToStopId)?),
+                ) else {
+                    return Ok(());
+                };
+                if ![from, to]
+                    .iter()
+                    .any(|&i| self.stop_lookup.get(i as usize) == Some(&1))
+                {
                     return Ok(());
                 }
                 // This bounded mode admits stop-level rules only. Scoped
@@ -1337,8 +1349,6 @@ impl<
                 if kind == 2 && row.get(C::MinTransferTime).is_none() {
                     return Err(Error::MissingColumn("min_transfer_time"));
                 }
-                let from = self.stop(from)?;
-                let to = self.stop(to)?;
                 if self.rules.iter().any(|r| r.from == from && r.to == to) {
                     return Err(Error::InvalidField("duplicate transfer rule"));
                 }
