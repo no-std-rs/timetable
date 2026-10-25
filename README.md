@@ -26,8 +26,10 @@ notes before using Home, kiosk, or optional camera motion dimming.
 
 Groups also support [complete connections](docs/journeys.md): several starting
 stops with individual walks, several targets, scheduled arrival ETA and a
-three-minute transfer margin. Android and ESP32 calculate locally; one transfer
-is the default, with deeper search in advanced settings.
+three-minute transfer margin. Android and ESP32 calculate locally, including
+request stops; one transfer is the default, with deeper search in advanced
+settings. The installer shows the routes between your stops as tappable stop
+dots, including walkable stops nearby, to add better starts or targets.
 
 The [`gtfs`](gtfs/) crate streams GTFS ZIP archives, lists routes and stops, and
 filters departures with caller-owned buffers. Poznań is the first verified

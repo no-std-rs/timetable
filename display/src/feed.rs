@@ -138,11 +138,11 @@ struct Service {
 }
 
 // The 16 KiB exact-ID arena is idle after the departure join. Reuse that
-// storage for 1,024 journey calls rather than allocating another 14 KiB on ESP.
+// storage for 1,170 journey calls rather than allocating another 16 KiB on ESP.
 #[allow(clippy::large_enum_variant)] // Deliberate allocation-free reuse of the same 16 KiB arena.
 enum TripStorage {
     Ids(Vec<u8, TRIP_ID_BYTES>),
-    Calls(Vec<crate::journey::Call, 1024>),
+    Calls(Vec<crate::journey::Call, { crate::journey::DEVICE_CALLS }>),
 }
 impl TripStorage {
     fn ids(&self) -> Result<&Vec<u8, TRIP_ID_BYTES>, Error> {
@@ -160,7 +160,7 @@ impl TripStorage {
     fn reset(&mut self) {
         *self = Self::Ids(Vec::new());
     }
-    fn calls(&mut self) -> &mut Vec<crate::journey::Call, 1024> {
+    fn calls(&mut self) -> &mut Vec<crate::journey::Call, { crate::journey::DEVICE_CALLS }> {
         if !matches!(self, Self::Calls(_)) {
             *self = Self::Calls(Vec::new());
         }
@@ -305,13 +305,12 @@ impl<'zone> ZonedBuilder<'zone> {
         const CALLS: usize,
         const STOPS: usize,
         const TRIPS: usize,
-        const IDS: usize,
         const MIDDLE: usize,
         const SERVICES: usize,
         const ROUTES: usize,
     >(
         &mut self,
-        planner: &mut crate::journey::Search<CALLS, STOPS, TRIPS, IDS, MIDDLE, SERVICES, ROUTES>,
+        planner: &mut crate::journey::Search<CALLS, STOPS, TRIPS, MIDDLE, SERVICES, ROUTES>,
         source: &mut impl Tables,
         mask: u8,
         config: &Config,

@@ -36,7 +36,7 @@ self.onmessage=async({data})=>{
     }else if(kind==="paths")self.postMessage({request,patterns:await loader.paths(route,progress)});
     else if(kind==="journey"){
       if(!loader)throw new Error("Load a transport network first.");
-      const result=await searchJourneys(loader,data.journey,{now:data.now,maxTransfers:data.depth,onProgress:result=>self.postMessage({request,journeyProgress:result})});
+      const result=await searchJourneys(loader,data.journey,{now:data.now,maxTransfers:data.depth,extraWalk:data.extraWalk??0,onProgress:result=>self.postMessage({request,journeyProgress:result})});
       self.postMessage({request,result});
     }
   }catch(error){self.postMessage({request,error:error.message});}

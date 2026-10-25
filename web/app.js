@@ -1010,12 +1010,12 @@ $("device-orientation").addEventListener("change", () => {
   state.release = null;
   updateDevice();changed();void loadRelease();
 });
-journeyEditor=new JourneyEditor({group,catalog:()=>state.catalog,changed,preview:async(journey,depth,update)=>{
+journeyEditor=new JourneyEditor({group,catalog:()=>state.catalog,changed,ready:()=>state.feedClient?.feedId===state.feed.id,preview:async(journey,depth,update,extraWalk)=>{
   if(!state.feedClient)state.feedClient=new FeedClient(text=>{$("journey-preview-status").textContent=t(text);});
   const client=state.feedClient,feed=state.feed;
   if(client.feedId!==feed.id)await client.load(feed);
   if(state.feedClient!==client)throw new DOMException("Network selection changed","AbortError");
-  return client.journey(journey,depth,Math.floor(Date.now()/1000),update);
+  return client.journey(journey,depth,Math.floor(Date.now()/1000),update,extraWalk);
 }});
 restoreSettings();
 updateDevice();

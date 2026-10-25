@@ -265,3 +265,151 @@ glyphs['stops.txt']=glyphs['stops.txt'].replace(',U01,', ','+'C'*16+hidden_code+
 glyphs['stops.txt']+='V,'+'R'*64+hidden_name+',V01,0,53.4,17.0,\n'
 glyphs['stop_times.txt']+=journey_calls([(long_trip,'08:05:00','U',1),(long_trip,'08:10:00','V',2)]).split('\n',1)[1]
 write_archive('journey-places-glyphs.zip',glyphs)
+
+# A small city reproducing the real Poznań failure on the old device bounds:
+# weekday trips that do not run today still call at the chosen places, routes
+# visit ~80 two-platform places, and every Maków Polnych call is a request
+# stop. Walking 12 minutes to a direct 348 or riding the 911 one stop to change
+# at Kresowa must both survive. Times are test data, not transit advice.
+def city_fixture():
+    places = {}
+    def place(key, name):
+        if key not in places:
+            places[key] = (name, len(places))
+        return key
+    def seq(prefix, name, count):
+        return [place(f'{prefix}{i}', f'{name} {i}') for i in range(1, count + 1)]
+    A = place('A', 'Maków Polnych'); B = place('B', 'UAM Wydział Geografii')
+    K = place('K', 'Kresowa'); H = place('H', 'Biedrusko/Park')
+    Z = place('Z', 'Bolechowo-Os./Szkoła'); W = place('W', 'Bolechowo-Os./Wojska Polskiego')
+    corridor = seq('R', 'Corridor', 8)
+    lines = {
+        # route: (label, stops in direction 0, first departure, headway minutes)
+        'L911': ('911', seq('C', 'City', 6) + [A, K] + corridor + [H], (5, 57)),
+        'L348': ('348', seq('S', 'Estate', 4) + [B, K] + corridor + [W] + seq('X', 'Beyond', 3), (6, 5)),
+        'L397': ('397', [H] + seq('P', 'Promnice', 3) + [Z] + seq('Q', 'Szlachęcin', 3), (6, 10)),
+        'N1': ('101', seq('M', 'Ring', 10) + [A] + seq('MM', 'Ring outer', 8), (6, 1)),
+        'N2': ('202', seq('L', 'Loop', 10) + [Z] + seq('LL', 'Loop outer', 8), (6, 3)),
+    }
+    stops = ['stop_id,stop_name,stop_code,stop_lat,stop_lon']
+    for key, (name, index) in places.items():
+        for platform in (1, 2):
+            stops.append(f'{key}-{platform},{name},{key}{platform:02},{52.40 + index * 0.004:.6f},{16.90 + platform * 0.0002:.6f}')
+    routes = ['route_id,route_short_name,route_type'] + [f'{r},{label},3' for r, (label, _, _) in lines.items()]
+    trips = ['route_id,service_id,trip_id,direction_id']
+    calls = ['trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type']
+    for service in ('SAT', 'WD'):
+        for route, (label, path, (hour, minute)) in lines.items():
+            for direction in (0, 1):
+                ordered = path if direction == 0 else path[::-1]
+                # Departures from about 06:00 cover the six hours after 08:00.
+                for k in range(22):
+                    trip = f'{service}-{route}-{direction}-{k}'
+                    trips.append(f'{route},{service},{trip},{direction}')
+                    start = hour * 60 + minute + 20 * k
+                    for i, key in enumerate(ordered):
+                        at = start + 2 * i
+                        time = f'{at // 60:02}:{at % 60:02}:00'
+                        request = 3 if key == A else 0
+                        calls.append(f'{trip},{time},{time},{key}-{direction + 1},{i + 1},{request},{request}')
+    return {
+        'agency.txt': journey['agency.txt'],
+        'routes.txt': '\n'.join(routes) + '\n',
+        'stops.txt': '\n'.join(stops) + '\n',
+        'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nSAT,0,0,0,0,0,1,0,20261001,20261031\nWD,1,1,1,1,1,0,0,20261001,20261031\n',
+        'trips.txt': '\n'.join(trips) + '\n',
+        'stop_times.txt': '\n'.join(calls) + '\n',
+    }
+write_archive('journey-city.zip', city_fixture())
+
+# The requested Maków Polnych case with request stops (types 2/3): a nearer stop
+# needs a transfer, a further walkable stop has a direct bus to a stop beside
+# the school. The direct ride also passes that stop before reaching the school.
+walkable = {**journey,
+    'routes.txt': 'route_id,route_short_name,route_type\nN,911,3\nL,348,3\nB,397,3\nX,312,3\n',
+    'stops.txt': 'stop_id,stop_name,stop_code,stop_lat,stop_lon\n'
+        'A,Maków Polnych,A01,52.4635751,16.9479684\nA2,Maków Polnych,A02,52.4636006,16.9477802\n'
+        'G,UAM Wydział Geografii,G01,52.4636,16.9548\nK,Kresowa,K01,52.4677,16.9479684\n'
+        'P,Biedrusko/Park,P01,52.53,16.95\nS,Bolechowo-Os./Szkoła,S01,52.5409309,16.9732407\n'
+        'W,Bolechowo-Os./Wojska Polskiego,W01,52.5417104,16.9724616\n',
+    'trips.txt': 'route_id,service_id,trip_id\nN,ALL,n0\nN,ALL,n1\nB,ALL,b1\nL,ALL,l1\nX,ALL,x1\n',
+    # n0 reaches the change first; n1 still connects and leaves home later.
+    'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\n'
+        'n0,08:06:00,08:06:00,A2,1,3,3\nn0,08:07:00,08:07:00,K,2,3,3\nn0,08:27:00,08:27:00,P,3,1,0\n'
+        'n1,08:08:00,08:08:00,A2,1,3,3\nn1,08:09:00,08:09:00,K,2,3,3\nn1,08:30:00,08:30:00,P,3,1,0\n'
+        'b1,08:36:00,08:36:00,P,1,0,1\nb1,08:50:00,08:50:00,S,2,3,3\n'
+        'l1,08:13:00,08:13:00,G,1,0,0\nl1,08:35:00,08:35:00,W,2,0,0\nl1,08:52:00,08:52:00,S,3,0,0\n'
+        'x1,09:10:00,09:10:00,W,1,0,0\nx1,09:11:00,09:11:00,S,2,0,0\n',
+}
+write_archive('journey-walkable.zip', walkable)
+
+# A short-turn trip of one route ends at the interchange; a branch trip of the
+# same route continues to the school. The change between them is the journey.
+write_archive('journey-branch.zip', {**journey,
+    'routes.txt': 'route_id,route_short_name,route_type\nL,348,3\n',
+    'trips.txt': 'route_id,service_id,trip_id\nL,ALL,short\nL,ALL,branch\n',
+    'stop_times.txt': journey_calls([
+        ('short','08:07:00','A',1),('short','08:17:00','X',2),
+        ('branch','08:22:00','X',1),('branch','08:35:00','Z',2),
+    ]),
+})
+
+# Twelve lines reach the hub before line 13, but only line 13 may use the
+# route-scoped link to the far platform where the final bus leaves.
+hub_lines = [f'R{n}' for n in range(1, 14)]
+write_archive('journey-hub-scoped.zip', {**journey,
+    'routes.txt': 'route_id,route_short_name,route_type\n' + ''.join(f'{r},{r},3\n' for r in hub_lines) + 'F,Final,3\n',
+    'stops.txt': journey['stops.txt'] + 'H,Hub,H01\nHB,Hub far platform,H02\n',
+    'trips.txt': 'route_id,service_id,trip_id\n' + ''.join(f'{r},ALL,{r.lower()}\n' for r in hub_lines) + 'F,ALL,f\n',
+    'stop_times.txt': journey_calls([row for n, r in enumerate(hub_lines)
+        for row in ((r.lower(),'08:07:00','A',1),(r.lower(),f'08:{9+n+(3 if n==12 else 0):02}:00','H',2))]
+        + [('f','08:30:00','HB',1),('f','08:40:00','Z',2)]),
+    'transfers.txt': 'from_stop_id,to_stop_id,transfer_type,from_route_id\nH,HB,0,R13\n',
+})
+
+# The later middle trip m2 would still reach the final bus, but a trip-scoped
+# rule forbids changing into it from the first ride.
+write_archive('journey-tighten-scoped.zip', {**journey,
+    'trips.txt': 'route_id,service_id,trip_id\nA,ALL,a\nM,ALL,m\nM,ALL,m2\nF,ALL,f\n',
+    'stop_times.txt': journey_calls([
+        ('a','08:07:00','A',1),('a','08:17:00','X',2),
+        ('m','08:20:00','X',1),('m','08:25:00','Y',2),
+        ('m2','08:23:00','X',1),('m2','08:28:00','Y',2),
+        ('f','08:32:00','Y',1),('f','08:40:00','Z',2),
+    ]),
+    'transfers.txt': 'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id,from_trip_id,to_trip_id\nX,X,3,,,,m2\n',
+})
+
+# Many transfer rules join remote stops that no relevant ride reaches. They
+# must not take the device's change-place slots from the real interchange.
+remote_rules = {**journey,
+    'stops.txt': journey['stops.txt'] + ''.join(f'R{n},Remote {n},R{n:03}\n' for n in range(160)),
+    'transfers.txt': 'from_stop_id,to_stop_id,transfer_type\n' + ''.join(f'R{n},R{n+1},0\n' for n in range(0, 160, 2)),
+}
+write_archive('journey-remote-rules.zip', remote_rules)
+
+# Two stations' platforms joined only by an explicit transfer link, at platform
+# or station level, beside the unrelated remote rules.
+for name, rule in [('stop', 'X,XP,0'), ('station', 'P,Q,0')]:
+    write_archive(f'journey-link-{name}.zip', {**station,
+        'stops.txt': station['stops.txt'].replace('XP,Interchange platform 2,X02,P,0', 'XP,Interchange platform 2,X02,Q,0')
+            + 'Q,Other interchange,,,1\n' + ''.join(f'R{n},Remote {n},R{n:03},,0\n' for n in range(160)),
+        'transfers.txt': f'from_stop_id,to_stop_id,transfer_type\n{rule}\n' + ''.join(f'R{n},R{n+1},0\n' for n in range(0, 160, 2)),
+    })
+
+# A circular trip passes the start again before the school. When it does not
+# pick up there the second time, staying aboard from the first call is the trip.
+circular = {**journey,
+    'routes.txt': 'route_id,route_short_name,route_type\nC,Circle,3\n',
+    'trips.txt': 'route_id,service_id,trip_id\nC,ALL,c\n',
+    'stop_times.txt': journey_calls([('c','08:07:00','A',1),('c','08:10:00','X',2),('c','08:13:00','A',3),('c','08:20:00','Z',4)]),
+}
+write_archive('journey-circular-open.zip', circular)
+write_archive('journey-circular.zip', {**circular, 'stop_times.txt': circular['stop_times.txt'].replace('A,3,0,0', 'A,3,1,0')})
+
+# The reachable interchange prohibits changes to many remote stops. Those rules
+# can never enable a change and must not take device capacity.
+write_archive('journey-remote-prohibitions.zip', {**journey,
+    'stops.txt': journey['stops.txt'] + ''.join(f'R{n},Remote {n},R{n:03}\n' for n in range(160)),
+    'transfers.txt': 'from_stop_id,to_stop_id,transfer_type\n' + ''.join(f'X,R{n},3\n' for n in range(160)),
+})

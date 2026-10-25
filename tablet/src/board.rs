@@ -85,17 +85,27 @@ fn journey_card<P: Painter>(
     let h = l.body_h;
     let ink = argb(render::INK);
     p.rect(x, y, w, h, 18, CARD)?;
-    let Some(path) = app.journeys.best(app.group, input.now) else {
+    let cache = &app.journeys;
+    let until = cache.until_for(app.group);
+    let limits = cache.limits_for(app.group);
+    let mut value = String::<160>::new();
+    let Some(path) = cache.best(app.group, input.now) else {
         let message = if input.status == 1 {
             "Calculating journeys on this tablet…"
         } else if input.status == 2 {
             "Journey search failed. Open Device info for details."
         } else if app.loaded_at.is_none() {
             "Waiting for timetable data."
-        } else if input.now > app.journeys.until {
+        } else if input.now > until {
             "Refresh to calculate the next journey window."
         } else {
-            "No reachable journey within the downloaded window."
+            // A later departure may still arrive after the planned window.
+            let _ = write!(
+                value,
+                "No journey arriving before {}.",
+                clock(settings, until)
+            );
+            &value
         };
         text(p, message, x + 20, y + 48, 20, w - 40, ink, 1)?;
         return text(
@@ -109,9 +119,7 @@ fn journey_card<P: Painter>(
             0,
         );
     };
-    let cache = &app.journeys;
     let config = settings.groups[app.group].journey.as_ref().unwrap();
-    let mut value = String::<160>::new();
     let _ = write!(
         value,
         "Arrive {} · {} min",
@@ -137,7 +145,8 @@ fn journey_card<P: Painter>(
         argb(render::CHILLI),
         4,
     )?;
-    let step = ((h - 110) / i32::from(path.len)).clamp(31, 70);
+    let step = ((h - 130) / i32::from(path.len)).clamp(31, 70);
+    let mut request = false;
     for (i, leg) in path.legs[..path.len as usize].iter().enumerate() {
         let top = y + 98 + i as i32 * step;
         value.clear();
@@ -157,26 +166,71 @@ fn journey_card<P: Painter>(
                 (u32::from(leg.departure) - u32::from(path.legs[i - 1].arrival)) / 60
             );
         }
+        // Request stops ("on request") need a signal to the driver or a call to the operator.
+        let request_at = |flag| {
+            if leg.flags & flag != 0 {
+                " (request stop)"
+            } else {
+                ""
+            }
+        };
+        request |= leg.flags != 0;
         let _ = write!(
             value,
-            "{} → {}",
+            "{}{} → {}{}",
             app.headsigns.get(leg.from).unwrap_or("?"),
-            app.headsigns.get(leg.to).unwrap_or("?")
+            request_at(timetable_display::journey::LEG_REQUEST_BOARD),
+            app.headsigns.get(leg.to).unwrap_or("?"),
+            request_at(timetable_display::journey::LEG_REQUEST_ALIGHT)
         );
         text(p, &value, x + 20, top + 17, 12, w - 40, MUTED, 0)?;
     }
-    value.clear();
+    if let Some(next) = cache.next_after(app.group, input.now, path) {
+        value.clear();
+        let _ = write!(
+            value,
+            "Then: leave {} · arrive {}",
+            clock(settings, cache.epoch + i64::from(next.leave)),
+            clock(settings, cache.epoch + i64::from(next.arrival))
+        );
+        let top = y + 98 + i32::from(path.len) * step;
+        text(p, &value, x + 20, top.min(y + h - 40), 14, w - 40, MUTED, 0)?;
+    }
+    // The longest footer exceeds the line buffer; never drop its last clauses.
+    let mut value = String::<320>::new();
+    // After a fallback not every journey with the configured transfers was
+    // searched; journeys already found with more changes may still be shown.
+    let _ = if limits & timetable_display::journey::LIMIT_TRANSFERS != 0 {
+        write!(
+            value,
+            "On-device search limited: not every journey with up to {} transfers checked",
+            config.max_transfers
+        )
+    } else {
+        write!(
+            value,
+            "On-device search complete · up to {} transfers",
+            config.max_transfers
+        )
+    };
     let _ = write!(
         value,
-        "On-device search complete · up to {} transfers · {} min minimum change{}",
-        config.max_transfers,
+        " · {} min minimum change{}{}",
         config.transfer_minutes,
         if path.egress != 0 {
             " · includes destination walk"
         } else {
             ""
+        },
+        if request {
+            " · request stops: signal the driver or phone the operator"
+        } else {
+            ""
         }
     );
+    if limits & timetable_display::journey::LIMIT_WINDOW != 0 {
+        let _ = write!(value, " · planned until {}", clock(settings, until));
+    }
     text(p, &value, x + 20, y + h - 15, 11, w - 40, MUTED, 0)
 }
 #[allow(clippy::too_many_arguments)]
