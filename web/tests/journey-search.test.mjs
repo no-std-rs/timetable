@@ -326,3 +326,7 @@ test("route searches run one at a time and edits during one coalesce into a sing
   pending.shift()();await new Promise(resolve=>setTimeout(resolve,0));
   assert.deepEqual([walks.length,peak,pending.length],[2,1,0]);
 });
+test("leaving later on a middle ride rechecks the transfer rule into that trip",async()=>{
+  const result=await searchJourneys(await loader("journey-tighten-scoped.zip"),config(),{now:NOW,maxTransfers:2});
+  assert.deepEqual(result.paths.map(path=>[path.legs.map(leg=>JSON.parse(leg.trip)[0]).join("+"),path.arrival-NOW]),[["a+m+f",40*60]]);
+});

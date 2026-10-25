@@ -906,3 +906,29 @@ fn a_short_turn_can_feed_a_branch_trip_of_the_same_route() {
         );
     }
 }
+#[test]
+fn unrelated_transfer_rules_do_not_take_device_change_places() {
+    let cache = query_at(
+        include_bytes!("fixtures/journey-remote-rules.zip"),
+        &settings(1),
+        NOW,
+        true,
+    );
+    let best = cache.best(0, NOW).unwrap();
+    assert_eq!((best.len, best.arrival), (2, 30 * 60));
+    assert_eq!(cache.limits_for(0), 0);
+}
+#[test]
+fn explicit_links_between_stations_still_join_change_places() {
+    for bytes in [
+        include_bytes!("fixtures/journey-link-stop.zip").as_slice(),
+        include_bytes!("fixtures/journey-link-station.zip").as_slice(),
+    ] {
+        for device in [false, true] {
+            let cache = query_at(bytes, &settings(1), NOW, device);
+            let best = cache.best(0, NOW).unwrap();
+            assert_eq!((best.len, best.arrival), (2, 30 * 60));
+            assert_eq!(cache.limits_for(0), 0);
+        }
+    }
+}

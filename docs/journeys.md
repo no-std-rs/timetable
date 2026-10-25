@@ -109,8 +109,13 @@ trips table then drops days that do not run. A second pass marks stops a ride
 reaches after boarding at a start, and stops where a ride towards a target can
 be boarded, in small Bloom sets. Only places both sides use become change
 places, and a third pass keeps calls there within each trip's useful range.
-Trip, route and service IDs are compared as 64-bit keys; a colliding key would
-appear as a duplicate ID in the feed and fails the search. For the real Poznań
+An explicit `transfers.txt` link joins them only when such rides reach its
+from-stop and board at its to-stop (platform or station), so unrelated rules
+elsewhere in the network take no device capacity.
+Trip and route IDs are compared as 64-bit keys; a colliding key appears as a
+duplicate ID in the feed and fails the search. Service IDs also carry an
+independent 16-bit check, so a colliding service key fails the search unless
+both hashes collide. For the real Poznań
 search from Maków Polnych and UAM Wydział Geografii to Bolechowo-Os./Szkoła and
 Wojska Polskiego, the ESP32 profile keeps 66 change-place platforms and completes
 the six-hour window with the same connections as Android.

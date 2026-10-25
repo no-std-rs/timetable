@@ -247,10 +247,20 @@ impl Cache {
 }
 
 /// Trips, routes and services are identified by a 64-bit FNV-1a key instead of
-/// their ID text. GTFS IDs are unique in trips.txt, routes.txt and calendar.txt,
-/// so a colliding stored key appears as a duplicate there and fails visibly.
+/// their ID text. GTFS IDs are unique in trips.txt and routes.txt, so a
+/// colliding stored trip or route key appears as a duplicate there and fails
+/// visibly. A service may appear only in calendar_dates.txt or in trips.txt, so
+/// services also store an independent 16-bit check: a colliding key fails
+/// unless the check collides too.
 fn key(bytes: &[u8]) -> [u32; 2] {
     fold(0xcbf2_9ce4_8422_2325, bytes)
+}
+/// 32-bit FNV-1a folded to 16 bits, independent of the 64-bit key.
+fn check(bytes: &[u8]) -> u16 {
+    let hash = bytes.iter().fold(0x811c_9dc5u32, |hash, &b| {
+        (hash ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    });
+    (hash ^ (hash >> 16)) as u16
 }
 fn fold(mut hash: u64, bytes: &[u8]) -> [u32; 2] {
     for &b in bytes {
@@ -298,6 +308,9 @@ struct Rule {
 }
 struct Service {
     key: [u32; 2],
+    /// An independent hash of the ID: an equal key with another check is a
+    /// collision. It fits in the padding after the day masks.
+    check: u16,
     active: u8,
     removed: u8,
 }
@@ -569,14 +582,24 @@ impl<
         self.routes.push(k).map_err(|_| Error::IndexFull)?;
         Ok((self.routes.len() - 1) as u8)
     }
-    fn service(&mut self, id: &str) -> Result<&mut Service, Error> {
+    /// The stored service with this ID's key; a different check fails.
+    fn find_service(&self, id: &str) -> Result<Option<usize>, Error> {
         let k = key(id.as_bytes());
-        let i = if let Some(i) = self.services.iter().position(|s| s.key == k) {
+        match self.services.iter().position(|s| s.key == k) {
+            Some(i) if self.services[i].check != check(id.as_bytes()) => {
+                Err(Error::InvalidField("colliding service_id key"))
+            }
+            found => Ok(found),
+        }
+    }
+    fn service(&mut self, id: &str) -> Result<&mut Service, Error> {
+        let i = if let Some(i) = self.find_service(id)? {
             i
         } else {
             self.services
                 .push(Service {
-                    key: k,
+                    key: key(id.as_bytes()),
+                    check: check(id.as_bytes()),
                     active: 0,
                     removed: 0,
                 })
@@ -988,12 +1011,9 @@ impl<
                         return Err(Error::DuplicateTrip);
                     }
                     let trip = row.trip()?;
-                    let service = key(trip.service_id.as_bytes());
                     let active = self
-                        .services
-                        .iter()
-                        .find(|s| s.key == service)
-                        .map_or(0, |s| s.active);
+                        .find_service(trip.service_id)?
+                        .map_or(0, |i| self.services[i].active);
                     let route = self.route(trip.route_id)?;
                     self.trips[i].active = active;
                     self.trips[i].route = route;
@@ -1131,23 +1151,36 @@ impl<
                 let bits = sides(filter, STOP_SIDES, key(stop.id.as_bytes()));
                 if stop.location_type == 0 && bits != 0 {
                     insert_sides(filter, PLACE_SIDES, place_filter_key(stop), bits);
+                    // Transfer rules may name the station instead of a platform.
+                    if let Some(parent) = stop.parent_station {
+                        insert_sides(filter, STOP_SIDES, key(parent.as_bytes()), bits);
+                    }
                 }
                 Ok(())
             })
             .await?;
-        // Explicit transfer links may join different places; keep their stops.
-        let filter = self.scratch.filter();
-        filter[..FILTER / 2].fill(0);
-        // The stop sets are no longer needed; set 0 now holds linked stops.
+        // Explicit transfer links may join different places. A link matters for
+        // one transfer when a ride from a start reaches its from-stop and a ride
+        // towards a target boards at its to-stop; for two, either may be a
+        // middle ride. Its stops join the place sets under a link key.
         if manifest
             .as_ref()
             .is_some_and(|m| m.get(Table::Transfers).is_some())
         {
             source
                 .scan(&[Table::Transfers], manifest.as_ref(), workspace, |row| {
-                    for column in [C::FromStopId, C::ToStopId] {
-                        let id = row.required(column)?;
-                        insert(self.scratch.filter(), STOP_SIDES, key(id.as_bytes()));
+                    let from = row.required(C::FromStopId)?;
+                    let to = row.required(C::ToStopId)?;
+                    let filter = self.scratch.filter();
+                    let reached = sides(filter, STOP_SIDES, key(from.as_bytes())) & 1 != 0;
+                    let boards = sides(filter, STOP_SIDES, key(to.as_bytes())) & 2 != 0;
+                    let bits = if reached && boards {
+                        3
+                    } else {
+                        u8::from(reached || boards)
+                    };
+                    for id in [from, to] {
+                        insert_sides(filter, PLACE_SIDES, link_key(id), bits);
                     }
                     Ok(())
                 })
@@ -1164,12 +1197,14 @@ impl<
                         return Ok(());
                     }
                     let filter = self.scratch.filter();
-                    let place = sides(filter, PLACE_SIDES, place_filter_key(stop));
-                    let linked = contains(filter, STOP_SIDES, key(stop.id.as_bytes()))
-                        || stop
-                            .parent_station
-                            .is_some_and(|p| contains(filter, STOP_SIDES, key(p.as_bytes())));
-                    if linked || if both { place == 3 } else { place != 0 } {
+                    let wanted = |key| {
+                        let bits = sides(filter, PLACE_SIDES, key);
+                        if both { bits == 3 } else { bits != 0 }
+                    };
+                    if wanted(place_filter_key(stop))
+                        || wanted(link_key(stop.id))
+                        || stop.parent_station.is_some_and(|p| wanted(link_key(p)))
+                    {
                         self.stop(stop.id)?;
                     }
                     Ok(())
@@ -2027,6 +2062,11 @@ fn place_key(stop: gtfs::Stop<'_>) -> Result<PlaceKey, Error> {
         }
     })
 }
+/// A stop or station named by a relevant transfer link, kept apart from place
+/// keys in the place sets.
+fn link_key(id: &str) -> [u32; 2] {
+    fold(0x4c49_4e4b_0000_0001, id.as_bytes())
+}
 /// The filter's place: a declared station or a normalized name. It is wider
 /// than PlaceKey, so it can only add candidate stops.
 fn place_filter_key(stop: gtfs::Stop<'_>) -> [u32; 2] {
@@ -2088,4 +2128,35 @@ fn same_place_keys(a: PlaceKey, b: PlaceKey) -> bool {
     let dx = f64::from(delta) * (111195.0 / 1_000_000.0) * cos;
     let dy = f64::from(a.lat - b.lat) * (111195.0 / 1_000_000.0);
     dx * dx + dy * dy <= 125.0 * 125.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_service_key_with_another_check_is_a_collision() {
+        let mut search = DevicePlanner::new("20261017".parse().unwrap());
+        // FNV-1a collisions are impractical to construct; plant one directly.
+        search
+            .services
+            .push(Service {
+                key: key(b"WD"),
+                check: check(b"WD") ^ 1,
+                active: 1,
+                removed: 0,
+            })
+            .map_err(drop)
+            .unwrap();
+        assert!(matches!(
+            search.service("WD"),
+            Err(Error::InvalidField("colliding service_id key"))
+        ));
+        assert!(matches!(
+            search.find_service("WD"),
+            Err(Error::InvalidField(_))
+        ));
+        assert!(search.service("SAT").is_ok());
+        assert_eq!(search.find_service("SAT").unwrap(), Some(1));
+    }
 }

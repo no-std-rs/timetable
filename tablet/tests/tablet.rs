@@ -196,3 +196,94 @@ fn camera_motion_is_local_debounced_and_presence_timeout_is_monotonic() {
     assert!(!state.dim(&settings, 122001));
     assert!(!state.dim(&settings, 1)); // clock reset, not a permanent dim state.
 }
+#[derive(Default)]
+struct Texts(Vec<String>);
+impl timetable_tablet::Painter for Texts {
+    type Error = std::convert::Infallible;
+    fn rect(&mut self, _: i32, _: i32, _: i32, _: i32, _: i32, _: u32) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn text(
+        &mut self,
+        text: &str,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: u32,
+        _: u32,
+    ) -> Result<(), Self::Error> {
+        self.0.push(text.into());
+        Ok(())
+    }
+}
+#[test]
+fn journey_footer_never_claims_the_configured_depth_after_a_fallback() {
+    use timetable_display::journey::{LIMIT_TRANSFERS, Leg, Path};
+    let original = std::str::from_utf8(SETTINGS).unwrap();
+    let start = original.find("\"picks\":[").unwrap();
+    let end = original.find("]},{\"name\":\"Evening\"").unwrap();
+    let json = format!(
+        "{}\"picks\":[],\"journey\":{{\"origins\":[{{\"stop\":\"A\",\"stop_name\":\"Maków Polnych\",\"stop_code\":\"A01\",\"walk\":6}}],\"targets\":[{{\"stop\":\"Z\",\"stop_name\":\"Bolechowo-Os./Szkoła\",\"stop_code\":\"Z01\",\"walk\":0}}],\"transfer_minutes\":3,\"max_transfers\":2}}{}",
+        &original[..start],
+        &original[end + 1..]
+    );
+    let settings = Settings::decode(json.as_bytes()).unwrap();
+    for (limits, expected) in [
+        (0, "On-device search complete · up to 2 transfers"),
+        (
+            LIMIT_TRANSFERS,
+            "On-device search limited to fewer than 2 transfers",
+        ),
+    ] {
+        let mut app = App {
+            loaded_at: Some(NOW),
+            ..App::default()
+        };
+        let line = app.headsigns.insert("911").unwrap();
+        let stop = app.headsigns.insert("Maków Polnych").unwrap();
+        app.journeys.reset(NOW);
+        app.journeys.limits[0] = limits;
+        let leg = Leg {
+            line,
+            from: stop,
+            to: stop,
+            flags: 0,
+            departure: 600,
+            arrival: 1200,
+        };
+        app.journeys
+            .paths
+            .push(Path {
+                walk: 6,
+                len: 1,
+                leave: 240,
+                arrival: 1200,
+                legs: [leg; 3],
+                ..Path::default()
+            })
+            .unwrap();
+        let mut texts = Texts::default();
+        let input = board::Input {
+            width: 1024,
+            height: 600,
+            now: NOW,
+            monotonic_ms: 1000,
+            battery: 72,
+            plugged: true,
+            motion_available: false,
+            status: 0,
+        };
+        board::draw(
+            &settings,
+            &mut app,
+            &mut State::default(),
+            input,
+            &mut texts,
+        )
+        .unwrap();
+        let footer = texts.0.iter().find(|t| t.starts_with("On-device")).unwrap();
+        assert!(footer.starts_with(expected), "{footer}");
+        assert_eq!(footer.contains("up to 2"), limits == 0, "{footer}");
+    }
+}

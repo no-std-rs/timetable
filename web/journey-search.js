@@ -228,6 +228,11 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
           if(k===0&&board.departure-path.walk*60<now)continue;
           const rule=applicable(alight.stop.id,after.from.id,board.trip,after.trip);
           if(rule?.forbidden||alight.arrival+Math.max(settings.transfer_minutes*60,rule?.seconds??0)>after.departure)continue;
+          // A later middle trip must also be reachable from the ride before it.
+          if(k){
+            const before=legs[k-1],incoming=applicable(before.to.id,board.stop.id,before.trip,board.trip);
+            if(incoming?.forbidden||before.arrival+Math.max(settings.transfer_minutes*60,incoming?.seconds??0)>board.departure)continue;
+          }
           chosen={...leg,trip:board.trip,departure:board.departure,arrival:alight.arrival,requestBoard:board.pickup>=2,requestAlight:alight.dropoff>=2,stops:list.slice(i,i+ids.length).map(c=>({stop:c.stop,arrival:c.arrival,departure:c.departure,pickup:c.pickup,dropoff:c.dropoff}))};
         }
       }

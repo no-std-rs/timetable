@@ -197,15 +197,23 @@ fn journey_card<P: Painter>(
         text(p, &value, x + 20, top.min(y + h - 40), 14, w - 40, MUTED, 0)?;
     }
     value.clear();
-    let searched = if limits & timetable_display::journey::LIMIT_TRANSFERS != 0 {
-        "On-device search limited to fewer transfers"
+    // After a fallback the profile searched fewer transfers than configured.
+    let _ = if limits & timetable_display::journey::LIMIT_TRANSFERS != 0 {
+        write!(
+            value,
+            "On-device search limited to fewer than {} transfers",
+            config.max_transfers
+        )
     } else {
-        "On-device search complete"
+        write!(
+            value,
+            "On-device search complete · up to {} transfers",
+            config.max_transfers
+        )
     };
     let _ = write!(
         value,
-        "{searched} · up to {} transfers · {} min minimum change{}{}",
-        config.max_transfers,
+        " · {} min minimum change{}{}",
         config.transfer_minutes,
         if path.egress != 0 {
             " · includes destination walk"

@@ -366,3 +366,33 @@ write_archive('journey-hub-scoped.zip', {**journey,
         + [('f','08:30:00','HB',1),('f','08:40:00','Z',2)]),
     'transfers.txt': 'from_stop_id,to_stop_id,transfer_type,from_route_id\nH,HB,0,R13\n',
 })
+
+# The later middle trip m2 would still reach the final bus, but a trip-scoped
+# rule forbids changing into it from the first ride.
+write_archive('journey-tighten-scoped.zip', {**journey,
+    'trips.txt': 'route_id,service_id,trip_id\nA,ALL,a\nM,ALL,m\nM,ALL,m2\nF,ALL,f\n',
+    'stop_times.txt': journey_calls([
+        ('a','08:07:00','A',1),('a','08:17:00','X',2),
+        ('m','08:20:00','X',1),('m','08:25:00','Y',2),
+        ('m2','08:23:00','X',1),('m2','08:28:00','Y',2),
+        ('f','08:32:00','Y',1),('f','08:40:00','Z',2),
+    ]),
+    'transfers.txt': 'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id,from_trip_id,to_trip_id\nX,X,3,,,,m2\n',
+})
+
+# Many transfer rules join remote stops that no relevant ride reaches. They
+# must not take the device's change-place slots from the real interchange.
+remote_rules = {**journey,
+    'stops.txt': journey['stops.txt'] + ''.join(f'R{n},Remote {n},R{n:03}\n' for n in range(160)),
+    'transfers.txt': 'from_stop_id,to_stop_id,transfer_type\n' + ''.join(f'R{n},R{n+1},0\n' for n in range(0, 160, 2)),
+}
+write_archive('journey-remote-rules.zip', remote_rules)
+
+# Two stations' platforms joined only by an explicit transfer link, at platform
+# or station level, beside the unrelated remote rules.
+for name, rule in [('stop', 'X,XP,0'), ('station', 'P,Q,0')]:
+    write_archive(f'journey-link-{name}.zip', {**station,
+        'stops.txt': station['stops.txt'].replace('XP,Interchange platform 2,X02,P,0', 'XP,Interchange platform 2,X02,Q,0')
+            + 'Q,Other interchange,,,1\n' + ''.join(f'R{n},Remote {n},R{n:03},,0\n' for n in range(160)),
+        'transfers.txt': f'from_stop_id,to_stop_id,transfer_type\n{rule}\n' + ''.join(f'R{n},R{n+1},0\n' for n in range(0, 160, 2)),
+    })
