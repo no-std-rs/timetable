@@ -171,15 +171,8 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
         );
         label_with_profile(profile, d, &short(&value, chars), center, then, MUTED, true)?;
     }
-    value.clear();
-    let _ = write!(value, "{} transfer(s) / ", path.len - 1);
-    if request {
-        let _ = value.push_str("* request stop");
-    } else if limits & LIMIT_WINDOW != 0 {
-        let _ = write!(value, "planned to {}", departure_time(until, zone));
-    } else {
-        let _ = value.push_str("search complete");
-    }
+    let cutoff = (limits & LIMIT_WINDOW != 0).then(|| departure_time(until, zone));
+    let value = journey_footer(path.len - 1, request, cutoff.as_deref());
     label_with_profile(
         profile,
         d,
@@ -189,6 +182,29 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
         GOLD,
         true,
     )
+}
+
+/// A shortened profile's cutoff comes first, then the request-stop legend, so
+/// truncation on a narrow screen drops the transfer count before either.
+fn journey_footer(changes: u8, request: bool, cutoff: Option<&str>) -> String<96> {
+    let mut value = String::new();
+    match cutoff {
+        Some(at) => {
+            let _ = write!(value, "planned to {at}");
+        }
+        None if !request => {
+            let _ = value.push_str("search complete");
+        }
+        None => {}
+    }
+    if request {
+        if !value.is_empty() {
+            let _ = value.push_str(" / ");
+        }
+        let _ = value.push_str("* request stop");
+    }
+    let _ = write!(value, " / {changes} transfer(s)");
+    value
 }
 
 // The board redraws in tiles. Avoid rasterizing text and primitives that cannot
@@ -1226,6 +1242,31 @@ fn page_count<D: DrawTarget<Color = Rgb565>>(
         );
     }
     label(d, &text, 120, 185, MUTED, true)
+}
+
+#[cfg(test)]
+mod journey_footer_tests {
+    use super::{journey_footer, short};
+
+    #[test]
+    fn a_shortened_window_stays_visible_beside_request_stops() {
+        let both = journey_footer(1, true, Some("13:00"));
+        assert_eq!(both, "planned to 13:00 / * request stop / 1 transfer(s)");
+        // The narrowest (portrait) board shows 24 characters.
+        assert!(short(&both, 24).starts_with("planned to 13:00 / "));
+        assert_eq!(
+            journey_footer(1, true, None),
+            "* request stop / 1 transfer(s)"
+        );
+        assert_eq!(
+            journey_footer(0, false, Some("13:00")),
+            "planned to 13:00 / 0 transfer(s)"
+        );
+        assert_eq!(
+            journey_footer(2, false, None),
+            "search complete / 2 transfer(s)"
+        );
+    }
 }
 
 #[cfg(test)]
