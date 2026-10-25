@@ -1,3 +1,4 @@
+import { stopPlaces, coalesceJourneyStops } from "./stop-places.js";
 import { JourneyEditor } from "./journey-editor.js";
 import { AndroidInstaller } from "./android-installer.js";
 import { device, DEFAULT_DEVICE } from "./devices.js";
@@ -193,6 +194,10 @@ function validateGroupName() {
   name.setCustomValidity(groupNameError(name.value));
 }
 function renderGroup(preserveInputs = false) {
+  const places=stopPlaces(state.catalog);
+  let merged=false;
+  for(const g of state.groups)if(g.journey)merged=coalesceJourneyStops(g.journey,places)||merged;
+  if(merged)persistSettings();
   renderTabs();
   $("automatic").checked = state.automatic;
   $("automatic-hint").textContent = state.automatic ? t("Switch by time of day. Turn off to choose groups by touch.") : t("Schedules are paused. Choose groups by touch; saved time windows stay here.");

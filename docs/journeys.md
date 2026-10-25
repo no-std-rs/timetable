@@ -2,10 +2,26 @@
 
 Choose **Journey planner (advanced)** as a group's mode in the USB installer.
 Add one to four starting stops, with walking minutes to each, and one to four
-acceptable target stops. An optional walk after each target counts towards ETA.
+acceptable target stops. Platforms with the same full stop name are one entity:
+choose the place once, set one walk, and the planner considers all its platforms
+at both ends. Name identity ignores case and whitespace while retaining accents.
+Searching a platform code finds its whole place. The itinerary identifies the
+actual boarding/alighting platform. Existing saved platform IDs expand to their
+place automatically; duplicate place selections in older installer drafts merge
+and keep the shortest configured walk. An optional walk after each target counts
+towards ETA.
 The display recommends the catchable connection with the earliest arrival,
 including access walking, waiting, all bus/train legs and destination walking.
 It can therefore prefer a 12-minute walk to a direct bus over a nearer stop.
+
+After selecting a starting place, **More walkable starting stops** offers
+quick-add buttons for nearby places. With two starts selected, its **Between the
+first two starting stops** view includes places within a 150-metre corridor
+between their platforms. The extra-walk limit defaults to ten minutes. Estimates
+use straight-line distance at 75 metres/minute via a chosen start, added to that
+start's configured walking time; adjust them for real streets and crossings.
+Missing feed coordinates simply leave manual stop search available. This local
+installer helper supplies editable access walks, never new transfer links.
 
 The normal setting allows **one transfer**. The minimum change defaults to
 **three minutes**: exactly three is allowed; less is rejected. The GTFS minimum
@@ -34,8 +50,9 @@ to leave, walking time, each line and its boarding/alighting stops, and actual
 change time. A long press in this mode opens group selection; edit journey
 endpoints and margins in the installer.
 
-Transfers use the same stop, platforms with a declared common `parent_station`,
-or explicit `transfers.txt` links. No street route or nearby-stop footpath is
+Transfers use the same named place (including its platforms), platforms with a
+declared common `parent_station`, or explicit `transfers.txt` links. Explicit
+platform/station prohibitions and minimums override a same-name connection. No street route or nearby-stop footpath is
 invented. A station transfer's configured slack must cover its walking time.
 Journey stop IDs must still exist in the downloaded feed; select them again if
 the operator renumbers stops. This mode does not plan walking-only journeys,
@@ -52,7 +69,7 @@ The planner uses fixed storage and fails visibly when a selection exceeds it:
 | Bound | ESP32 | Android |
 | --- | ---: | ---: |
 | Relevant endpoint trips | 256 | 1,024 |
-| Exact trip-ID bytes | 4,096 | 16,384 |
+| Trip-ID / temporary place-name arena bytes | 4,096 | 16,384 |
 | Endpoint trip calls in the time window | 1,024 | 2,048 |
 | Stops including interchange platforms | 128 | 384 |
 | Advanced middle-ride calls | 128 | 2,048 |

@@ -26,7 +26,9 @@ export class FeedLoader {
     const stops=[];progress("Reading stops…");
     for await(const s of this.rows("stops.txt")){
       if(!validId(s.stop_id))throw new Error("Invalid stop ID in feed.");
-      stops.push({id:s.stop_id,name:label(s.stop_name||s.stop_id,64),code:utf8.encode(s.stop_code||"").length<=16?s.stop_code||"":"",parent:s.parent_station||"",location_type:Number(s.location_type||0)});
+      const lat=s.stop_lat?.trim()?Number(s.stop_lat):NaN,lon=s.stop_lon?.trim()?Number(s.stop_lon):NaN;
+      const coordinates=Number.isFinite(lat)&&Math.abs(lat)<=90&&Number.isFinite(lon)&&Math.abs(lon)<=180?{lat,lon}:{};
+      stops.push({...coordinates,id:s.stop_id,name:label(s.stop_name||s.stop_id,64),place_name:s.stop_name||s.stop_id,code:utf8.encode(s.stop_code||"").length<=16?s.stop_code||"":"",parent:s.parent_station||"",location_type:Number(s.location_type||0)});
       if(stops.length>2000000)throw new Error("This feed exceeds the browser catalogue limit.");
     }
     stops.sort((a,b)=>compare(a.name,b.name)||compare(a.code,b.code)||compare(a.id,b.id));

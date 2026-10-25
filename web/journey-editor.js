@@ -1,4 +1,5 @@
 import { searchText } from "./catalog-search.js";
+import { stopPlaces, walkableStops } from "./stop-places.js";
 import { validateJourney } from "./config.js";
 import { t } from "./i18n.js";
 const node=(tag,text,className)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;};
@@ -13,6 +14,7 @@ export class JourneyEditor {
     });
     for(const [id,key]of[["journey-slack","transfer_minutes"],["journey-depth","max_transfers"]])this.$(id).addEventListener("input",()=>{this.group().journey[key]=Number(this.$(id).value);this.invalidate();this.changed();});
     for(const kind of["origin","target"])this.$(`journey-${kind}-search`).addEventListener("input",()=>this.matches(kind));
+    for(const id of["journey-quick-mode","journey-quick-minutes"])this.$(id).addEventListener("input",()=>this.quickAdd());
     this.$("journey-preview").addEventListener("click",()=>void this.calculate());
   }
   invalidate(){this.generation++;this.$("journey-preview-status").textContent="";this.$("journey-preview-result").replaceChildren();this.$("journey-preview").disabled=false;}
@@ -23,31 +25,56 @@ export class JourneyEditor {
     this.$("add-pick").hidden=!!j||this.group().picks.length>=4;
     if(!j)return;
     this.$("journey-slack").value=j.transfer_minutes;this.$("journey-depth").value=j.max_transfers;
+    const places=stopPlaces(this.catalog());
     for(const kind of["origin","target"]){
       const list=this.$(`journey-${kind}s`);list.replaceChildren();
       j[`${kind}s`].forEach((s,i)=>{
         const live=this.catalog()?.stops.find(stop=>stop.id===s.stop);
-        const name=s.stop_name||live?.name||s.stop,code=s.stop_code||live?.code||s.stop;
+        const place=places.byId.get(s.stop);
+        const name=place?.name||s.stop_name||live?.name||s.stop;
+        const code=place?.stops.length>1?t("{count} platforms",{count:place.stops.length}):s.stop_code||live?.code||s.stop;
         const row=node("div",undefined,"journey-stop");const info=node("span");info.append(node("strong",name),node("small",code));
         const label=node("label",t(kind==="origin"?"Walk there (min)":"Walk after arrival (min)"));
         const input=node("input");Object.assign(input,{type:"number",min:"0",max:"60",value:s.walk});input.setAttribute("aria-label",`${t("Walking time")}: ${name}`);
-        input.addEventListener("input",()=>{s.walk=Number(input.value);this.invalidate();this.changed();});label.append(input);
+        input.addEventListener("input",()=>{s.walk=Number(input.value);this.invalidate();this.quickAdd();this.changed();});label.append(input);
         const remove=node("button",t("Remove"),"text-button");remove.type="button";remove.setAttribute("aria-label",`${t("Remove")}: ${name}`);
         remove.addEventListener("click",()=>{j[`${kind}s`].splice(i,1);this.render();this.changed();});row.append(info,label,remove);list.append(row);
       });
       this.$(`journey-${kind}-search`).disabled=j[`${kind}s`].length>=4||!this.catalog();
       this.$(`journey-${kind}-search`).value="";this.$(`journey-${kind}-matches`).replaceChildren();
     }
+    this.quickAdd();
+  }
+  quickAdd(){
+    const j=this.group().journey,places=stopPlaces(this.catalog());
+    const hasCoordinates=origin=>places.byId.get(origin?.stop)?.stops.some(s=>Number.isFinite(s.lat)&&Number.isFinite(s.lon));
+    this.$("journey-quick-add").hidden=!j||!hasCoordinates(j.origins[0]);
+    if(!j)return;
+    const mode=this.$("journey-quick-mode");mode.options[1].disabled=!hasCoordinates(j.origins[1]);
+    if(mode.options[1].disabled&&mode.value==="between")mode.value="nearby";
+    const suggestions=walkableStops(places,j.origins,{mode:mode.value,extraMinutes:Number(this.$("journey-quick-minutes").value)});
+    this.$("journey-quick-count").textContent=suggestions.length?t("{count} walkable stops",{count:suggestions.length}):t("No more stops within this walking range.");
+    const list=this.$("journey-quick-matches");list.replaceChildren();
+    for(const suggestion of suggestions){
+      const stop=suggestion.place.stops.find(s=>new TextEncoder().encode(s.id).length<=32);
+      const button=node("button",t("Add {stop} · about {minutes} min walk",{stop:suggestion.place.name,minutes:suggestion.walk}),"text-button");button.type="button";
+      button.disabled=!stop||j.origins.length>=4;
+      button.addEventListener("click",()=>{j.origins.push({stop:stop.id,stop_name:suggestion.place.name,stop_code:stop.code,walk:suggestion.walk});this.render();this.changed();});list.append(button);
+    }
   }
   matches(kind){
     const list=this.$(`journey-${kind}-matches`);list.replaceChildren();
     const query=searchText(this.$(`journey-${kind}-search`).value).trim();if(!query)return;
     const terms=query.split(/\s+/),selected=this.group().journey[`${kind}s`];let count=0;
-    for(const stop of this.catalog()?.stops??[]){
-      if(stop.location_type>0||selected.some(s=>s.stop===stop.id)||!terms.every(term=>searchText(`${stop.name} ${stop.code} ${stop.id}`).includes(term)))continue;
-      const button=node("button",`${stop.name} · ${stop.code||stop.id}`,"text-button");button.type="button";
-      button.disabled=new TextEncoder().encode(stop.id).length>32;
-      button.addEventListener("click",()=>{selected.push({stop:stop.id,stop_name:stop.name,stop_code:stop.code,walk:kind==="origin"?6:0});this.render();this.changed();});list.append(button);
+    const places=stopPlaces(this.catalog());
+    for(const place of places.groups){
+      if(kind==="origin"&&!place.stops.some(s=>places.boarding.has(s.id)))continue;
+      if(selected.some(s=>places.byId.get(s.stop)===place)||!place.stops.some(stop=>terms.every(term=>searchText(`${stop.name} ${stop.code} ${stop.id}`).includes(term))))continue;
+      const stop=place.stops.find(stop=>new TextEncoder().encode(stop.id).length<=32);
+      const detail=place.stops.length>1?t("{count} platforms",{count:place.stops.length}):place.stops[0].code||place.stops[0].id;
+      const button=node("button",`${place.name} · ${detail}`,"text-button");button.type="button";
+      button.disabled=!stop;
+      button.addEventListener("click",()=>{selected.push({stop:stop.id,stop_name:place.name,stop_code:stop.code,walk:kind==="origin"?6:0});this.render();this.changed();});list.append(button);
       if(++count===20)break;
     }
     if(!count)list.append(node("p",t("No matching stops."),"fine-print"));
@@ -71,7 +98,7 @@ export class JourneyEditor {
     for(const path of result.paths){
       const card=node("article",undefined,"journey-result");card.append(node("strong",`${t("Arrive")} ${format(path.arrival)} · ${Math.ceil((path.arrival-result.now)/60)} min`));
       card.append(node("p",`${path.walk} ${t("min walk")} · ${path.origin.name} → ${path.target.name}`));
-      const legs=node("ol");path.legs.forEach((leg,i)=>{const wait=i?`${Math.floor((leg.departure-path.legs[i-1].arrival)/60)} ${t("min transfer")} · `:"";legs.append(node("li",`${wait}${leg.line} · ${format(leg.departure)}–${format(leg.arrival)} · ${leg.from.name} → ${leg.to.name}`));});card.append(legs);list.append(card);
+      const legs=node("ol");path.legs.forEach((leg,i)=>{const wait=i?`${Math.floor((leg.departure-path.legs[i-1].arrival)/60)} ${t("min transfer")} · `:"";legs.append(node("li",`${wait}${leg.line} · ${format(leg.departure)}–${format(leg.arrival)} · ${leg.from.name}${leg.from.code?` · ${leg.from.code}`:""} → ${leg.to.name}${leg.to.code?` · ${leg.to.code}`:""}`));});card.append(legs);list.append(card);
     }
   }
 }

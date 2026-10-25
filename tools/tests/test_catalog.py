@@ -51,6 +51,17 @@ class CatalogPaths(unittest.TestCase):
         west = next(p for p in catalog['patterns'] if p['direction'] == 1)
         self.assertEqual(ids[west['calls'][0][0]], 'B')
 
+    def test_browser_coordinates_and_full_place_names_preserve_flash_catalogue(self):
+        times = 'T1,1,A,0,\nT1,2,Z,1,\n'
+        plain, binary = self.generate(times)
+        extended, same_binary = self.generate(times, {
+            'stops.txt': 'stop_id,stop_name,stop_code,stop_lat,stop_lon\nA,Central,C01,52.4,16.9\nZ,Terminal,Z01,nan,16.9\n'})
+        self.assertEqual(binary, same_binary)
+        self.assertEqual(extended['stops'][0]['place_name'], 'Central')
+        self.assertEqual((extended['stops'][0]['lat'], extended['stops'][0]['lon']), (52.4, 16.9))
+        self.assertNotIn('lat', extended['via_stops'][0])
+        self.assertNotIn('lat', plain['stops'][0])
+
     def test_duplicate_stop_sequence_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'duplicate trip stop_sequence'):
             self.generate('T1,1,A,0,\nT1,1,B,0,\n')

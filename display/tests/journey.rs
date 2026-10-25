@@ -235,6 +235,9 @@ fn snapshot_preserves_future_connections_and_rejects_invalid_references() {
     let restored = Cache::decode(&bytes[..len], &config, &planned.labels).unwrap();
     assert_eq!(planned.paths, restored.paths);
     assert_eq!(restored.best(0, NOW + 4 * 60).unwrap().arrival, 60 * 60);
+    let mut old = bytes;
+    old[..8].copy_from_slice(b"TTJNY001");
+    assert!(Cache::decode(&old[..len], &config, &planned.labels).is_err());
     bytes[38] = 255; // First leg's line label.
     assert!(Cache::decode(&bytes[..len], &config, &planned.labels).is_err());
     assert!(Cache::decode(&bytes[..len - 1], &config, &planned.labels).is_err());
@@ -445,4 +448,71 @@ fn timed_transfer_guarantees_do_not_waive_the_users_minimum_slack() {
             .arrival,
         25 * 60
     );
+}
+
+#[test]
+fn named_endpoints_include_all_platforms_without_consuming_stop_slots() {
+    for device in [false, true] {
+        for bytes in [
+            include_bytes!("fixtures/journey-places.zip").as_slice(),
+            include_bytes!("fixtures/journey-places-shuffled.zip").as_slice(),
+        ] {
+            let mut config = settings(1);
+            config.origins.truncate(1);
+            let result = query_at(bytes, &config, NOW, device);
+            let best = result.best(0, NOW).unwrap();
+            assert_eq!((best.arrival, best.len), (22 * 60, 1));
+            assert_eq!(result.line(best.legs[0].line), "Platform");
+            assert!(result.stop(best.legs[0].from).ends_with(" · A02"));
+            assert!(result.stop(best.legs[0].to).ends_with(" · Z02"));
+            assert_eq!((best.origin, best.target, best.walk), (0, 0, 6));
+            // The same named origin with a longer walk misses the new service.
+            config.origins[0].walk = 10;
+            let slow = query_at(bytes, &config, NOW, device);
+            assert!(slow.best(0, NOW).unwrap().arrival > best.arrival);
+            // Accent-insensitive search must not conflate two actual places.
+            config.origins[0].stop = "U".try_into().unwrap();
+            assert!(query_at(bytes, &config, NOW, device).best(0, NOW).is_none());
+        }
+    }
+}
+
+#[test]
+fn same_named_interchange_platforms_connect_without_station_metadata() {
+    for device in [false, true] {
+        for depth in [1, 2] {
+            for (bytes, minutes) in [
+                (
+                    include_bytes!("fixtures/journey-place-transfer.zip").as_slice(),
+                    if depth == 1 { 30 } else { 29 },
+                ),
+                (
+                    include_bytes!("fixtures/journey-place-transfer-forbidden.zip").as_slice(),
+                    if depth == 1 { 35 } else { 29 },
+                ),
+                (
+                    include_bytes!("fixtures/journey-place-transfer-minimum.zip").as_slice(),
+                    if depth == 1 { 35 } else { 29 },
+                ),
+            ] {
+                let result = query_at(bytes, &settings(depth), NOW, device);
+                assert_eq!(result.best(0, NOW).unwrap().arrival, minutes * 60);
+            }
+        }
+    }
+}
+
+#[test]
+fn deeper_search_discovers_middle_ride_on_other_same_name_platforms() {
+    for device in [false, true] {
+        for (depth, arrival) in [(1, 35 * 60), (2, 29 * 60)] {
+            let result = query_at(
+                include_bytes!("fixtures/journey-place-middle.zip"),
+                &settings(depth),
+                NOW,
+                device,
+            );
+            assert_eq!(result.best(0, NOW).unwrap().arrival, arrival);
+        }
+    }
 }

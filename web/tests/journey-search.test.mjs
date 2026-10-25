@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { FeedLoader } from "../feed-loader.js";
 import { searchJourneys } from "../journey-search.js";
+import { stopPlaces, coalesceJourneyStops } from "../stop-places.js";
 import { validateJourney } from "../config.js";
 const NOW=1792216800;
 const config=()=>({origins:[{stop:"A",stop_name:"Maków Polnych",stop_code:"A01",walk:6},{stop:"B",stop_name:"Further stop",stop_code:"B01",walk:12}],targets:[{stop:"Z",stop_name:"Bolechowo-Os./Szkoła",stop_code:"Z01",walk:0}],transfer_minutes:3,max_transfers:1});
@@ -74,5 +75,70 @@ test("a scoped cross-stop link never creates a transfer for unrelated services",
   for(const [name,minutes]of[["matching",30],["unrelated",35]]){
     const result=await searchJourneys(await loader(`journey-scope-link-${name}.zip`),config(),{now:NOW});
     assert.equal(result.paths[0].arrival,NOW+minutes*60,name);
+  }
+});
+
+test("one named endpoint searches every platform and returns one target-place result",async()=>{
+  for(const name of ["journey-places.zip","journey-places-shuffled.zip"]){
+    const feed=await loader(name),c=config();c.origins.length=1;
+    const result=await searchJourneys(feed,c,{now:NOW});
+    assert.equal(result.paths.length,1);
+    assert.equal(result.paths[0].arrival,NOW+22*60);
+    assert.equal(result.paths[0].legs[0].from.id,"A2");
+    assert.equal(result.paths[0].legs[0].to.id,"Z2");
+    c.origins[0].walk=10;
+    assert.ok((await searchJourneys(feed,c,{now:NOW})).paths[0].arrival>NOW+22*60);
+    c.origins[0].stop="U";
+    assert.deepEqual((await searchJourneys(feed,c,{now:NOW})).paths,[]);
+  }
+});
+test("place grouping excludes stations, preserves full names and coalesces old platform selections",async()=>{
+  const feed=await loader("journey-places.zip"),places=stopPlaces(feed.catalog);
+  assert.deepEqual(places.byId.get("A").stops.map(s=>s.id).sort(),["A","A2"]);
+  assert.equal(places.byId.has("AP"),false);
+  assert.notEqual(places.byId.get("A"),places.byId.get("U"));
+  const c=config();c.origins.push({stop:"A2",walk:4});
+  c.targets.push({stop:"Z2",walk:2});
+  assert.equal(coalesceJourneyStops(c,places),true);
+  assert.deepEqual(c.origins.map(s=>[s.stop,s.walk]),[["A",4],["B",12]]);
+  assert.deepEqual(c.targets.map(s=>[s.stop,s.walk]),[["Z",0]]);
+  assert.equal(coalesceJourneyStops(c,places),false);
+  const long="A".repeat(64);
+  const distinct=stopPlaces({stops:[{id:"1",name:long,place_name:long+" north"},{id:"2",name:long,place_name:long+" south"}]});
+  assert.equal(distinct.groups.length,2,"display-label truncation never merges different full feed names");
+  const terminal=stopPlaces({stops:[{id:"A",name:"Start",lat:52.4,lon:16.9}],via_stops:[{id:"Z",name:"Alight only",lat:52.4,lon:16.901}],links:[[0,0,1]]});
+  assert.equal(terminal.byId.has("Z"),true,"drop-off-only platforms remain target choices");
+  assert.equal(terminal.boarding.has("Z"),false);
+  const {walkableStops}=await import("../stop-places.js");
+  assert.deepEqual(walkableStops(terminal,[{stop:"A",walk:6}]),[],"drop-off-only stops are not suggested for boarding");
+});
+
+test("walkable suggestions include all nearby places and the corridor between chosen starts",async()=>{
+  const {walkableStops}=await import("../stop-places.js");
+  const feed=await loader("journey-places.zip"),places=stopPlaces(feed.catalog),c=config();
+  const nearby=walkableStops(places,c.origins);
+  assert.deepEqual(nearby.map(s=>[s.place.stops[0].id,s.walk]),[["Y",11],["W",15]]);
+  const between=walkableStops(places,c.origins,{mode:"between",extraMinutes:20});
+  assert.deepEqual(between.map(s=>s.place.stops[0].id),["Y","W"]);
+  assert.ok(!between.some(s=>s.place.stops.some(p=>p.id==="X")),"off-corridor stops are excluded");
+  assert.deepEqual(walkableStops(places,c.origins.slice(0,1),{mode:"between"}),[]);
+  assert.deepEqual(walkableStops(places,c.origins,{extraMinutes:0}),[]);
+  assert.deepEqual(walkableStops(places,[{stop:"U",walk:0}]),[],"missing coordinates never become zero coordinates");
+  const many=stopPlaces({stops:Array.from({length:32},(_,i)=>({id:String(i),name:String(i),lat:52.4,lon:16.9+i*.00001}))});
+  assert.equal(walkableStops(many,[{stop:"0",walk:6}]).length,31,"all walkable places remain available, beyond a search's 20-result limit");
+});
+
+test("same-name interchange platforms connect without a parent station and retain explicit transfer rules",async()=>{
+  for(const depth of[1,2])for(const[name,minutes]of[["journey-place-transfer.zip",depth===1?30:29],["journey-place-transfer-forbidden.zip",depth===1?35:29],["journey-place-transfer-minimum.zip",depth===1?35:29]]){
+    const result=await searchJourneys(await loader(name),config(),{now:NOW,maxTransfers:depth});
+    assert.equal(result.paths[0].arrival,NOW+minutes*60,name);
+  }
+});
+
+test("deeper exploration finds a middle ride whose platforms do not appear on either endpoint trip",async()=>{
+  const feed=await loader("journey-place-middle.zip");
+  for(const depth of[1,2]){
+    const result=await searchJourneys(feed,config(),{now:NOW,maxTransfers:depth});
+    assert.equal(result.paths[0].arrival,NOW+(depth===1?35:29)*60);
   }
 });

@@ -222,7 +222,7 @@ def audit(frames, stack):
                          if 'journey' in name and 'Search' in name and 'closure' in name
                          and 'drop_in_place' not in name
                          and any(method in name for method in
-                                 ('collect_calls', 'metadata', 'stations', 'publish'))), default=0)
+                                 ('collect_calls', 'metadata', 'stations', 'group_places', 'publish'))), default=0)
             wrappers = sum(max((size for name, size in frames
                                 if all(part in name for part in parts)
                                 and 'drop_in_place' not in name), default=0)

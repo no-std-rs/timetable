@@ -168,3 +168,29 @@ for name,route in [('matching','A'),('unrelated','D')]:
     write_archive(f'journey-scope-link-{name}.zip',{**station,
         'stops.txt':station['stops.txt'].replace('XP,Interchange platform 2,X02,P,0','XP,Interchange platform 2,X02,,0'),
         'transfers.txt':f'from_stop_id,to_stop_id,transfer_type,from_route_id,to_route_id\nX,XP,0,{route},T\n'})
+
+# One place has several platform IDs, unordered rows and spelling whitespace/case
+# differences. Only the other platforms carry the fastest direct service.
+places = {**journey,
+    'stops.txt': journey['stops.txt'] + 'A2,  MAKÓW   POLNYCH  ,A02\nZ2,bolechowo-os./szkoła,Z02\nAP,Maków Polnych,Station\nU,Makow Polnych,U01\n',
+    'routes.txt': journey['routes.txt'] + 'P,Platform,3\n',
+    'trips.txt': journey['trips.txt'] + 'P,ALL,p\n',
+    'stop_times.txt': journey['stop_times.txt'] + journey_calls([('p','08:09:00','A2',1),('p','08:22:00','Z2',2)]).split('\n',1)[1],
+}
+# A station row must not become a boarding endpoint; lack of accents is a
+# different name, even though accent-insensitive search can find both.
+places['stops.txt'] = 'stop_id,stop_name,stop_code,location_type\n' + ''.join(row + (',1\n' if row.startswith('AP,') else ',0\n') for row in places['stops.txt'].splitlines()[1:])
+coords = {'A': (52.4, 16.9), 'A2': (52.4, 16.9001), 'B': (52.4, 16.92), 'Z': (52.5, 16.95), 'Z2': (52.5, 16.9501), 'W': (52.4, 16.91), 'X': (52.41, 16.91), 'Y': (52.4, 16.905)}
+places['stops.txt'] = places['stops.txt'].splitlines()[0]+',stop_lat,stop_lon\n'+''.join(row+','+','.join(map(str,coords.get(row.split(',')[0], ('',''))))+'\n' for row in places['stops.txt'].splitlines()[1:])
+write_archive('journey-places.zip',places)
+write_archive('journey-places-shuffled.zip',{**places,'stops.txt': places['stops.txt'].split('\n',1)[0]+'\n'+'\n'.join(places['stops.txt'].splitlines()[1:][::-1])+'\n'})
+
+# Interchanges are also single named places when the feed has no parent_station.
+same_place = {**station, 'stops.txt': station['stops.txt'].replace('Interchange platform 1,X01,P,0', 'Interchange,X01,,0').replace('Interchange platform 2,X02,P,0','  INTERCHANGE  ,X02,,0')}
+write_archive('journey-place-transfer.zip',same_place)
+write_archive('journey-place-transfer-forbidden.zip',{**same_place,'transfers.txt':'from_stop_id,to_stop_id,transfer_type\nX,XP,3\n'})
+write_archive('journey-place-transfer-minimum.zip',{**same_place,'transfers.txt':'from_stop_id,to_stop_id,transfer_type,min_transfer_time\nX,XP,2,240\n'})
+
+write_archive('journey-place-middle.zip',{**journey,
+    'stops.txt': journey['stops.txt']+'XP,INTERCHANGE,X02\nYP,Second interchange,Y02\n',
+    'stop_times.txt': journey_calls([('a','08:07:00','A',1),('a','08:17:00','X',2),('d','08:15:00','B',1),('d','08:35:00','Z',2),('m','08:20:00','XP',1),('m','08:25:00','YP',2),('f','08:28:00','Y',1),('f','08:29:00','Z',2)])})

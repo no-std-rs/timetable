@@ -66,7 +66,7 @@ impl Cache {
             at += bytes.len();
             Ok(())
         };
-        put(b"TTJNY001")?;
+        put(b"TTJNY002")?;
         put(&self.epoch.to_le_bytes())?;
         put(&self.until.to_le_bytes())?;
         put(&[0, 0, self.paths.len() as u8, 0])?;
@@ -101,7 +101,7 @@ impl Cache {
             at += len;
             Ok(bytes)
         };
-        if take(8)? != b"TTJNY001" {
+        if take(8)? != b"TTJNY002" {
             return Err(invalid);
         }
         let epoch = i64::from_le_bytes(take(8)?.try_into().unwrap());
@@ -266,6 +266,7 @@ pub struct Search<
     stops: Vec<Id<32>, STOPS>,
     stop_lookup: Vec<u16, STOPS>,
     parents: [u16; STOPS],
+    places: [u16; STOPS],
     routes: Vec<Id<32>, ROUTES>,
     middle_calls: Vec<Call, MIDDLE>,
     rules: Vec<Rule, 128>,
@@ -275,8 +276,9 @@ pub struct Search<
     epochs: [i64; 3],
     now: i64,
     manifest: Option<zip::Manifest>,
-    origin_ids: [u16; 4],
-    target_ids: [u16; 4],
+    // One bit per origin (low nibble) and target (high nibble). Platforms
+    // share an endpoint without consuming additional configured-stop slots.
+    endpoints: [u8; STOPS],
 }
 pub type Planner = Search<MAX_CALLS, MAX_STOPS, MAX_TRIPS, ID_BYTES, 2048, 64, 64>;
 pub type DevicePlanner = Search<1024, 128, 256, 4096, 128, 16, 32>;
@@ -298,6 +300,7 @@ impl<
             stops: Vec::new(),
             stop_lookup: Vec::new(),
             parents: [NONE; STOPS],
+            places: [NONE; STOPS],
             routes: Vec::new(),
             middle_calls: Vec::new(),
             rules: Vec::new(),
@@ -307,8 +310,7 @@ impl<
             epochs: [0; 3],
             now: 0,
             manifest: None,
-            origin_ids: [NONE; 4],
-            target_ids: [NONE; 4],
+            endpoints: [0; STOPS],
         }
     }
     fn id(&self, trip: usize) -> &str {
@@ -391,6 +393,22 @@ impl<
             .map_err(|_| Error::IndexFull)?;
         Ok((self.stops.len() - 1) as u16)
     }
+    fn endpoint_name(&mut self, name: &str) -> Result<(usize, usize), Error> {
+        let start = self.ids.len();
+        for c in place_chars(name) {
+            if c.is_control() {
+                return Err(Error::InvalidField("journey stop name"));
+            }
+            let mut bytes = [0; 4];
+            self.ids
+                .extend_from_slice(c.encode_utf8(&mut bytes).as_bytes())
+                .map_err(|_| Error::IndexFull)?;
+        }
+        if start == self.ids.len() {
+            return Err(Error::InvalidField("empty journey stop name"));
+        }
+        Ok((start, self.ids.len()))
+    }
     fn route(&mut self, id: &str) -> Result<u8, Error> {
         if let Some(i) = self.routes.iter().position(|r| r.as_str() == id) {
             return Ok(i as u8);
@@ -434,7 +452,10 @@ impl<
         if let Some(rule) = rule {
             return (!rule.forbidden).then_some(rule.seconds.max(u16::from(slack) * 60));
         }
-        (from == to || from_parent != NONE && from_parent == to_parent)
+        (from == to
+            || from_parent != NONE && from_parent == to_parent
+            || self.places[from as usize] != NONE
+                && self.places[from as usize] == self.places[to as usize])
             .then_some(u16::from(slack) * 60)
     }
     async fn stations(
@@ -489,6 +510,76 @@ impl<
             return Err(Error::InvalidField("unknown parent_station"));
         }
         Ok(())
+    }
+    async fn group_places(
+        &mut self,
+        source: &mut impl Tables,
+        workspace: &mut zip::Workspace,
+        expand: bool,
+    ) -> Result<(), Error> {
+        let manifest = self.manifest;
+        let ids_end = self.ids.len();
+        self.stop_lookup.clear();
+        for _ in 0..self.stops.len() {
+            self.stop_lookup.push(NONE).map_err(|_| Error::IndexFull)?;
+        }
+        // The unused tail of the trip-ID arena holds exact names temporarily;
+        // the stop lookup is also idle in this phase. Neither adds a RAM arena.
+        source
+            .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
+                let stop = row.stop()?;
+                if stop.location_type != 0 {
+                    return Ok(());
+                }
+                let Some(index) = self.stop_index(stop.id) else {
+                    return Ok(());
+                };
+                let name = stop.name.unwrap_or(stop.id);
+                if let Some(previous) = self.named_place(name) {
+                    self.places[index as usize] = self.places[previous];
+                    self.stop_lookup[index as usize] = self.stop_lookup[previous];
+                } else {
+                    let (start, _) = self.endpoint_name(name)?;
+                    self.ids.push(0).map_err(|_| Error::IndexFull)?;
+                    self.stop_lookup[index as usize] =
+                        u16::try_from(start).map_err(|_| Error::IndexFull)?;
+                    self.places[index as usize] = index;
+                }
+                Ok(())
+            })
+            .await?;
+        if expand {
+            source
+                .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
+                    let stop = row.stop()?;
+                    if stop.location_type == 0
+                        && let Some(previous) = self.named_place(stop.name.unwrap_or(stop.id))
+                    {
+                        let place = self.places[previous];
+                        let index = self.stop(stop.id)?;
+                        self.places[index as usize] = place;
+                    }
+                    Ok(())
+                })
+                .await?;
+        }
+        self.ids.truncate(ids_end);
+        self.stop_lookup.clear();
+        Ok(())
+    }
+    fn named_place(&self, name: &str) -> Option<usize> {
+        self.stop_lookup.iter().position(|&offset| {
+            if offset == NONE {
+                return false;
+            }
+            let bytes = &self.ids[offset as usize..];
+            let end = bytes
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(bytes.len());
+            core::str::from_utf8(&bytes[..end])
+                .is_ok_and(|stored| place_chars(name).eq(stored.chars()))
+        })
     }
     fn join(&self, a: Ride, b: Ride, slack: u8) -> bool {
         (a.trip != b.trip || a.day & !CONDITIONAL != b.day & !CONDITIONAL)
@@ -549,9 +640,9 @@ impl<
                 return Err(Error::InvalidField("stop_sequence or stop times"));
             }
         }
-        for first in first_rides(calls, &self.origin_ids, config) {
+        for first in first_rides(calls, &self.endpoints, config) {
             for target in 0..config.targets.len() {
-                if first.to == self.target_ids[target] {
+                if self.endpoints[first.to as usize] & (1 << (target + 4)) != 0 {
                     Self::candidate(
                         &mut self.candidates,
                         Candidate {
@@ -565,7 +656,7 @@ impl<
                 }
             }
             if config.max_transfers != 0 {
-                for last in last_rides(calls, &self.target_ids, config) {
+                for last in last_rides(calls, &self.endpoints, config) {
                     if self.join(first, last, config.transfer_minutes) {
                         Self::candidate(
                             &mut self.candidates,
@@ -736,6 +827,7 @@ impl<
         self.ids.clear();
         self.stops.clear();
         self.parents.fill(NONE);
+        self.places.fill(NONE);
         self.routes.clear();
         calls.clear();
         self.middle_calls.clear();
@@ -755,14 +847,10 @@ impl<
                 .service_epoch(self.dates[day])
                 .ok_or(Error::InvalidDate)?;
         }
-        self.origin_ids.fill(NONE);
-        self.target_ids.fill(NONE);
-        for (i, s) in config.origins.iter().enumerate() {
-            self.origin_ids[i] = self.stop(&s.stop)?;
-        }
-        for (i, s) in config.targets.iter().enumerate() {
-            self.target_ids[i] = self.stop(&s.stop)?;
-        }
+        self.endpoints.fill(0);
+        // Trip IDs are not loaded yet: reuse their existing byte arena for the
+        // full normalized endpoint names, rather than retaining another buffer.
+        let mut names = [(0usize, 0usize); 8];
         let mut found_origins = 0u8;
         let mut found_targets = 0u8;
         let manifest = source
@@ -775,11 +863,23 @@ impl<
                         let stop = row.stop()?;
                         for (i, s) in config.origins.iter().enumerate() {
                             if stop.id == s.stop {
+                                if found_origins & (1 << i) != 0 || stop.location_type != 0 {
+                                    return Err(Error::InvalidField(
+                                        "duplicate or non-boarding journey stop",
+                                    ));
+                                }
+                                names[i] = self.endpoint_name(stop.name.unwrap_or(stop.id))?;
                                 found_origins |= 1 << i;
                             }
                         }
                         for (i, s) in config.targets.iter().enumerate() {
                             if stop.id == s.stop {
+                                if found_targets & (1 << i) != 0 || stop.location_type != 0 {
+                                    return Err(Error::InvalidField(
+                                        "duplicate or non-boarding journey stop",
+                                    ));
+                                }
+                                names[i + 4] = self.endpoint_name(stop.name.unwrap_or(stop.id))?;
                                 found_targets |= 1 << i;
                             }
                         }
@@ -830,10 +930,39 @@ impl<
         self.manifest = Some(manifest);
         let manifest = self.manifest;
         source
+            .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
+                let stop = row.stop()?;
+                if stop.location_type != 0 {
+                    return Ok(());
+                }
+                let mut members = 0;
+                for (i, &(start, end)) in names.iter().enumerate() {
+                    if start != end
+                        && place_chars(stop.name.unwrap_or(stop.id)).eq(core::str::from_utf8(
+                            &self.ids[start..end],
+                        )
+                        .map_err(|_| Error::InvalidField("journey stop name"))?
+                        .chars())
+                    {
+                        members |= 1 << i;
+                    }
+                }
+                if members != 0 {
+                    let index = self.stop(stop.id)?;
+                    self.endpoints[index as usize] = members;
+                }
+                Ok(())
+            })
+            .await?;
+        self.ids.clear();
+        self.index_stops();
+        source
             .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
                 let stop = row.required(C::StopId)?;
-                let kind = u8::from(config.origins.iter().any(|s| s.stop == stop))
-                    | (u8::from(config.targets.iter().any(|s| s.stop == stop)) * 2);
+                let members = self
+                    .indexed_stop(stop)
+                    .map_or(0, |i| self.endpoints[i as usize]);
+                let kind = u8::from(members & 15 != 0) | (u8::from(members & 240 != 0) * 2);
                 if kind == 0 {
                     return Ok(());
                 }
@@ -911,20 +1040,25 @@ impl<
                 })
                 .await?;
         }
+        if config.max_transfers != 0 {
+            self.group_places(source, workspace, false).await?;
+        }
         self.endpoint_paths(calls, config)?;
         if config.max_transfers == 2 {
             self.stations(source, workspace, true).await?;
+            self.group_places(source, workspace, true).await?;
+            // Same-name expansion can introduce platforms in other declared
+            // stations. Preserve their parent-specific transfer restrictions.
+            self.stations(source, workspace, false).await?;
         }
         if config.max_transfers == 2
-            && first_rides(calls, &self.origin_ids, config)
-                .next()
-                .is_some()
-            && last_rides(calls, &self.target_ids, config).next().is_some()
+            && first_rides(calls, &self.endpoints, config).next().is_some()
+            && last_rides(calls, &self.endpoints, config).next().is_some()
         {
             self.index_stops();
             let mut ready = [None::<u16>; STOPS];
             for (stop, value) in ready.iter_mut().enumerate().take(self.stops.len()) {
-                *value = first_rides(calls, &self.origin_ids, config)
+                *value = first_rides(calls, &self.endpoints, config)
                     .filter_map(|a| {
                         self.transfer(a.to, stop as u16, config.transfer_minutes)
                             .and_then(|s| a.arrival.checked_add(s))
@@ -985,11 +1119,11 @@ impl<
                         endpoint: 0,
                         day: ride_day(board, alight),
                     };
-                    for first in first_rides(calls, &self.origin_ids, config) {
+                    for first in first_rides(calls, &self.endpoints, config) {
                         if !self.join(first, middle, config.transfer_minutes) {
                             continue;
                         }
-                        for last in last_rides(calls, &self.target_ids, config) {
+                        for last in last_rides(calls, &self.endpoints, config) {
                             if self.join(middle, last, config.transfer_minutes) {
                                 Self::candidate(
                                     &mut self.candidates,
@@ -1051,7 +1185,24 @@ impl<
                             if names[i] != u8::MAX {
                                 return Err(Error::InvalidField("duplicate stop_id"));
                             }
-                            let name = bounded_label::<64>(stop.name.unwrap_or(stop.id));
+                            let mut name = bounded_label::<64>(stop.name.unwrap_or(stop.id));
+                            let members = self.endpoints[used_stops[i] as usize];
+                            let place = self.places[used_stops[i] as usize];
+                            let grouped = members != 0
+                                && self.endpoints.iter().filter(|&&m| m & members != 0).count() > 1
+                                || place != NONE
+                                    && self.places.iter().filter(|&&p| p == place).count() > 1;
+                            if grouped && let Some(code) = stop.code.filter(|code| !code.is_empty())
+                            {
+                                // Reserve room for the actual platform without changing the
+                                // one-place endpoint or the fixed shared label arena.
+                                let code = bounded_label::<16>(code);
+                                while name.len() + " · ".len() + code.len() > 64 {
+                                    name.pop();
+                                }
+                                let _ = name.push_str(" · ");
+                                let _ = name.push_str(&code);
+                            }
                             if name.is_empty() {
                                 return Err(Error::InvalidField("empty journey stop name"));
                             }
@@ -1147,9 +1298,9 @@ fn ride_day(board: Call, alight: Call) -> u8 {
             0
         }
 }
-fn first_rides<'a>(
+fn first_rides<'a, const S: usize>(
     calls: &'a [Call],
-    origins: &'a [u16; 4],
+    endpoints: &'a [u8; S],
     config: &'a Journey,
 ) -> impl Iterator<Item = Ride> + 'a {
     calls.iter().enumerate().flat_map(move |(i, board)| {
@@ -1159,7 +1310,7 @@ fn first_rides<'a>(
             .enumerate()
             .filter(move |(origin, s)| {
                 board.flags & 1 != 0
-                    && board.stop == origins[*origin]
+                    && endpoints[board.stop as usize] & (1 << origin) != 0
                     && board.departure >= u16::from(s.walk) * 60
             })
             .flat_map(move |(origin, _)| {
@@ -1179,9 +1330,9 @@ fn first_rides<'a>(
             })
     })
 }
-fn last_rides<'a>(
+fn last_rides<'a, const S: usize>(
     calls: &'a [Call],
-    targets: &'a [u16; 4],
+    endpoints: &'a [u8; S],
     config: &'a Journey,
 ) -> impl Iterator<Item = Ride> + 'a {
     calls
@@ -1195,7 +1346,9 @@ fn last_rides<'a>(
                 .filter(|alight| alight.flags & 2 != 0)
                 .flat_map(move |alight| {
                     (0..config.targets.len())
-                        .filter(move |&target| alight.stop == targets[target])
+                        .filter(move |&target| {
+                            endpoints[alight.stop as usize] & (1 << (target + 4)) != 0
+                        })
                         .map(move |target| Ride {
                             trip: board.trip,
                             from: board.stop,
@@ -1207,4 +1360,15 @@ fn last_rides<'a>(
                         })
                 })
         })
+}
+
+// Identity retains accents; search may be accent-insensitive. Match the browser
+// place key without allocating, truncating names or assuming feed row order.
+fn place_chars(value: &str) -> impl Iterator<Item = char> + '_ {
+    value.split_whitespace().enumerate().flat_map(|(i, word)| {
+        (i != 0)
+            .then_some(' ')
+            .into_iter()
+            .chain(word.chars().flat_map(char::to_lowercase))
+    })
 }
