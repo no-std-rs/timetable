@@ -3,7 +3,10 @@ use timetable_display::{
     clock,
     config::Journey,
     feed::Tables,
-    journey::{Cache, DevicePlanner, Planner},
+    journey::{
+        Cache, DevicePlanner, HORIZON, LEG_REQUEST_BOARD, LIMIT_TRANSFERS, LIMIT_WINDOW, Planner,
+        Search,
+    },
 };
 const NOW: i64 = 1792216800; // 2026-10-17 08:00 Europe/Warsaw.
 struct Source<'a>(&'a [u8]);
@@ -238,7 +241,7 @@ fn snapshot_preserves_future_connections_and_rejects_invalid_references() {
     let mut old = bytes;
     old[..8].copy_from_slice(b"TTJNY001");
     assert!(Cache::decode(&old[..len], &config, &planned.labels).is_err());
-    bytes[38] = 255; // First leg's line label.
+    bytes[48] = 255; // First leg's line label, after the 38-byte header and path row.
     assert!(Cache::decode(&bytes[..len], &config, &planned.labels).is_err());
     assert!(Cache::decode(&bytes[..len - 1], &config, &planned.labels).is_err());
 }
@@ -273,6 +276,45 @@ fn dwell_calls_can_cross_both_search_window_boundaries() {
     }
 }
 #[test]
+fn request_stops_are_ordinary_boarding_and_alighting_marked_on_the_leg() {
+    use timetable_display::journey::{LEG_REQUEST_ALIGHT, LEG_REQUEST_BOARD};
+    for device in [false, true] {
+        // Poznań marks request stops ("na żądanie") as pickup/drop-off type 3;
+        // type 2 needs an arrangement. Both are planned and marked.
+        let board = query_at(
+            include_bytes!("fixtures/journey-conditional.zip"),
+            &settings(1),
+            NOW,
+            device,
+        );
+        let best = board.best(0, NOW).unwrap();
+        assert_eq!(best.arrival, 30 * 60);
+        assert_eq!(best.legs[0].flags, LEG_REQUEST_BOARD);
+        let alight = query_at(
+            include_bytes!("fixtures/journey-conditional-alight.zip"),
+            &settings(1),
+            NOW,
+            device,
+        );
+        let best = alight.best(0, NOW).unwrap();
+        assert_eq!(best.arrival, 30 * 60);
+        assert_eq!(best.legs[best.len as usize - 1].flags, LEG_REQUEST_ALIGHT);
+        let plain = query_at(
+            include_bytes!("fixtures/journey.zip"),
+            &settings(1),
+            NOW,
+            device,
+        );
+        assert!(
+            plain
+                .paths
+                .iter()
+                .all(|p| p.legs.iter().all(|l| l.flags == 0))
+        );
+    }
+}
+
+#[test]
 fn relevant_unsupported_rules_fail_explicitly_but_remote_rules_do_not() {
     assert_eq!(
         query(
@@ -295,8 +337,6 @@ fn relevant_unsupported_rules_fail_explicitly_but_remote_rules_do_not() {
         30 * 60
     );
     for bytes in [
-        include_bytes!("fixtures/journey-conditional.zip").as_slice(),
-        include_bytes!("fixtures/journey-conditional-alight.zip").as_slice(),
         include_bytes!("fixtures/journey-scoped-rule.zip").as_slice(),
         include_bytes!("fixtures/journey-inseat-rule.zip").as_slice(),
     ] {
@@ -610,4 +650,210 @@ fn overlapping_place_halos_use_one_partition_for_every_endpoint_and_interchange(
             35 * 60
         );
     }
+}
+
+fn city(depth: u8) -> Journey {
+    let json = format!(
+        r#"{{"origins":[{{"stop":"A-1","walk":6}},{{"stop":"B-1","walk":12}}],"targets":[{{"stop":"Z-1","walk":0}},{{"stop":"W-1","walk":2}}],"transfer_minutes":3,"max_transfers":{depth}}}"#
+    );
+    serde_json_core::from_slice_escaped(json.as_bytes(), &mut [0; 256])
+        .unwrap()
+        .0
+}
+fn planned_with<
+    P: core::ops::DerefMut<Target = Search<C, S, T, M, V, R>>,
+    const C: usize,
+    const S: usize,
+    const T: usize,
+    const M: usize,
+    const V: usize,
+    const R: usize,
+>(
+    mut planner: P,
+    bytes: &[u8],
+    config: &Journey,
+) -> Planned {
+    let mut labels = timetable_display::model::Headings::default();
+    let mut cache = Cache::default();
+    cache.reset(NOW);
+    futures::executor::block_on(planner.query(
+        &mut Source(bytes),
+        &mut zip::Workspace::new(),
+        config,
+        clock::Zone::WARSAW,
+        NOW,
+        7,
+        0,
+        &mut cache,
+        &mut labels,
+        None,
+    ))
+    .unwrap();
+    Planned { cache, labels }
+}
+fn date() -> gtfs::Date {
+    "20261017".parse().unwrap()
+}
+fn assert_nondominated(cache: &Cache) {
+    for a in &cache.paths {
+        for b in &cache.paths {
+            if a != b {
+                let dominates = a.leave >= b.leave
+                    && a.arrival <= b.arrival
+                    && (a.arrival < b.arrival || (a.len, a.walk) <= (b.len, b.walk));
+                assert!(!dominates, "{a:?} dominates {b:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn esp32_plans_a_dense_city_with_request_stops_without_shortening() {
+    // Inactive weekday trips, ~140 platforms and thousands of calls exceeded the
+    // former device bounds. Only places both sides can use are now stored.
+    let bytes = include_bytes!("fixtures/journey-city.zip");
+    let android = query_at(bytes, &city(1), NOW, false);
+    let esp = query_at(bytes, &city(1), NOW, true);
+    for result in [&android, &esp] {
+        assert_eq!(
+            (result.windows[0], result.limits[0]),
+            (HORIZON as u16, 0),
+            "complete six-hour profile"
+        );
+        let best = result.best(0, NOW).unwrap();
+        assert_eq!(
+            (best.arrival, best.len, best.origin, best.target, best.walk),
+            (35 * 60, 1, 1, 1, 12)
+        );
+        assert_eq!(result.line(best.legs[0].line), "348");
+        // Missing it: walk to Maków Polnych, request the 911, change at Kresowa.
+        let then = result.next_after(0, NOW, best).unwrap();
+        assert_eq!(
+            (then.leave, then.arrival, then.len, then.origin),
+            (3 * 60, 35 * 60, 2, 0)
+        );
+        assert_eq!(result.line(then.legs[0].line), "911");
+        assert_eq!(then.legs[0].flags, LEG_REQUEST_BOARD);
+        assert!(result.stop(then.legs[0].to).starts_with("Kresowa"));
+        assert_eq!(result.best(0, NOW + 2 * 60), Some(then));
+        assert_nondominated(result);
+    }
+    assert_eq!(android.paths, esp.paths);
+}
+
+#[test]
+fn any_target_counts_so_continuing_past_an_earlier_target_is_never_kept() {
+    let mut config = settings(2);
+    let mut target = config.targets[0].clone();
+    target.stop = "W".try_into().unwrap();
+    config.targets.push(target).unwrap();
+    for device in [false, true] {
+        let result = query_at(include_bytes!("fixtures/journey.zip"), &config, NOW, device);
+        assert_nondominated(&result);
+        // The 08:15 direct bus reaches W at 08:27 and Z at 08:35; only W remains.
+        assert!(
+            !result
+                .paths
+                .iter()
+                .any(|p| p.legs[p.len as usize - 1].departure == 15 * 60 && p.target == 0)
+        );
+        assert!(
+            result
+                .paths
+                .iter()
+                .any(|p| p.target == 1 && p.arrival == 27 * 60)
+        );
+    }
+}
+
+#[test]
+fn a_full_store_shortens_the_window_and_stays_exact_before_its_end() {
+    let bytes = include_bytes!("fixtures/journey-city.zip");
+    let full = query(bytes, &city(1));
+    let short = planned_with(
+        Box::new(Search::<300, 128, 512, 128, 64, 32>::new(date())),
+        bytes,
+        &city(1),
+    );
+    let window = short.windows[0];
+    assert_ne!(short.limits[0] & LIMIT_WINDOW, 0);
+    assert!((3600..HORIZON as u16).contains(&window), "{window}");
+    assert!(short.paths.iter().all(|p| p.arrival <= window));
+    for minute in (0..i64::from(window) / 60).step_by(3) {
+        let at = NOW + minute * 60;
+        match full.best(0, at) {
+            Some(best) if best.arrival <= window => {
+                assert_eq!(short.best(0, at).map(|p| p.arrival), Some(best.arrival));
+            }
+            _ => assert!(short.best(0, at).is_none(), "{minute}"),
+        }
+    }
+}
+
+#[test]
+fn transfer_places_that_do_not_fit_keep_exact_direct_journeys() {
+    let bytes = include_bytes!("fixtures/journey-city.zip");
+    let direct = planned_with(
+        Box::new(Search::<
+            { timetable_display::journey::DEVICE_CALLS },
+            12,
+            512,
+            128,
+            64,
+            32,
+        >::new(date())),
+        bytes,
+        &city(1),
+    );
+    assert_ne!(direct.limits[0] & LIMIT_TRANSFERS, 0);
+    assert!(direct.paths.iter().all(|p| p.len == 1));
+    assert_eq!(direct.best(0, NOW).unwrap().arrival, 35 * 60);
+    // Without the 911 change, the next direct 348 leaves at 08:21.
+    let later = direct.best(0, NOW + 2 * 60).unwrap();
+    assert_eq!((later.leave, later.arrival), (21 * 60, 55 * 60));
+}
+
+#[test]
+fn two_transfer_search_reports_its_limit_and_keeps_one_transfer_results() {
+    let bytes = include_bytes!("fixtures/journey-city.zip");
+    for device in [false, true] {
+        let deep = query_at(bytes, &city(2), NOW, device);
+        let one = query_at(bytes, &city(1), NOW, device);
+        // Every change place of this dense city does not fit the bounded
+        // middle-ride store: the search says so instead of failing.
+        assert_eq!(deep.limits[0], LIMIT_TRANSFERS);
+        assert_eq!(deep.paths, one.paths);
+    }
+}
+
+#[test]
+fn snapshot_keeps_windows_limits_and_request_stops() {
+    let bytes = include_bytes!("fixtures/journey-city.zip");
+    let short = planned_with(
+        Box::new(Search::<300, 128, 512, 128, 64, 32>::new(date())),
+        bytes,
+        &city(1),
+    );
+    let mut config = timetable_display::Config::empty();
+    config
+        .groups
+        .push(timetable_display::config::Group {
+            name: "School".try_into().unwrap(),
+            picks: Default::default(),
+            days: 127,
+            start: 0,
+            end: 0,
+            journey: Some(city(1)),
+        })
+        .unwrap();
+    let mut encoded = [0; 4096];
+    let len = short.encode(&mut encoded).unwrap();
+    let restored = Cache::decode(&encoded[..len], &config, &short.labels).unwrap();
+    assert_eq!(restored.paths, short.paths);
+    assert_eq!(
+        (restored.windows, restored.limits),
+        (short.windows, short.limits)
+    );
+    assert!(restored.paths.iter().any(|p| p.legs[0].flags != 0));
+    assert_eq!(restored.until_for(0), NOW + i64::from(short.windows[0]));
 }

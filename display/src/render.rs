@@ -32,6 +32,7 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
     width: i32,
     height: i32,
 ) -> Result<(), D::Error> {
+    use crate::journey::{LEG_REQUEST_ALIGHT, LEG_REQUEST_BOARD, LIMIT_TRANSFERS, LIMIT_WINDOW};
     let profile = catalog.profile();
     let group = &config.groups[app.group];
     let center = width / 2;
@@ -45,26 +46,34 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
         INK,
         true,
     )?;
+    let limits = app.journeys.limits_for(app.group);
     let status = match app.status {
         Status::Capacity => "SEARCH LIMIT / TAP RETRY",
         Status::Failed => "SEARCH FAILED / RETRY",
         Status::Offline => "OFFLINE / TAP RETRY",
         Status::Loading | Status::Connecting | Status::Syncing => "CALCULATING ON DEVICE",
+        _ if limits & LIMIT_TRANSFERS != 0 => "FEWER TRANSFERS / LIMIT",
+        _ if limits & LIMIT_WINDOW != 0 => "SHORTER SEARCH / LIMIT",
         _ => "SCHEDULED JOURNEY",
     };
     label_with_profile(profile, d, &short(status, chars), center, 32, MUTED, true)?;
     let Some(now) = app.clock else {
         return label_with_profile(profile, d, "Waiting for clock", center, 80, MUTED, true);
     };
+    let zone = profile.zone();
+    let until = app.journeys.until_for(app.group);
+    let mut value = String::<96>::new();
     let Some(path) = app.journeys.best(app.group, now) else {
         let message = if app.loaded_at.is_none() {
             "Waiting for route data"
         } else if matches!(app.status, Status::Failed | Status::Capacity) {
             "Search incomplete"
-        } else if now > app.journeys.until {
+        } else if now > until {
             "Refresh route data"
         } else {
-            "No reachable journey"
+            // Journeys leaving later may arrive after the planned window.
+            let _ = write!(value, "No journey before {}", departure_time(until, zone));
+            &value
         };
         label_with_profile(profile, d, &short(message, chars), center, 78, INK, true)?;
         return label_with_profile(
@@ -77,8 +86,6 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
             true,
         );
     };
-    let zone = profile.zone();
-    let mut value = String::<96>::new();
     if let Some(arrival) = zone.local(app.journeys.epoch + i64::from(path.arrival)) {
         let _ = write!(
             value,
@@ -98,6 +105,7 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
     );
     label_with_profile(profile, d, &short(&value, chars), center, 68, CHILLI, true)?;
     let step = if height < 200 { 22 } else { 40 };
+    let mut request = false;
     for (i, leg) in path.legs[..path.len as usize].iter().enumerate() {
         value.clear();
         if let (Some(departure), Some(arrival)) = (
@@ -128,11 +136,16 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
             let wait = (u32::from(leg.departure) - u32::from(path.legs[i - 1].arrival)) / 60;
             let _ = write!(value, "{wait}m change / ");
         }
+        // A star marks a request stop: signal the driver to board or alight.
+        let star = |flag| if leg.flags & flag != 0 { "*" } else { "" };
+        request |= leg.flags != 0;
         let _ = write!(
             value,
-            "{} > {}",
+            "{}{} > {}{}",
             app.headsigns.get(leg.from).unwrap_or("?"),
-            app.headsigns.get(leg.to).unwrap_or("?")
+            star(LEG_REQUEST_BOARD),
+            app.headsigns.get(leg.to).unwrap_or("?"),
+            star(LEG_REQUEST_ALIGHT)
         );
         label_with_profile(
             profile,
@@ -144,8 +157,29 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
             true,
         )?;
     }
+    // The following connection, when the screen has a free row for it.
+    let then = 92 + i32::from(path.len) * step;
+    if then + 12 <= height - 28
+        && let Some(next) = app.journeys.next_after(app.group, now, path)
+    {
+        value.clear();
+        let _ = write!(
+            value,
+            "Then {} > {}",
+            departure_time(app.journeys.epoch + i64::from(next.leave), zone),
+            departure_time(app.journeys.epoch + i64::from(next.arrival), zone)
+        );
+        label_with_profile(profile, d, &short(&value, chars), center, then, MUTED, true)?;
+    }
     value.clear();
-    let _ = write!(value, "{} transfer(s) / search complete", path.len - 1);
+    let _ = write!(value, "{} transfer(s) / ", path.len - 1);
+    if request {
+        let _ = value.push_str("* request stop");
+    } else if limits & LIMIT_WINDOW != 0 {
+        let _ = write!(value, "planned to {}", departure_time(until, zone));
+    } else {
+        let _ = value.push_str("search complete");
+    }
     label_with_profile(
         profile,
         d,

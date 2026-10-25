@@ -1,24 +1,44 @@
 //! Exact, bounded timetable journeys: access walk, up to three rides, egress walk.
-//! The device builds a departure/arrival profile for a six-hour window. Rendering
+//! The device builds a departure/arrival profile for up to six hours. Rendering
 //! only selects among that profile; it never asks a routing service for a path.
+//!
+//! Storage holds only calls that can matter: first the calls at the chosen
+//! places, then calls at places that both a ride from a start and a ride towards
+//! a target pass. If that still does not fit, the window ends earlier and the
+//! profile records its actual end; a shortened profile is never presented as a
+//! complete six-hour search.
 use crate::{clock, config::Journey, feed::Tables};
-use gtfs::{Date, Error, Id, Table, csv::Column as C, zip};
+use gtfs::{Date, Error, Id, StopTime, Table, csv::Column as C, zip};
 use heapless::{String, Vec};
 
 pub const HORIZON: i64 = 6 * 3600;
 pub const MAX_PATHS: usize = 64;
-const MAX_TRIPS: usize = 1024;
-const ID_BYTES: usize = 16384;
-const MAX_CALLS: usize = 2048;
-const MAX_STOPS: usize = 384;
+const GROUPS: usize = crate::config::MAX_GROUPS;
+/// A shorter profile would not reliably cover the next connection.
+const MIN_WINDOW: u16 = 3600;
 const NONE: u16 = u16::MAX;
-const CONDITIONAL: u8 = 0x80;
+const UNREADY: u16 = 0x7fff;
+const FINISH: u16 = 0x8000;
+/// Ride.day keeps the service day in its low bits and request stops above.
+const DAY: u8 = 0x03;
+const REQUEST_BOARD: u8 = 0x80;
+const REQUEST_ALIGHT: u8 = 0x40;
+/// Leg flags: the rider has to signal the driver or arrange the stop.
+pub const LEG_REQUEST_BOARD: u8 = 1;
+pub const LEG_REQUEST_ALIGHT: u8 = 2;
+/// Group limits: the window ended early to fit, or fewer transfers were searched.
+pub const LIMIT_WINDOW: u8 = 1;
+pub const LIMIT_TRANSFERS: u8 = 2;
+/// Firmware reuses the departure parser's 16 KiB ID arena for this many calls.
+pub const DEVICE_CALLS: usize = 1170;
+const ANDROID_CALLS: usize = 3072;
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Leg {
     pub line: u8,
     pub from: u8,
     pub to: u8,
+    pub flags: u8,
     pub departure: u16,
     pub arrival: u16,
 }
@@ -39,22 +59,40 @@ pub struct Path {
 pub struct Cache {
     pub epoch: i64,
     pub until: i64,
+    /// Seconds after epoch for which each group's profile is complete.
+    pub windows: [u16; GROUPS],
+    pub limits: [u8; GROUPS],
     pub paths: Vec<Path, MAX_PATHS>,
 }
 impl Cache {
     pub fn reset(&mut self, now: i64) {
         self.epoch = now;
         self.until = now + HORIZON;
+        self.windows = [HORIZON as u16; GROUPS];
+        self.limits = [0; GROUPS];
         self.paths.clear();
     }
+    /// End of the complete profile for one group.
+    pub fn until_for(&self, group: usize) -> i64 {
+        self.windows
+            .get(group)
+            .map_or(self.until, |&w| self.until.min(self.epoch + i64::from(w)))
+    }
+    pub fn limits_for(&self, group: usize) -> u8 {
+        self.limits.get(group).copied().unwrap_or(0)
+    }
     pub fn best(&self, group: usize, now: i64) -> Option<&Path> {
-        if now < self.epoch || now > self.until {
+        if now < self.epoch || now > self.until_for(group) {
             return None;
         }
         self.paths
             .iter()
             .filter(|p| p.group as usize == group && self.epoch + i64::from(p.leave) >= now)
             .min_by_key(|p| (p.arrival, p.len, p.walk, core::cmp::Reverse(p.leave)))
+    }
+    /// What to take after missing `after`: the best connection leaving later.
+    pub fn next_after(&self, group: usize, now: i64, after: &Path) -> Option<&Path> {
+        self.best(group, now.max(self.epoch + i64::from(after.leave) + 1))
     }
     pub fn encode(&self, output: &mut [u8]) -> Result<usize, &'static str> {
         let mut at = 0;
@@ -66,10 +104,14 @@ impl Cache {
             at += bytes.len();
             Ok(())
         };
-        put(b"TTJNY002")?;
+        put(b"TTJNY003")?;
         put(&self.epoch.to_le_bytes())?;
         put(&self.until.to_le_bytes())?;
-        put(&[0, 0, self.paths.len() as u8, 0])?;
+        for window in self.windows {
+            put(&window.to_le_bytes())?;
+        }
+        put(&self.limits)?;
+        put(&[self.paths.len() as u8, 0])?;
         for path in &self.paths {
             put(&[
                 path.group,
@@ -82,7 +124,7 @@ impl Cache {
             put(&path.leave.to_le_bytes())?;
             put(&path.arrival.to_le_bytes())?;
             for leg in path.legs {
-                put(&[leg.line, leg.from, leg.to, 0])?;
+                put(&[leg.line, leg.from, leg.to, leg.flags])?;
                 put(&leg.departure.to_le_bytes())?;
                 put(&leg.arrival.to_le_bytes())?;
             }
@@ -101,7 +143,7 @@ impl Cache {
             at += len;
             Ok(bytes)
         };
-        if take(8)? != b"TTJNY002" {
+        if take(8)? != b"TTJNY003" {
             return Err(invalid);
         }
         let epoch = i64::from_le_bytes(take(8)?.try_into().unwrap());
@@ -109,16 +151,25 @@ impl Cache {
         if !clock::valid_utc(epoch) || until.checked_sub(epoch) != Some(HORIZON) {
             return Err(invalid);
         }
-        let counts = take(4)?;
-        if counts[3] != 0 {
-            return Err(invalid);
-        }
         let mut cache = Self::default();
         cache.reset(epoch);
-        if counts[0] != 0 || counts[1] != 0 {
+        for window in &mut cache.windows {
+            *window = u16::from_le_bytes(take(2)?.try_into().unwrap());
+            if i64::from(*window) > HORIZON {
+                return Err(invalid);
+            }
+        }
+        cache.limits.copy_from_slice(take(GROUPS)?);
+        let counts = take(2)?;
+        if counts[1] != 0
+            || cache
+                .limits
+                .iter()
+                .any(|&l| l & !(LIMIT_WINDOW | LIMIT_TRANSFERS) != 0)
+        {
             return Err(invalid);
         }
-        for _ in 0..counts[2] {
+        for _ in 0..counts[0] {
             let row = take(10)?;
             let mut path = Path {
                 group: row[0],
@@ -142,7 +193,7 @@ impl Cache {
                 || path.egress != target.walk
                 || path.len == 0
                 || path.len > journey.max_transfers + 1
-                || path.arrival > HORIZON as u16
+                || path.arrival > cache.windows[path.group as usize]
                 || path.leave > path.arrival
             {
                 return Err(invalid);
@@ -153,10 +204,13 @@ impl Cache {
                     line: leg[0],
                     from: leg[1],
                     to: leg[2],
+                    flags: leg[3],
                     departure: u16::from_le_bytes(leg[4..6].try_into().unwrap()),
                     arrival: u16::from_le_bytes(leg[6..8].try_into().unwrap()),
                 };
-                if leg[3] != 0 {
+                if leg[3] & !(LEG_REQUEST_BOARD | LEG_REQUEST_ALIGHT) != 0
+                    || i >= path.len as usize && leg[3] != 0
+                {
                     return Err(invalid);
                 }
                 if i < path.len as usize
@@ -192,10 +246,23 @@ impl Cache {
     }
 }
 
+/// Trips, routes and services are identified by a 64-bit FNV-1a key instead of
+/// their ID text. GTFS IDs are unique in trips.txt, routes.txt and calendar.txt,
+/// so a colliding stored key appears as a duplicate there and fails visibly.
+fn key(bytes: &[u8]) -> [u32; 2] {
+    fold(0xcbf2_9ce4_8422_2325, bytes)
+}
+fn fold(mut hash: u64, bytes: &[u8]) -> [u32; 2] {
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    [hash as u32, (hash >> 32) as u32]
+}
+
 #[derive(Clone, Copy)]
 struct Trip {
-    offset: u16,
-    length: u8,
+    key: [u32; 2],
     kind: u8,
     active: u8,
     route: u8,
@@ -230,7 +297,7 @@ struct Rule {
     forbidden: bool,
 }
 struct Service {
-    id: Id<32>,
+    key: [u32; 2],
     active: u8,
     removed: u8,
 }
@@ -249,98 +316,206 @@ impl Candidate {
         1 + u8::from(self.middle.is_some()) + u8::from(self.last.is_some())
     }
 }
+/// Fixed-size place identity: a declared station, a stop ID, or a normalized
+/// name at a quantized position. Names compare by key; positions exactly.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PlaceKey {
+    tag: u8,
+    hash: [u32; 2],
+    lat: i32,
+    lon: i32,
+}
+const NO_PLACE: PlaceKey = PlaceKey {
+    tag: 0,
+    hash: [0; 2],
+    lat: 0,
+    lon: 0,
+};
+
+/// Four Bloom sets of two probes each: stops and places reached after boarding
+/// at a start (side 0), and stops and places where a ride towards a target can
+/// be boarded (side 1). False positives only keep extra candidate stops.
+const FILTER: usize = 2560;
+const SET_BITS: usize = FILTER * 2;
+const STOP_SIDES: usize = 0;
+const PLACE_SIDES: usize = 2;
+// FNV-1a mixes low bits weakly for short numeric IDs; finish with fmix64.
+fn probes(set: usize, value: [u32; 2]) -> [usize; 2] {
+    let mut h = u64::from(value[0]) | (u64::from(value[1]) << 32);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    h ^= h >> 33;
+    [h as u32, (h >> 32) as u32].map(|half| set * SET_BITS + half as usize % SET_BITS)
+}
+fn contains(filter: &[u8; FILTER], set: usize, value: [u32; 2]) -> bool {
+    probes(set, value)
+        .iter()
+        .all(|&bit| filter[bit / 8] & (1 << (bit % 8)) != 0)
+}
+fn insert(filter: &mut [u8; FILTER], set: usize, value: [u32; 2]) {
+    for bit in probes(set, value) {
+        filter[bit / 8] |= 1 << (bit % 8);
+    }
+}
+fn sides(filter: &[u8; FILTER], base: usize, value: [u32; 2]) -> u8 {
+    u8::from(contains(filter, base, value)) | (u8::from(contains(filter, base + 1, value)) * 2)
+}
+fn insert_sides(filter: &mut [u8; FILTER], base: usize, value: [u32; 2], bits: u8) {
+    for side in 0..2 {
+        if bits & (1 << side) != 0 {
+            insert(filter, base + side, value);
+        }
+    }
+}
+
+/// One region holds whichever transient index the current phase needs.
+#[allow(clippy::large_enum_variant)] // Deliberate allocation-free reuse.
+enum Scratch<const STOPS: usize, const MIDDLE: usize> {
+    Idle,
+    Keys(Vec<PlaceKey, STOPS>),
+    Filter([u8; FILTER]),
+    Middle(Vec<Call, MIDDLE>),
+}
+impl<const STOPS: usize, const MIDDLE: usize> Scratch<STOPS, MIDDLE> {
+    fn keys(&mut self) -> &mut Vec<PlaceKey, STOPS> {
+        if !matches!(self, Self::Keys(_)) {
+            *self = Self::Keys(Vec::new());
+        }
+        match self {
+            Self::Keys(keys) => keys,
+            _ => unreachable!(),
+        }
+    }
+    fn filter(&mut self) -> &mut [u8; FILTER] {
+        if !matches!(self, Self::Filter(_)) {
+            *self = Self::Filter([0; FILTER]);
+        }
+        match self {
+            Self::Filter(filter) => filter,
+            _ => unreachable!(),
+        }
+    }
+    fn middle(&mut self) -> &mut Vec<Call, MIDDLE> {
+        if !matches!(self, Self::Middle(_)) {
+            *self = Self::Middle(Vec::new());
+        }
+        match self {
+            Self::Middle(calls) => calls,
+            _ => unreachable!(),
+        }
+    }
+}
 
 /// All transient indexes are caller-owned, allocation-free and reused per group.
 pub struct Search<
     const CALLS: usize,
     const STOPS: usize,
     const TRIPS: usize,
-    const IDS: usize,
     const MIDDLE: usize,
     const SERVICES: usize,
     const ROUTES: usize,
 > {
     trips: Vec<Trip, TRIPS>,
-    ids: Vec<u8, IDS>,
+    /// Trip indexes sorted by key.
     lookup: Vec<u16, TRIPS>,
     stops: Vec<Id<32>, STOPS>,
     stop_lookup: Vec<u16, STOPS>,
     parents: [u16; STOPS],
     places: [u16; STOPS],
-    routes: Vec<Id<32>, ROUTES>,
-    middle_calls: Vec<Call, MIDDLE>,
+    routes: Vec<[u32; 2], ROUTES>,
+    scratch: Scratch<STOPS, MIDDLE>,
     rules: Vec<Rule, 128>,
     services: Vec<Service, SERVICES>,
     candidates: Vec<Candidate, MAX_PATHS>,
     dates: [Date; 3],
     epochs: [i64; 3],
     now: i64,
+    /// Seconds after `now` that the profile covers; shrinks only to fit.
+    horizon: u16,
+    limits: u8,
+    /// Calls before this index are at chosen places, sorted by trip instance.
+    endpoint_len: usize,
     manifest: Option<zip::Manifest>,
     // One bit per origin (low nibble) and target (high nibble). Platforms
     // share an endpoint without consuming additional configured-stop slots.
     endpoints: [u8; STOPS],
 }
-pub type Planner = Search<MAX_CALLS, MAX_STOPS, MAX_TRIPS, ID_BYTES, 2048, 64, 64>;
-pub type DevicePlanner = Search<1024, 128, 256, 4096, 128, 16, 32>;
+pub type Planner = Search<ANDROID_CALLS, 512, 1536, 1024, 256, 256>;
+pub type DevicePlanner = Search<DEVICE_CALLS, 128, 512, 128, 64, 32>;
 impl<
     const CALLS: usize,
     const STOPS: usize,
     const TRIPS: usize,
-    const IDS: usize,
     const MIDDLE: usize,
     const SERVICES: usize,
     const ROUTES: usize,
-> Search<CALLS, STOPS, TRIPS, IDS, MIDDLE, SERVICES, ROUTES>
+> Search<CALLS, STOPS, TRIPS, MIDDLE, SERVICES, ROUTES>
 {
+    const STOPS_FIT: () = assert!(STOPS <= 1024 && TRIPS < NONE as usize);
     pub fn new(today: Date) -> Self {
+        let () = Self::STOPS_FIT;
         Self {
             trips: Vec::new(),
-            ids: Vec::new(),
             lookup: Vec::new(),
             stops: Vec::new(),
             stop_lookup: Vec::new(),
             parents: [NONE; STOPS],
             places: [NONE; STOPS],
             routes: Vec::new(),
-            middle_calls: Vec::new(),
+            scratch: Scratch::Idle,
             rules: Vec::new(),
             services: Vec::new(),
             candidates: Vec::new(),
             dates: [today; 3],
             epochs: [0; 3],
             now: 0,
+            horizon: HORIZON as u16,
+            limits: 0,
+            endpoint_len: 0,
             manifest: None,
             endpoints: [0; STOPS],
         }
     }
-    fn id(&self, trip: usize) -> &str {
-        let t = self.trips[trip];
-        core::str::from_utf8(&self.ids[t.offset as usize..t.offset as usize + t.length as usize])
-            .unwrap()
+    fn find_trip(&self, id: &str) -> Option<usize> {
+        let k = key(id.as_bytes());
+        self.lookup
+            .binary_search_by(|&i| self.trips[i as usize].key.cmp(&k))
+            .ok()
+            .map(|i| self.lookup[i] as usize)
     }
-    fn trip(&mut self, id: &str, kind: u8) -> Result<u16, Error> {
-        if let Some(i) = (0..self.trips.len()).find(|&i| self.id(i) == id) {
-            self.trips[i].kind |= kind;
-            return Ok(i as u16);
+    /// Returns None when the trip table is full.
+    fn intern(&mut self, id: &str, kind: u8) -> Result<Option<u16>, Error> {
+        if id.is_empty() {
+            return Err(Error::InvalidField("trip_id"));
         }
-        if id.is_empty() || id.len() > 255 {
-            return Err(Error::IdTooLong);
+        let k = key(id.as_bytes());
+        match self
+            .lookup
+            .binary_search_by(|&i| self.trips[i as usize].key.cmp(&k))
+        {
+            Ok(at) => {
+                let i = self.lookup[at];
+                self.trips[i as usize].kind |= kind;
+                Ok(Some(i))
+            }
+            Err(at) => {
+                let i = self.trips.len() as u16;
+                let trip = Trip {
+                    key: k,
+                    kind,
+                    active: 0,
+                    route: 0,
+                    seen: false,
+                };
+                if self.trips.push(trip).is_err() {
+                    return Ok(None);
+                }
+                self.lookup.insert(at, i).map_err(|_| Error::IndexFull)?;
+                Ok(Some(i))
+            }
         }
-        let offset = self.ids.len() as u16;
-        self.ids
-            .extend_from_slice(id.as_bytes())
-            .map_err(|_| Error::IndexFull)?;
-        self.trips
-            .push(Trip {
-                offset,
-                length: id.len() as u8,
-                kind,
-                active: 0,
-                route: 0,
-                seen: false,
-            })
-            .map_err(|_| Error::IndexFull)?;
-        Ok((self.trips.len() - 1) as u16)
     }
     fn index_trips(&mut self) {
         self.lookup.clear();
@@ -348,20 +523,7 @@ impl<
             self.lookup.push(i as u16).unwrap();
         }
         let trips = &self.trips;
-        let ids = &self.ids;
-        self.lookup.sort_unstable_by(|&a, &b| {
-            let bytes = |i: u16| {
-                let t = trips[i as usize];
-                &ids[t.offset as usize..t.offset as usize + t.length as usize]
-            };
-            bytes(a).cmp(bytes(b))
-        });
-    }
-    fn find_trip(&self, id: &str) -> Option<usize> {
-        self.lookup
-            .binary_search_by(|&i| self.id(i as usize).cmp(id))
-            .ok()
-            .map(|i| self.lookup[i] as usize)
+        self.lookup.sort_unstable_by_key(|&i| trips[i as usize].key);
     }
     fn index_stops(&mut self) {
         self.stop_lookup.clear();
@@ -393,59 +555,28 @@ impl<
             .map_err(|_| Error::IndexFull)?;
         Ok((self.stops.len() - 1) as u16)
     }
-    fn endpoint_key(&mut self, stop: gtfs::Stop<'_>) -> Result<(usize, usize), Error> {
-        let start = self.ids.len();
-        if let Some(parent) = stop.parent_station {
-            self.ids.push(b'P').map_err(|_| Error::IndexFull)?;
-            self.ids
-                .extend_from_slice(parent.as_bytes())
-                .map_err(|_| Error::IndexFull)?;
-        } else if let Some((lat, lon)) = coordinates(stop) {
-            self.ids.push(b'N').map_err(|_| Error::IndexFull)?;
-            for bytes in [lat.to_le_bytes(), lon.to_le_bytes()] {
-                self.ids
-                    .extend_from_slice(&bytes)
-                    .map_err(|_| Error::IndexFull)?;
-            }
-            let before = self.ids.len();
-            for c in place_chars(stop.name.unwrap_or(stop.id)) {
-                if c.is_control() {
-                    return Err(Error::InvalidField("journey stop name"));
-                }
-                let mut bytes = [0; 4];
-                self.ids
-                    .extend_from_slice(c.encode_utf8(&mut bytes).as_bytes())
-                    .map_err(|_| Error::IndexFull)?;
-            }
-            if before == self.ids.len() {
-                return Err(Error::InvalidField("empty journey stop name"));
-            }
-        } else {
-            // Without a station or position, equal text cannot establish that
-            // two platforms are the same physical place.
-            self.ids.push(b'I').map_err(|_| Error::IndexFull)?;
-            self.ids
-                .extend_from_slice(stop.id.as_bytes())
-                .map_err(|_| Error::IndexFull)?;
-        }
-        Ok((start, self.ids.len()))
+    fn truncate_stops(&mut self, len: usize) {
+        self.stops.truncate(len);
+        self.parents[len..].fill(NONE);
+        self.places[len..].fill(NONE);
+        self.endpoints[len..].fill(0);
     }
     fn route(&mut self, id: &str) -> Result<u8, Error> {
-        if let Some(i) = self.routes.iter().position(|r| r.as_str() == id) {
+        let k = key(id.as_bytes());
+        if let Some(i) = self.routes.iter().position(|&r| r == k) {
             return Ok(i as u8);
         }
-        self.routes
-            .push(Id::new(id)?)
-            .map_err(|_| Error::IndexFull)?;
+        self.routes.push(k).map_err(|_| Error::IndexFull)?;
         Ok((self.routes.len() - 1) as u8)
     }
     fn service(&mut self, id: &str) -> Result<&mut Service, Error> {
-        let i = if let Some(i) = self.services.iter().position(|s| s.id.as_str() == id) {
+        let k = key(id.as_bytes());
+        let i = if let Some(i) = self.services.iter().position(|s| s.key == k) {
             i
         } else {
             self.services
                 .push(Service {
-                    id: Id::new(id)?,
+                    key: k,
                     active: 0,
                     removed: 0,
                 })
@@ -456,7 +587,126 @@ impl<
     }
     fn offset(&self, time: Option<gtfs::Time>, day: usize) -> Option<u16> {
         let at = self.epochs[day].checked_add(i64::from(time?.seconds()))? - self.now;
-        (0..=HORIZON).contains(&at).then_some(at as u16)
+        (0..=i64::from(self.horizon))
+            .contains(&at)
+            .then_some(at as u16)
+    }
+    /// In-window times and boarding flags for one service day. A dwell can
+    /// straddle either boundary; only the in-window timestamp grants boarding
+    /// or alighting, and clamping never invents it.
+    fn window(&self, call: &StopTime<'_>, day: usize) -> Result<Option<(u16, u16, u8)>, Error> {
+        let (Some(arrival), Some(departure)) = (call.arrival, call.departure) else {
+            return Ok(None);
+        };
+        let arrival = self.epochs[day] + i64::from(arrival.seconds()) - self.now;
+        let departure = self.epochs[day] + i64::from(departure.seconds()) - self.now;
+        if arrival > departure {
+            return Err(Error::InvalidTime);
+        }
+        let horizon = i64::from(self.horizon);
+        if departure < 0 || arrival > horizon {
+            return Ok(None);
+        }
+        let board = (0..=horizon).contains(&departure);
+        let alight = (0..=horizon).contains(&arrival);
+        let flags = u8::from(board && call.pickup_type != 1)
+            | (u8::from(alight && call.drop_off_type != 1) * 2)
+            | (u8::from(call.pickup_type >= 2) * 4)
+            | (u8::from(call.drop_off_type >= 2) * 8);
+        Ok(Some((
+            arrival.clamp(0, horizon) as u16,
+            departure.clamp(0, horizon) as u16,
+            flags,
+        )))
+    }
+    /// Stores one in-window call, ending the window earlier when full.
+    #[allow(clippy::too_many_arguments)]
+    fn push<const N: usize>(
+        &mut self,
+        calls: &mut Vec<Call, N>,
+        call: &StopTime<'_>,
+        trip: u16,
+        stop: u16,
+        day: usize,
+    ) -> Result<(), Error> {
+        loop {
+            let Some((arrival, departure, flags)) = self.window(call, day)? else {
+                return Ok(());
+            };
+            let value = Call {
+                sequence: call.sequence,
+                trip,
+                stop,
+                arrival,
+                departure,
+                day: day as u8,
+                flags,
+            };
+            if calls.push(value).is_ok() {
+                return Ok(());
+            }
+            self.shrink(calls, false)?;
+        }
+    }
+    /// End the window a quarter earlier. Every connection that arrives by the
+    /// new end uses only retained calls, so the shorter profile stays exact.
+    fn shrink<const N: usize>(
+        &mut self,
+        calls: &mut Vec<Call, N>,
+        trips: bool,
+    ) -> Result<(), Error> {
+        let horizon = self.horizon - self.horizon / 4;
+        if horizon < MIN_WINDOW {
+            return Err(Error::IndexFull);
+        }
+        self.horizon = horizon;
+        self.limits |= LIMIT_WINDOW;
+        let endpoint_len = self.endpoint_len;
+        let mut index = 0;
+        let mut kept = 0;
+        calls.retain_mut(|c| {
+            let keep = c.arrival <= horizon;
+            if keep && c.departure > horizon {
+                c.departure = horizon;
+                c.flags &= !1;
+            }
+            kept += usize::from(keep && index < endpoint_len);
+            index += 1;
+            keep
+        });
+        self.endpoint_len = kept;
+        self.candidates
+            .retain(|c| u32::from(c.end().arrival) <= u32::from(horizon));
+        if trips {
+            self.compact_trips(calls);
+        }
+        Ok(())
+    }
+    /// Drop trips without retained calls, renumbering calls in place.
+    fn compact_trips<const N: usize>(&mut self, calls: &mut Vec<Call, N>) {
+        for t in &mut self.trips {
+            t.seen = false;
+        }
+        for c in calls.iter() {
+            self.trips[c.trip as usize].seen = true;
+        }
+        self.lookup.clear();
+        let mut next = 0;
+        for i in 0..self.trips.len() {
+            if self.trips[i].seen {
+                self.trips[next] = self.trips[i];
+                self.trips[next].seen = false;
+                self.lookup.push(next as u16).unwrap();
+                next += 1;
+            } else {
+                self.lookup.push(NONE).unwrap();
+            }
+        }
+        for c in calls.iter_mut() {
+            c.trip = self.lookup[c.trip as usize];
+        }
+        self.trips.truncate(next);
+        self.index_trips();
     }
     // The user's minimum applies even to GTFS timed transfers. A guarantee
     // never grants permission to waive their chosen change-time margin.
@@ -498,7 +748,7 @@ impl<
                 Ok(())
             })
             .await?;
-        let mut seen = [0u8; 48];
+        let mut seen = [0u8; 128];
         source
             .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
                 let stop = row.stop()?;
@@ -538,21 +788,21 @@ impl<
         workspace: &mut zip::Workspace,
     ) -> Result<(), Error> {
         let manifest = self.manifest;
-        let ids_end = self.ids.len();
-        self.stop_lookup.clear();
+        let keys = self.scratch.keys();
+        keys.clear();
         for _ in 0..self.stops.len() {
-            self.stop_lookup.push(NONE).map_err(|_| Error::IndexFull)?;
+            keys.push(NO_PLACE).map_err(|_| Error::IndexFull)?;
         }
-        // Store exact keys in the idle trip-ID tail. Collect the whole relevant
-        // name/station cohort, including distant homonyms, before partitioning:
-        // choosing only a selected anchor's halo would give different groups.
+        // Collect the whole relevant name/station cohort, including distant
+        // homonyms, before partitioning: choosing only a selected anchor's
+        // halo would give different groups.
         source
             .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
                 let stop = row.stop()?;
                 if stop.location_type == 0
                     && let Some(i) = self.stop_index(stop.id)
                 {
-                    self.store_place_key(i, stop)?;
+                    self.scratch.keys()[i as usize] = place_key(stop)?;
                 }
                 Ok(())
             })
@@ -563,115 +813,116 @@ impl<
                 if stop.location_type != 0 {
                     return Ok(());
                 }
-                if self.stop_index(stop.id).is_some_and(|i| {
-                    self.stop_lookup
-                        .get(i as usize)
-                        .is_some_and(|&offset| offset != NONE)
-                }) {
+                if self
+                    .stop_index(stop.id)
+                    .is_some_and(|i| self.scratch.keys()[i as usize] != NO_PLACE)
+                {
                     return Ok(());
                 }
-                if self
-                    .stop_lookup
-                    .iter()
-                    .any(|&offset| offset != NONE && same_cohort(self.place_key(offset), stop))
-                {
+                let cohort = Cohort::of(stop);
+                if self.scratch.keys().iter().any(|&k| cohort.contains(k)) {
                     let i = self.stop(stop.id)?;
-                    while self.stop_lookup.len() < self.stops.len() {
-                        self.stop_lookup.push(NONE).map_err(|_| Error::IndexFull)?;
+                    let key = place_key(stop)?;
+                    let keys = self.scratch.keys();
+                    while keys.len() < i as usize + 1 {
+                        keys.push(NO_PLACE).map_err(|_| Error::IndexFull)?;
                     }
-                    self.store_place_key(i, stop)?;
+                    keys[i as usize] = key;
                 }
                 Ok(())
             })
             .await?;
         self.places.fill(NONE);
+        let Scratch::Keys(keys) = &self.scratch else {
+            unreachable!()
+        };
         // Byte-order stop IDs define the same greedy representatives on every
         // platform, independently of file order and which endpoints were chosen.
         while let Some(i) = (0..self.stops.len())
-            .filter(|&i| self.stop_lookup[i] != NONE && self.places[i] == NONE)
+            .filter(|&i| keys[i] != NO_PLACE && self.places[i] == NONE)
             .min_by(|&a, &b| self.stops[a].cmp(&self.stops[b]))
         {
             let representative = (0..self.stops.len())
-                .filter(|&j| {
-                    self.places[j] == j as u16
-                        && same_place_keys(
-                            self.place_key(self.stop_lookup[i]),
-                            self.place_key(self.stop_lookup[j]),
-                        )
-                })
+                .filter(|&j| self.places[j] == j as u16 && same_place_keys(keys[i], keys[j]))
                 .min_by(|&a, &b| self.stops[a].cmp(&self.stops[b]));
             self.places[i] = representative.unwrap_or(i) as u16;
         }
-        self.ids.truncate(ids_end);
-        self.stop_lookup.clear();
+        self.scratch = Scratch::Idle;
         Ok(())
-    }
-    fn store_place_key(&mut self, index: u16, stop: gtfs::Stop<'_>) -> Result<(), Error> {
-        let offset = self.ids.len();
-        self.ids
-            .extend_from_slice(&[0, 0])
-            .map_err(|_| Error::IndexFull)?;
-        let (start, end) = self.endpoint_key(stop)?;
-        let length = u16::try_from(end - start).map_err(|_| Error::IndexFull)?;
-        self.ids[offset..offset + 2].copy_from_slice(&length.to_le_bytes());
-        self.stop_lookup[index as usize] = u16::try_from(offset).map_err(|_| Error::IndexFull)?;
-        Ok(())
-    }
-    fn place_key(&self, offset: u16) -> &[u8] {
-        let at = offset as usize;
-        let length = u16::from_le_bytes(self.ids[at..at + 2].try_into().unwrap()) as usize;
-        &self.ids[at + 2..at + 2 + length]
     }
     fn join(&self, a: Ride, b: Ride, slack: u8) -> bool {
-        (a.trip != b.trip || a.day & !CONDITIONAL != b.day & !CONDITIONAL)
+        (a.trip != b.trip || a.day & DAY != b.day & DAY)
             && self.transfer(a.to, b.from, slack).is_some_and(|seconds| {
                 u32::from(a.arrival) + u32::from(seconds) <= u32::from(b.departure)
             })
     }
+    /// Keeps nondominated connections. Any configured target counts as arrival:
+    /// a later departure that arrives no later is better, whatever the target.
     fn candidate(
         candidates: &mut Vec<Candidate, MAX_PATHS>,
+        horizon: &mut u16,
+        limits: &mut u8,
         c: Candidate,
         config: &Journey,
     ) -> Result<(), Error> {
-        let walk = u16::from(config.origins[c.first.endpoint as usize].walk) * 60;
-        let egress = u16::from(config.targets[c.target as usize].walk) * 60;
-        let Some(leave) = c.first.departure.checked_sub(walk) else {
+        let score = |c: Candidate| {
+            let walk = u16::from(config.origins[c.first.endpoint as usize].walk) * 60;
+            let egress = u32::from(config.targets[c.target as usize].walk) * 60;
+            (
+                c.first.departure.checked_sub(walk),
+                u32::from(c.end().arrival) + egress,
+                (c.len(), walk),
+            )
+        };
+        let (Some(leave), arrive, rank) = score(c) else {
             return Ok(());
         };
-        let arrival = u32::from(c.end().arrival) + u32::from(egress);
-        if arrival > HORIZON as u32 {
+        if arrive > u32::from(*horizon) {
             return Ok(());
         }
-        if [Some(c.first), c.middle, c.last]
-            .into_iter()
-            .flatten()
-            .any(|ride| ride.day & CONDITIONAL != 0)
+        let dominates = |a: Candidate, (leave, arrive, rank): (u16, u32, (u8, u16))| {
+            let (a_leave, a_arrive, a_rank) = score(a);
+            a_leave.is_some_and(|l| l >= leave)
+                && a_arrive <= arrive
+                && (a_arrive < arrive || a_rank <= rank)
+        };
+        if candidates
+            .iter()
+            .any(|&old| dominates(old, (leave, arrive, rank)))
         {
-            return Err(Error::InvalidField(
-                "conditional journey boarding or alighting is unsupported",
-            ));
-        }
-        let dominates = |a: Candidate, b: Candidate| {
-            let a_walk = u16::from(config.origins[a.first.endpoint as usize].walk) * 60;
-            let b_walk = u16::from(config.origins[b.first.endpoint as usize].walk) * 60;
-            let a_arrive =
-                u32::from(a.end().arrival) + u32::from(config.targets[a.target as usize].walk) * 60;
-            let b_arrive =
-                u32::from(b.end().arrival) + u32::from(config.targets[b.target as usize].walk) * 60;
-            a.target == b.target
-                && a.first.departure.saturating_sub(a_walk)
-                    >= b.first.departure.saturating_sub(b_walk)
-                && a_arrive <= b_arrive
-                && (a_arrive < b_arrive || (a.len(), a_walk) <= (b.len(), b_walk))
-        };
-        if candidates.iter().any(|&old| dominates(old, c)) {
             return Ok(());
         }
-        candidates.retain(|&old| !dominates(c, old));
-        let _ = (leave, arrival);
+        candidates.retain(|&old| {
+            let (l, a, r) = score(old);
+            !dominates(c, (l.unwrap_or(0), a, r))
+        });
+        while candidates.is_full() {
+            // Keep the earliest arrivals; the profile ends before the latest.
+            let latest = candidates
+                .iter()
+                .map(|&old| score(old).1)
+                .chain([arrive])
+                .max()
+                .unwrap();
+            let end = u16::try_from(latest.saturating_sub(1)).unwrap_or(u16::MAX);
+            if end < MIN_WINDOW {
+                return Err(Error::IndexFull);
+            }
+            *horizon = end;
+            *limits |= LIMIT_WINDOW;
+            candidates.retain(|&old| score(old).1 <= u32::from(end));
+            if arrive > u32::from(end) {
+                return Ok(());
+            }
+        }
         candidates.push(c).map_err(|_| Error::IndexFull)
     }
-    fn endpoint_paths(&mut self, calls: &mut [Call], config: &Journey) -> Result<(), Error> {
+    fn endpoint_paths(
+        &mut self,
+        calls: &mut [Call],
+        config: &Journey,
+        depth: u8,
+    ) -> Result<(), Error> {
         calls.sort_unstable_by_key(|c| (c.trip, c.day, c.sequence));
         for pair in calls.windows(2) {
             if pair[0].trip == pair[1].trip
@@ -686,6 +937,8 @@ impl<
                 if self.endpoints[first.to as usize] & (1 << (target + 4)) != 0 {
                     Self::candidate(
                         &mut self.candidates,
+                        &mut self.horizon,
+                        &mut self.limits,
                         Candidate {
                             first,
                             middle: None,
@@ -696,11 +949,13 @@ impl<
                     )?;
                 }
             }
-            if config.max_transfers != 0 {
+            if depth != 0 {
                 for last in last_rides(calls, &self.endpoints, config) {
                     if self.join(first, last, config.transfer_minutes) {
                         Self::candidate(
                             &mut self.candidates,
+                            &mut self.horizon,
+                            &mut self.limits,
                             Candidate {
                                 first,
                                 middle: None,
@@ -719,22 +974,25 @@ impl<
         &mut self,
         source: &mut impl Tables,
         workspace: &mut zip::Workspace,
-        first: usize,
     ) -> Result<(), Error> {
-        self.index_trips();
+        for t in &mut self.trips {
+            t.seen = false;
+            t.active = 0;
+        }
         let manifest = self.manifest;
         source
             .scan(&[Table::Trips], manifest.as_ref(), workspace, |row| {
                 let id = row.required(C::TripId)?;
-                if let Some(i) = self.find_trip(id).filter(|&i| i >= first) {
+                if let Some(i) = self.find_trip(id) {
                     if self.trips[i].seen {
                         return Err(Error::DuplicateTrip);
                     }
                     let trip = row.trip()?;
+                    let service = key(trip.service_id.as_bytes());
                     let active = self
                         .services
                         .iter()
-                        .find(|s| s.id.as_str() == trip.service_id)
+                        .find(|s| s.key == service)
                         .map_or(0, |s| s.active);
                     let route = self.route(trip.route_id)?;
                     self.trips[i].active = active;
@@ -744,87 +1002,323 @@ impl<
                 Ok(())
             })
             .await?;
-        if self.trips[first..].iter().any(|t| !t.seen) {
+        if self.trips.iter().any(|t| !t.seen) {
             return Err(Error::InvalidField("unknown trip_id"));
         }
         Ok(())
     }
-    async fn collect_calls<const N: usize>(
+    /// Pass 1: every in-window call at a chosen place. Service days are not
+    /// known yet, so inactive trips are dropped after the trips table.
+    async fn endpoint_calls<const N: usize>(
         &mut self,
         source: &mut impl Tables,
         workspace: &mut zip::Workspace,
-        middle: bool,
+        mask: u8,
         calls: &mut Vec<Call, N>,
     ) -> Result<(), Error> {
-        if middle {
-            self.middle_calls.clear();
-        } else {
-            calls.clear();
-        }
+        self.index_stops();
         let manifest = self.manifest;
         source
             .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
-                let id = row.required(C::TripId)?;
-                let Some(i) = self.find_trip(id).filter(|&i| {
-                    self.trips[i].active != 0 && (!middle || self.trips[i].kind & 4 != 0)
-                }) else {
+                let Some(stop) = self.indexed_stop(row.required(C::StopId)?) else {
+                    return Ok(());
+                };
+                let members = self.endpoints[stop as usize];
+                if members == 0 {
+                    return Ok(());
+                }
+                let call = row.stop_time()?;
+                for day in 0..3 {
+                    if mask & (1 << day) == 0 {
+                        continue;
+                    }
+                    let Some((_, _, flags)) = self.window(&call, day)? else {
+                        continue;
+                    };
+                    let kind = u8::from(flags & 1 != 0 && members & 15 != 0)
+                        | (u8::from(flags & 2 != 0 && members & 240 != 0) * 2);
+                    let trip = loop {
+                        if let Some(trip) = self.intern(call.trip_id, kind)? {
+                            break trip;
+                        }
+                        self.shrink(calls, true)?;
+                    };
+                    self.push(calls, &call, trip, stop, day)?;
+                }
+                Ok(())
+            })
+            .await?;
+        self.endpoint_len = calls.len();
+        Ok(())
+    }
+    /// Keeps active endpoint calls of trips that can start or finish a ride.
+    fn keep_active<const N: usize>(&mut self, calls: &mut Vec<Call, N>) {
+        calls.retain(|c| self.trips[c.trip as usize].active & (1 << c.day) != 0);
+        for t in &mut self.trips {
+            t.kind = 0;
+        }
+        for c in calls.iter() {
+            let members = self.endpoints[c.stop as usize];
+            self.trips[c.trip as usize].kind |= u8::from(c.flags & 1 != 0 && members & 15 != 0)
+                | (u8::from(c.flags & 2 != 0 && members & 240 != 0) * 2);
+        }
+        calls.retain(|c| self.trips[c.trip as usize].kind != 0);
+        calls.sort_unstable_by_key(|c| (c.trip, c.day, c.sequence));
+        self.endpoint_len = calls.len();
+    }
+    /// Rides of one trip instance may continue after its first boarding at a
+    /// start and lead to its last arrival at a target.
+    fn bounds(&self, endpoint: &[Call], trip: u16, day: u8) -> (Option<u32>, Option<u32>) {
+        let start = endpoint.partition_point(|c| (c.trip, c.day) < (trip, day));
+        let (mut board, mut alight) = (None::<u32>, None::<u32>);
+        for c in endpoint[start..]
+            .iter()
+            .take_while(|c| (c.trip, c.day) == (trip, day))
+        {
+            let (sequence, members) = (c.sequence, self.endpoints[c.stop as usize]);
+            if c.flags & 1 != 0 && members & 15 != 0 {
+                board = Some(board.map_or(sequence, |b| b.min(sequence)));
+            }
+            if c.flags & 2 != 0 && members & 240 != 0 {
+                alight = Some(alight.map_or(sequence, |a| a.max(sequence)));
+            }
+        }
+        (board, alight)
+    }
+    /// Pass 2 and two stop scans: find places that a ride from a start reaches
+    /// and a ride towards a target serves, then index only their stops.
+    async fn transfer_stops(
+        &mut self,
+        source: &mut impl Tables,
+        workspace: &mut zip::Workspace,
+        mask: u8,
+        calls: &[Call],
+        depth: u8,
+    ) -> Result<u8, Error> {
+        let manifest = self.manifest;
+        let endpoint = &calls[..self.endpoint_len];
+        self.scratch.filter();
+        source
+            .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
+                let Some(trip) = self.find_trip(row.required(C::TripId)?) else {
                     return Ok(());
                 };
                 let call = row.stop_time()?;
-                let stop = if middle {
-                    let Some(s) = self.indexed_stop(call.stop_id) else {
+                let mut bits = 0;
+                for day in 0..3u8 {
+                    if mask & self.trips[trip].active & (1 << day) == 0 {
+                        continue;
+                    }
+                    let Some((_, _, flags)) = self.window(&call, day as usize)? else {
+                        continue;
+                    };
+                    let (board, alight) = self.bounds(endpoint, trip as u16, day);
+                    bits |= u8::from(flags & 2 != 0 && board.is_some_and(|b| call.sequence > b))
+                        | (u8::from(flags & 1 != 0 && alight.is_some_and(|a| call.sequence < a))
+                            * 2);
+                }
+                if bits != 0 {
+                    let stop = key(call.stop_id.as_bytes());
+                    insert_sides(self.scratch.filter(), STOP_SIDES, stop, bits);
+                }
+                Ok(())
+            })
+            .await?;
+        source
+            .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
+                let stop = row.stop()?;
+                let filter = self.scratch.filter();
+                let bits = sides(filter, STOP_SIDES, key(stop.id.as_bytes()));
+                if stop.location_type == 0 && bits != 0 {
+                    insert_sides(filter, PLACE_SIDES, place_filter_key(stop), bits);
+                }
+                Ok(())
+            })
+            .await?;
+        // Explicit transfer links may join different places; keep their stops.
+        let filter = self.scratch.filter();
+        filter[..FILTER / 2].fill(0);
+        // The stop sets are no longer needed; set 0 now holds linked stops.
+        if manifest
+            .as_ref()
+            .is_some_and(|m| m.get(Table::Transfers).is_some())
+        {
+            source
+                .scan(&[Table::Transfers], manifest.as_ref(), workspace, |row| {
+                    for column in [C::FromStopId, C::ToStopId] {
+                        let id = row.required(column)?;
+                        insert(self.scratch.filter(), STOP_SIDES, key(id.as_bytes()));
+                    }
+                    Ok(())
+                })
+                .await?;
+        }
+        let base = self.stops.len();
+        let mut depth = depth;
+        loop {
+            let both = depth < 2;
+            let result = source
+                .scan(&[Table::Stops], manifest.as_ref(), workspace, |row| {
+                    let stop = row.stop()?;
+                    if stop.location_type != 0 || self.stop_index(stop.id).is_some() {
                         return Ok(());
-                    };
-                    s
-                } else {
-                    self.stop(call.stop_id)?
+                    }
+                    let filter = self.scratch.filter();
+                    let place = sides(filter, PLACE_SIDES, place_filter_key(stop));
+                    let linked = contains(filter, STOP_SIDES, key(stop.id.as_bytes()))
+                        || stop
+                            .parent_station
+                            .is_some_and(|p| contains(filter, STOP_SIDES, key(p.as_bytes())));
+                    if linked || if both { place == 3 } else { place != 0 } {
+                        self.stop(stop.id)?;
+                    }
+                    Ok(())
+                })
+                .await;
+            match result {
+                Ok(_) => break,
+                // Two transfers need every reachable change place. When they do
+                // not fit, search one transfer and say so.
+                Err(Error::IndexFull) if depth == 2 => {
+                    self.truncate_stops(base);
+                    self.limits |= LIMIT_TRANSFERS;
+                    depth = 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.scratch = Scratch::Idle;
+        Ok(depth)
+    }
+    /// Pass 3: calls at the indexed change places, within each trip instance's
+    /// useful sequence range.
+    async fn transfer_calls<const N: usize>(
+        &mut self,
+        source: &mut impl Tables,
+        workspace: &mut zip::Workspace,
+        mask: u8,
+        calls: &mut Vec<Call, N>,
+    ) -> Result<(), Error> {
+        let manifest = self.manifest;
+        self.index_stops();
+        source
+            .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
+                let Some(trip) = self.find_trip(row.required(C::TripId)?) else {
+                    return Ok(());
                 };
-                for day in 0..3 {
-                    if self.trips[i].active & (1 << day) == 0 {
+                let Some(stop) = self.indexed_stop(row.required(C::StopId)?) else {
+                    return Ok(());
+                };
+                // Calls at chosen places were all kept in the first pass.
+                if self.endpoints[stop as usize] != 0 {
+                    return Ok(());
+                }
+                let call = row.stop_time()?;
+                for day in 0..3u8 {
+                    if mask & self.trips[trip].active & (1 << day) == 0 {
                         continue;
                     }
-                    let (Some(arrival), Some(departure)) = (call.arrival, call.departure) else {
-                        continue;
-                    };
-                    let arrival = self.epochs[day] + i64::from(arrival.seconds()) - self.now;
-                    let departure = self.epochs[day] + i64::from(departure.seconds()) - self.now;
-                    if arrival > departure {
-                        return Err(Error::InvalidTime);
-                    }
-                    if departure < 0 || arrival > HORIZON {
-                        continue;
-                    }
-                    let board = (0..=HORIZON).contains(&departure);
-                    let alight = (0..=HORIZON).contains(&arrival);
-                    // A dwell can straddle either boundary. Only the in-window
-                    // timestamp grants boarding/alighting; clamping never invents it.
-                    let flags = u8::from(board && call.pickup_type != 1)
-                        | (u8::from(alight && call.drop_off_type != 1) * 2)
-                        | (u8::from(call.pickup_type >= 2) * 4)
-                        | (u8::from(call.drop_off_type >= 2) * 8);
-                    let arrival = arrival.clamp(0, HORIZON) as u16;
-                    let departure = departure.clamp(0, HORIZON) as u16;
-                    let value = Call {
-                        trip: i as u16,
-                        stop,
-                        sequence: call.sequence,
-                        arrival,
-                        departure,
-                        day: day as u8,
-                        flags,
-                    };
-                    if middle {
-                        self.middle_calls
-                            .push(value)
-                            .map_err(|_| Error::IndexFull)?;
-                    } else {
-                        calls.push(value).map_err(|_| Error::IndexFull)?;
+                    let (board, alight) =
+                        self.bounds(&calls[..self.endpoint_len], trip as u16, day);
+                    if board.is_some_and(|b| call.sequence > b)
+                        || alight.is_some_and(|a| call.sequence < a)
+                    {
+                        self.push(calls, &call, trip as u16, stop, day as usize)?;
                     }
                 }
                 Ok(())
             })
             .await?;
         Ok(())
+    }
+    /// Change places, station links and transfer rules for one-transfer search.
+    async fn transfers<const N: usize>(
+        &mut self,
+        source: &mut impl Tables,
+        workspace: &mut zip::Workspace,
+        mask: u8,
+        calls: &mut Vec<Call, N>,
+        depth: u8,
+    ) -> Result<u8, Error> {
+        let depth = self
+            .transfer_stops(source, workspace, mask, calls, depth)
+            .await?;
+        self.transfer_calls(source, workspace, mask, calls).await?;
+        self.group_places(source, workspace).await?;
+        self.stations(source, workspace, false).await?;
+        // The idle stop lookup marks actual endpoint-trip change anchors.
+        // Distant homonyms indexed for partitioning are not transfer anchors.
+        self.stop_lookup.clear();
+        for _ in 0..self.stops.len() {
+            self.stop_lookup.push(0).map_err(|_| Error::IndexFull)?;
+        }
+        for call in calls.iter() {
+            self.stop_lookup[call.stop as usize] = 1;
+            let parent = self.parents[call.stop as usize];
+            if parent != NONE {
+                self.stop_lookup[parent as usize] = 1;
+            }
+        }
+        // Copy the manifest only around this scan: child futures above keep
+        // their own copies and should not share the async state with this one.
+        let manifest = self.manifest;
+        source
+            .scan(&[Table::Transfers], manifest.as_ref(), workspace, |row| {
+                let from = row.required(C::FromStopId)?;
+                let to = row.required(C::ToStopId)?;
+                if ![from, to].iter().any(|s| {
+                    self.stop_index(s)
+                        .is_some_and(|i| self.stop_lookup.get(i as usize) == Some(&1))
+                }) {
+                    return Ok(());
+                }
+                // This bounded mode admits stop-level rules only. Scoped
+                // rules touching a selected trip's stops fail explicitly;
+                // their route/trip predicates are not approximated.
+                if [C::FromRouteId, C::ToRouteId, C::FromTripId, C::ToTripId]
+                    .iter()
+                    .any(|&c| row.get(c).is_some())
+                {
+                    return Err(Error::InvalidField(
+                        "journey routing does not yet support route-specific transfers",
+                    ));
+                }
+                let kind = row
+                    .get(C::TransferType)
+                    .unwrap_or("0")
+                    .parse::<u8>()
+                    .map_err(|_| Error::InvalidField("transfer_type"))?;
+                if kind > 3 {
+                    return Err(Error::InvalidField(
+                        "journey routing does not yet support in-seat transfer rules",
+                    ));
+                }
+                let seconds = row
+                    .get(C::MinTransferTime)
+                    .unwrap_or("0")
+                    .parse::<u16>()
+                    .map_err(|_| Error::InvalidField("min_transfer_time"))?;
+                if kind == 2 && row.get(C::MinTransferTime).is_none() {
+                    return Err(Error::MissingColumn("min_transfer_time"));
+                }
+                let from = self.stop(from)?;
+                let to = self.stop(to)?;
+                if self.rules.iter().any(|r| r.from == from && r.to == to) {
+                    return Err(Error::InvalidField("duplicate transfer rule"));
+                }
+                self.rules
+                    .push(Rule {
+                        from,
+                        to,
+                        seconds,
+                        forbidden: kind == 3,
+                    })
+                    .map_err(|_| Error::IndexFull)?;
+                Ok(())
+            })
+            .await?;
+        self.group_places(source, workspace).await?;
+        Ok(depth)
     }
     #[allow(clippy::too_many_arguments)]
     pub async fn query(
@@ -865,18 +1359,21 @@ impl<
             .validate()
             .map_err(|_| Error::InvalidField("journey settings"))?;
         self.trips.clear();
-        self.ids.clear();
+        self.lookup.clear();
         self.stops.clear();
         self.parents.fill(NONE);
         self.places.fill(NONE);
         self.routes.clear();
         calls.clear();
-        self.middle_calls.clear();
+        self.scratch = Scratch::Idle;
         self.rules.clear();
         self.services.clear();
         self.candidates.clear();
         self.manifest = None;
         self.now = now;
+        self.horizon = HORIZON as u16;
+        self.limits = 0;
+        self.endpoint_len = 0;
         let today = zone.service_date(now).ok_or(Error::InvalidDate)?;
         self.dates = [
             clock::previous(today).ok_or(Error::InvalidDate)?,
@@ -967,7 +1464,6 @@ impl<
             return Err(Error::MissingTable(Table::Calendar));
         }
         self.manifest = Some(manifest);
-        let manifest = self.manifest;
         self.group_places(source, workspace).await?;
         for i in 0..self.stops.len() {
             for (bit, endpoint) in config
@@ -984,208 +1480,209 @@ impl<
                 }
             }
         }
-        self.index_stops();
-        source
-            .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
-                let stop = row.required(C::StopId)?;
-                let members = self
-                    .indexed_stop(stop)
-                    .map_or(0, |i| self.endpoints[i as usize]);
-                let kind = u8::from(members & 15 != 0) | (u8::from(members & 240 != 0) * 2);
-                if kind == 0 {
-                    return Ok(());
+        self.endpoint_calls(source, workspace, mask, calls).await?;
+        self.metadata(source, workspace).await?;
+        self.keep_active(calls);
+        let base = self.stops.len();
+        let mut depth = config.max_transfers;
+        if depth != 0 {
+            match self.transfers(source, workspace, mask, calls, depth).await {
+                Ok(searched) => depth = searched,
+                // Change places did not fit: keep the exact direct search.
+                Err(Error::IndexFull) => {
+                    calls.truncate(self.endpoint_len);
+                    self.truncate_stops(base);
+                    self.rules.clear();
+                    self.scratch = Scratch::Idle;
+                    self.limits |= LIMIT_TRANSFERS;
+                    depth = 0;
                 }
-                let call = row.stop_time()?;
-                if (0..3).any(|day| {
-                    mask & (1 << day) != 0
-                        && (self.offset(call.arrival, day).is_some()
-                            || self.offset(call.departure, day).is_some())
-                }) {
-                    self.trip(call.trip_id, kind)?;
-                }
-                Ok(())
-            })
-            .await?;
-        self.metadata(source, workspace, 0).await?;
-        self.collect_calls(source, workspace, false, calls).await?;
-        if config.max_transfers != 0 {
-            self.group_places(source, workspace).await?;
-            self.stations(source, workspace, false).await?;
-            // The idle stop lookup marks actual endpoint-trip change anchors.
-            // Distant homonyms indexed for partitioning are not transfer anchors.
-            self.stop_lookup.clear();
-            for _ in 0..self.stops.len() {
-                self.stop_lookup.push(0).map_err(|_| Error::IndexFull)?;
+                Err(error) => return Err(error),
             }
-            for call in calls.iter() {
-                self.stop_lookup[call.stop as usize] = 1;
-                let parent = self.parents[call.stop as usize];
-                if parent != NONE {
-                    self.stop_lookup[parent as usize] = 1;
-                }
-            }
-            source
-                .scan(&[Table::Transfers], manifest.as_ref(), workspace, |row| {
-                    let from = row.required(C::FromStopId)?;
-                    let to = row.required(C::ToStopId)?;
-                    if ![from, to].iter().any(|s| {
-                        self.stop_index(s)
-                            .is_some_and(|i| self.stop_lookup.get(i as usize) == Some(&1))
-                    }) {
-                        return Ok(());
-                    }
-                    // This bounded mode admits stop-level rules only. Scoped
-                    // rules touching a selected trip's stops fail explicitly;
-                    // their route/trip predicates are not approximated.
-                    if [C::FromRouteId, C::ToRouteId, C::FromTripId, C::ToTripId]
-                        .iter()
-                        .any(|&c| row.get(c).is_some())
-                    {
-                        return Err(Error::InvalidField(
-                            "journey routing does not yet support route-specific transfers",
-                        ));
-                    }
-                    let kind = row
-                        .get(C::TransferType)
-                        .unwrap_or("0")
-                        .parse::<u8>()
-                        .map_err(|_| Error::InvalidField("transfer_type"))?;
-                    if kind > 3 {
-                        return Err(Error::InvalidField(
-                            "journey routing does not yet support in-seat transfer rules",
-                        ));
-                    }
-                    let seconds = row
-                        .get(C::MinTransferTime)
-                        .unwrap_or("0")
-                        .parse::<u16>()
-                        .map_err(|_| Error::InvalidField("min_transfer_time"))?;
-                    if kind == 2 && row.get(C::MinTransferTime).is_none() {
-                        return Err(Error::MissingColumn("min_transfer_time"));
-                    }
-                    let from = self.stop(from)?;
-                    let to = self.stop(to)?;
-                    if self.rules.iter().any(|r| r.from == from && r.to == to) {
-                        return Err(Error::InvalidField("duplicate transfer rule"));
-                    }
-                    self.rules
-                        .push(Rule {
-                            from,
-                            to,
-                            seconds,
-                            forbidden: kind == 3,
-                        })
-                        .map_err(|_| Error::IndexFull)?;
-                    Ok(())
-                })
-                .await?;
         }
-        if config.max_transfers != 0 {
-            self.group_places(source, workspace).await?;
-        }
-        self.endpoint_paths(calls, config)?;
-        if config.max_transfers == 2 {
-            // Every change has one side on an already collected endpoint trip:
-            // first.to -> middle.from, then middle.to -> last.from. Therefore
-            // an applicable rule already touches the earlier endpoint stop set.
-            self.stations(source, workspace, true).await?;
-            self.group_places(source, workspace).await?;
-            // Same-name expansion can introduce platforms in other declared
-            // stations. Preserve their parent-specific transfer restrictions.
-            self.stations(source, workspace, false).await?;
-        }
-        if config.max_transfers == 2
-            && first_rides(calls, &self.endpoints, config).next().is_some()
-            && last_rides(calls, &self.endpoints, config).next().is_some()
-        {
-            self.index_stops();
-            let mut ready = [None::<u16>; STOPS];
-            for (stop, value) in ready.iter_mut().enumerate().take(self.stops.len()) {
-                *value = first_rides(calls, &self.endpoints, config)
-                    .filter_map(|a| {
-                        self.transfer(a.to, stop as u16, config.transfer_minutes)
-                            .and_then(|s| a.arrival.checked_add(s))
-                    })
-                    .min();
-            }
-            source
-                .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
-                    let Some(stop) = self.indexed_stop(row.required(C::StopId)?) else {
-                        return Ok(());
-                    };
-                    let call = row.stop_time()?;
-                    if call.pickup_type == 1 {
-                        return Ok(());
-                    }
-                    if (0..3).any(|day| {
-                        mask & (1 << day) != 0
-                            && self.offset(call.departure, day).is_some_and(|departure| {
-                                ready[stop as usize].is_some_and(|at| at <= departure)
-                            })
-                    }) {
-                        self.trip(call.trip_id, 4)?;
-                    }
-                    Ok(())
-                })
-                .await?;
-            // Existing endpoint trips can also be the middle ride.
-            for t in &mut self.trips {
-                t.seen = false;
-                t.active = 0;
-            }
-            self.metadata(source, workspace, 0).await?;
-            self.collect_calls(source, workspace, true, calls).await?;
-            self.middle_calls
-                .sort_unstable_by_key(|c| (c.trip, c.day, c.sequence));
-            for i in 0..self.middle_calls.len() {
-                let board = self.middle_calls[i];
-                if board.flags & 1 == 0 {
-                    continue;
+        self.endpoint_paths(calls, config, depth)?;
+        if depth == 2 {
+            // Earlier candidates stay valid; deeper search is reported as limited.
+            match self.middle(source, workspace, mask, calls, config).await {
+                Ok(()) => {}
+                Err(Error::IndexFull) => {
+                    self.scratch = Scratch::Idle;
+                    self.limits |= LIMIT_TRANSFERS;
                 }
-                for j in i + 1..self.middle_calls.len() {
-                    let alight = self.middle_calls[j];
-                    if (board.trip, board.day) != (alight.trip, alight.day) {
-                        break;
-                    }
-                    if board.sequence == alight.sequence {
-                        return Err(Error::InvalidField("duplicate stop_sequence"));
-                    }
-                    if alight.flags & 2 == 0 || board.departure > alight.arrival {
-                        continue;
-                    }
-                    let middle = Ride {
-                        trip: board.trip,
-                        from: board.stop,
-                        to: alight.stop,
-                        departure: board.departure,
-                        arrival: alight.arrival,
-                        endpoint: 0,
-                        day: ride_day(board, alight),
-                    };
-                    for first in first_rides(calls, &self.endpoints, config) {
-                        if !self.join(first, middle, config.transfer_minutes) {
-                            continue;
-                        }
-                        for last in last_rides(calls, &self.endpoints, config) {
-                            if self.join(middle, last, config.transfer_minutes) {
-                                Self::candidate(
-                                    &mut self.candidates,
-                                    Candidate {
-                                        first,
-                                        middle: Some(middle),
-                                        last: Some(last),
-                                        target: last.endpoint,
-                                    },
-                                    config,
-                                )?;
-                            }
-                        }
-                    }
-                }
+                Err(error) => return Err(error),
             }
         }
         self.publish(source, workspace, config, group, output, labels)
             .await
+    }
+    /// Two transfers: a middle ride from a place a start reaches to a place a
+    /// target ride serves.
+    async fn middle<const N: usize>(
+        &mut self,
+        source: &mut impl Tables,
+        workspace: &mut zip::Workspace,
+        mask: u8,
+        calls: &mut Vec<Call, N>,
+        config: &Journey,
+    ) -> Result<(), Error> {
+        // Every change has one side on an already collected endpoint trip:
+        // first.to -> middle.from, then middle.to -> last.from. Therefore
+        // an applicable rule already touches the earlier endpoint stop set.
+        self.stations(source, workspace, true).await?;
+        self.group_places(source, workspace).await?;
+        // Same-name expansion can introduce platforms in other declared
+        // stations. Preserve their parent-specific transfer restrictions.
+        self.stations(source, workspace, false).await?;
+        if first_rides(calls, &self.endpoints, config).next().is_none()
+            || last_rides(calls, &self.endpoints, config).next().is_none()
+        {
+            return Ok(());
+        }
+        self.index_stops();
+        let manifest = self.manifest;
+        // Per stop: the earliest time a first ride is ready to change there,
+        // or UNREADY, plus FINISH when a last ride can be reached from it.
+        // Both fit one u16 because ready times never exceed the window.
+        let mut ready = [UNREADY; STOPS];
+        for (stop, value) in ready.iter_mut().enumerate().take(self.stops.len()) {
+            *value = first_rides(calls, &self.endpoints, config)
+                .filter_map(|a| {
+                    self.transfer(a.to, stop as u16, config.transfer_minutes)
+                        .and_then(|s| a.arrival.checked_add(s))
+                })
+                .filter(|&at| at <= self.horizon)
+                .min()
+                .unwrap_or(UNREADY);
+            if last_rides(calls, &self.endpoints, config).any(|l| {
+                self.transfer(stop as u16, l.from, config.transfer_minutes)
+                    .is_some()
+            }) {
+                *value |= FINISH;
+            }
+        }
+        let boards = |stop: u16, departure: u16| {
+            let at = ready[stop as usize] & !FINISH;
+            at != UNREADY && at <= departure
+        };
+        source
+            .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
+                let Some(stop) = self.indexed_stop(row.required(C::StopId)?) else {
+                    return Ok(());
+                };
+                let call = row.stop_time()?;
+                if call.pickup_type == 1 {
+                    return Ok(());
+                }
+                if (0..3).any(|day| {
+                    mask & (1 << day) != 0
+                        && self
+                            .offset(call.departure, day)
+                            .is_some_and(|departure| boards(stop, departure))
+                }) {
+                    self.intern(call.trip_id, 4)?.ok_or(Error::IndexFull)?;
+                }
+                Ok(())
+            })
+            .await?;
+        // Existing endpoint trips can also be the middle ride.
+        self.metadata(source, workspace).await?;
+        self.scratch.middle().clear();
+        source
+            .scan(&[Table::StopTimes], manifest.as_ref(), workspace, |row| {
+                let Some(trip) = self
+                    .find_trip(row.required(C::TripId)?)
+                    .filter(|&i| self.trips[i].kind & 4 != 0)
+                else {
+                    return Ok(());
+                };
+                let Some(stop) = self.indexed_stop(row.required(C::StopId)?) else {
+                    return Ok(());
+                };
+                let call = row.stop_time()?;
+                for day in 0..3 {
+                    if mask & self.trips[trip].active & (1 << day) == 0 {
+                        continue;
+                    }
+                    let Some((arrival, departure, flags)) = self.window(&call, day)? else {
+                        continue;
+                    };
+                    // Keep only calls that can start or end the middle ride.
+                    if !(flags & 1 != 0 && boards(stop, departure)
+                        || flags & 2 != 0 && ready[stop as usize] & FINISH != 0)
+                    {
+                        continue;
+                    }
+                    self.scratch
+                        .middle()
+                        .push(Call {
+                            trip: trip as u16,
+                            stop,
+                            sequence: call.sequence,
+                            arrival,
+                            departure,
+                            day: day as u8,
+                            flags,
+                        })
+                        .map_err(|_| Error::IndexFull)?;
+                }
+                Ok(())
+            })
+            .await?;
+        self.scratch
+            .middle()
+            .sort_unstable_by_key(|c| (c.trip, c.day, c.sequence));
+        let Scratch::Middle(middle_calls) = &self.scratch else {
+            unreachable!()
+        };
+        for i in 0..middle_calls.len() {
+            let board = middle_calls[i];
+            if board.flags & 1 == 0 {
+                continue;
+            }
+            for j in i + 1..middle_calls.len() {
+                let alight = middle_calls[j];
+                if (board.trip, board.day) != (alight.trip, alight.day) {
+                    break;
+                }
+                if board.sequence == alight.sequence {
+                    return Err(Error::InvalidField("duplicate stop_sequence"));
+                }
+                if alight.flags & 2 == 0 || board.departure > alight.arrival {
+                    continue;
+                }
+                let middle = Ride {
+                    trip: board.trip,
+                    from: board.stop,
+                    to: alight.stop,
+                    departure: board.departure,
+                    arrival: alight.arrival,
+                    endpoint: 0,
+                    day: ride_day(board, alight),
+                };
+                for first in first_rides(calls, &self.endpoints, config) {
+                    if !self.join(first, middle, config.transfer_minutes) {
+                        continue;
+                    }
+                    for last in last_rides(calls, &self.endpoints, config) {
+                        if self.join(middle, last, config.transfer_minutes) {
+                            Self::candidate(
+                                &mut self.candidates,
+                                &mut self.horizon,
+                                &mut self.limits,
+                                Candidate {
+                                    first,
+                                    middle: Some(middle),
+                                    last: Some(last),
+                                    target: last.endpoint,
+                                },
+                                config,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
     async fn publish(
         &self,
@@ -1196,21 +1693,70 @@ impl<
         output: &mut Cache,
         labels: &mut crate::model::Headings,
     ) -> Result<(), Error> {
-        let mut used_stops = Vec::<u16, 32>::new();
-        let mut used_routes = Vec::<u8, 32>::new();
-        for c in &self.candidates {
-            for ride in [Some(c.first), c.middle, c.last].into_iter().flatten() {
-                for stop in [ride.from, ride.to] {
-                    if !used_stops.contains(&stop) {
-                        used_stops.push(stop).map_err(|_| Error::IndexFull)?;
+        let arrive = |c: &Candidate| {
+            u32::from(c.end().arrival) + u32::from(config.targets[c.target as usize].walk) * 60
+        };
+        // Labels and result slots keep the earliest arrivals. Ending the
+        // window before the first omitted arrival keeps the rest exact. The
+        // ordering stays in this block, outside the async state of the scan.
+        let (window, used_stops, used_routes) = {
+            let mut order = Vec::<u8, MAX_PATHS>::new();
+            for i in 0..self.candidates.len() {
+                let _ = order.push(i as u8);
+            }
+            order.sort_unstable_by_key(|&i| arrive(&self.candidates[i as usize]));
+            let room = MAX_PATHS - output.paths.len();
+            let mut used_stops = Vec::<u16, 32>::new();
+            let mut used_routes = Vec::<u8, 32>::new();
+            let mut window = self.horizon;
+            for (n, &i) in order.iter().enumerate() {
+                let c = self.candidates[i as usize];
+                let mut stops = used_stops.clone();
+                let mut routes = used_routes.clone();
+                let fits = n < room
+                    && [Some(c.first), c.middle, c.last]
+                        .into_iter()
+                        .flatten()
+                        .all(|ride| {
+                            let route = self.trips[ride.trip as usize].route;
+                            [ride.from, ride.to]
+                                .into_iter()
+                                .all(|s| stops.contains(&s) || stops.push(s).is_ok())
+                                && (routes.contains(&route) || routes.push(route).is_ok())
+                        })
+                    && stops.len() + routes.len() <= 32;
+                if !fits {
+                    let cut = arrive(&c).saturating_sub(1);
+                    window = window.min(u16::try_from(cut).unwrap_or(u16::MAX));
+                    break;
+                }
+                used_stops = stops;
+                used_routes = routes;
+            }
+            if window < self.horizon {
+                // Equal arrivals at the cut were partly added; rebuild exactly.
+                used_stops.clear();
+                used_routes.clear();
+                for c in self
+                    .candidates
+                    .iter()
+                    .filter(|c| arrive(c) <= u32::from(window))
+                {
+                    for ride in [Some(c.first), c.middle, c.last].into_iter().flatten() {
+                        for s in [ride.from, ride.to] {
+                            if !used_stops.contains(&s) {
+                                used_stops.push(s).map_err(|_| Error::IndexFull)?;
+                            }
+                        }
+                        let route = self.trips[ride.trip as usize].route;
+                        if !used_routes.contains(&route) {
+                            used_routes.push(route).map_err(|_| Error::IndexFull)?;
+                        }
                     }
                 }
-                let route = self.trips[ride.trip as usize].route;
-                if !used_routes.contains(&route) {
-                    used_routes.push(route).map_err(|_| Error::IndexFull)?;
-                }
             }
-        }
+            (window, used_stops, used_routes)
+        };
         let mut names = [u8::MAX; 32];
         let mut lines = [u8::MAX; 32];
         source
@@ -1253,9 +1799,10 @@ impl<
                         }
                     } else {
                         let route = row.route()?;
+                        let k = key(route.id.as_bytes());
                         if let Some(i) = used_routes
                             .iter()
-                            .position(|&r| self.routes[r as usize].as_str() == route.id)
+                            .position(|&r| self.routes[r as usize] == k)
                         {
                             if lines[i] != u8::MAX {
                                 return Err(Error::InvalidField("duplicate route_id"));
@@ -1280,7 +1827,22 @@ impl<
         {
             return Err(Error::InvalidField("unknown journey stop or route"));
         }
-        for c in &self.candidates {
+        if let Some(slot) = output.windows.get_mut(group as usize) {
+            *slot = (*slot).min(window);
+        }
+        if let Some(slot) = output.limits.get_mut(group as usize) {
+            *slot |= self.limits
+                | if window < self.horizon {
+                    LIMIT_WINDOW
+                } else {
+                    0
+                };
+        }
+        for &c in self
+            .candidates
+            .iter()
+            .filter(|c| arrive(c) <= u32::from(window))
+        {
             let mut path = Path {
                 group,
                 origin: c.first.endpoint,
@@ -1307,6 +1869,8 @@ impl<
                     from: names[label(ride.from)],
                     to: names[label(ride.to)],
                     line: lines[route],
+                    flags: (u8::from(ride.day & REQUEST_BOARD != 0) * LEG_REQUEST_BOARD)
+                        | (u8::from(ride.day & REQUEST_ALIGHT != 0) * LEG_REQUEST_ALIGHT),
                     departure: ride.departure,
                     arrival: ride.arrival,
                 };
@@ -1331,12 +1895,17 @@ fn bounded_label<const N: usize>(value: &str) -> String<N> {
     text
 }
 
-// The high bit records a conditional endpoint without enlarging a ride.
-// Passing a request stop while staying on the vehicle needs no arrangement.
+// Request stops are ordinary stops where the rider signals the driver; the
+// leg records which end needs that so the display can say so.
 fn ride_day(board: Call, alight: Call) -> u8 {
     board.day
-        | if board.flags & 4 != 0 || alight.flags & 8 != 0 {
-            CONDITIONAL
+        | if board.flags & 4 != 0 {
+            REQUEST_BOARD
+        } else {
+            0
+        }
+        | if alight.flags & 8 != 0 {
+            REQUEST_ALIGHT
         } else {
             0
         }
@@ -1415,6 +1984,80 @@ fn place_chars(value: &str) -> impl Iterator<Item = char> + '_ {
             .chain(word.chars().flat_map(char::to_lowercase))
     })
 }
+fn name_key(stop: gtfs::Stop<'_>) -> Result<[u32; 2], Error> {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut empty = true;
+    for c in place_chars(stop.name.unwrap_or(stop.id)) {
+        if c.is_control() {
+            return Err(Error::InvalidField("journey stop name"));
+        }
+        let mut bytes = [0; 4];
+        let folded = fold(hash, c.encode_utf8(&mut bytes).as_bytes());
+        hash = u64::from(folded[0]) | (u64::from(folded[1]) << 32);
+        empty = false;
+    }
+    if empty {
+        return Err(Error::InvalidField("empty journey stop name"));
+    }
+    Ok([hash as u32, (hash >> 32) as u32])
+}
+fn place_key(stop: gtfs::Stop<'_>) -> Result<PlaceKey, Error> {
+    Ok(if let Some(parent) = stop.parent_station {
+        PlaceKey {
+            tag: b'P',
+            hash: key(parent.as_bytes()),
+            lat: 0,
+            lon: 0,
+        }
+    } else if let Some((lat, lon)) = coordinates(stop) {
+        PlaceKey {
+            tag: b'N',
+            hash: name_key(stop)?,
+            lat,
+            lon,
+        }
+    } else {
+        // Without a station or position, equal text cannot establish that
+        // two platforms are the same physical place.
+        PlaceKey {
+            tag: b'I',
+            hash: key(stop.id.as_bytes()),
+            lat: 0,
+            lon: 0,
+        }
+    })
+}
+/// The filter's place: a declared station or a normalized name. It is wider
+/// than PlaceKey, so it can only add candidate stops.
+fn place_filter_key(stop: gtfs::Stop<'_>) -> [u32; 2] {
+    match stop.parent_station {
+        Some(parent) => fold(0x5045_4e54_0000_0001, parent.as_bytes()),
+        None => name_key(stop).unwrap_or(key(stop.id.as_bytes())),
+    }
+}
+/// Row identities computed once per stop row for cohort membership.
+struct Cohort {
+    parent: Option<[u32; 2]>,
+    id: [u32; 2],
+    name: Option<[u32; 2]>,
+}
+impl Cohort {
+    fn of(stop: gtfs::Stop<'_>) -> Self {
+        Self {
+            parent: stop.parent_station.map(|p| key(p.as_bytes())),
+            id: key(stop.id.as_bytes()),
+            name: coordinates(stop).and_then(|_| name_key(stop).ok()),
+        }
+    }
+    fn contains(&self, key: PlaceKey) -> bool {
+        match key.tag {
+            b'P' => self.parent == Some(key.hash),
+            b'I' => self.parent.is_none() && self.id == key.hash,
+            b'N' => self.parent.is_none() && self.name == Some(key.hash),
+            _ => false,
+        }
+    }
+}
 
 // Quantized coordinates and the same explicit distance polynomial are used by
 // the browser. Partition decisions do not depend on target float precision or
@@ -1424,47 +2067,25 @@ fn coordinates(stop: gtfs::Stop<'_>) -> Option<(i32, i32)> {
     (lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0)
         .then_some(((lat * 1_000_000.0) as i32, (lon * 1_000_000.0) as i32))
 }
-fn same_cohort(key: &[u8], stop: gtfs::Stop<'_>) -> bool {
-    match key.first() {
-        Some(b'P') => stop
-            .parent_station
-            .is_some_and(|parent| parent.as_bytes() == &key[1..]),
-        Some(b'I') => stop.parent_station.is_none() && stop.id.as_bytes() == &key[1..],
-        Some(b'N') if key.len() >= 9 => {
-            stop.parent_station.is_none()
-                && coordinates(stop).is_some()
-                && core::str::from_utf8(&key[9..])
-                    .is_ok_and(|name| place_chars(stop.name.unwrap_or(stop.id)).eq(name.chars()))
-        }
-        _ => false,
-    }
-}
-fn same_place_keys(a: &[u8], b: &[u8]) -> bool {
-    if a.first() != b.first() {
+fn same_place_keys(a: PlaceKey, b: PlaceKey) -> bool {
+    if a.tag != b.tag || a.hash != b.hash {
         return false;
     }
-    if a.first() != Some(&b'N') {
-        return a == b;
+    if a.tag != b'N' {
+        return true;
     }
-    if a[9..] != b[9..] {
-        return false;
-    }
-    let lat_a = i32::from_le_bytes(a[1..5].try_into().unwrap());
-    let lat_b = i32::from_le_bytes(b[1..5].try_into().unwrap());
-    let lon_a = i32::from_le_bytes(a[5..9].try_into().unwrap());
-    let lon_b = i32::from_le_bytes(b[5..9].try_into().unwrap());
-    let radians = f64::from(lat_a + lat_b) * core::f64::consts::PI / 360_000_000.0;
+    let radians = f64::from(a.lat + b.lat) * core::f64::consts::PI / 360_000_000.0;
     let x2 = radians * radians;
     let cos = 1.0
         + x2 * (-0.5
             + x2 * (1.0 / 24.0 + x2 * (-1.0 / 720.0 + x2 * (1.0 / 40320.0 - x2 / 3628800.0))));
-    let delta = (lon_a - lon_b).abs();
+    let delta = (a.lon - b.lon).abs();
     let delta = if delta > 180_000_000 {
         360_000_000 - delta
     } else {
         delta
     };
     let dx = f64::from(delta) * (111195.0 / 1_000_000.0) * cos;
-    let dy = f64::from(lat_a - lat_b) * (111195.0 / 1_000_000.0);
+    let dy = f64::from(a.lat - b.lat) * (111195.0 / 1_000_000.0);
     dx * dx + dy * dy <= 125.0 * 125.0
 }

@@ -265,3 +265,59 @@ glyphs['stops.txt']=glyphs['stops.txt'].replace(',U01,', ','+'C'*16+hidden_code+
 glyphs['stops.txt']+='V,'+'R'*64+hidden_name+',V01,0,53.4,17.0,\n'
 glyphs['stop_times.txt']+=journey_calls([(long_trip,'08:05:00','U',1),(long_trip,'08:10:00','V',2)]).split('\n',1)[1]
 write_archive('journey-places-glyphs.zip',glyphs)
+
+# A small city reproducing the real Poznań failure on the old device bounds:
+# weekday trips that do not run today still call at the chosen places, routes
+# visit ~80 two-platform places, and every Maków Polnych call is a request
+# stop. Walking 12 minutes to a direct 348 or riding the 911 one stop to change
+# at Kresowa must both survive. Times are test data, not transit advice.
+def city_fixture():
+    places = {}
+    def place(key, name):
+        if key not in places:
+            places[key] = (name, len(places))
+        return key
+    def seq(prefix, name, count):
+        return [place(f'{prefix}{i}', f'{name} {i}') for i in range(1, count + 1)]
+    A = place('A', 'Maków Polnych'); B = place('B', 'UAM Wydział Geografii')
+    K = place('K', 'Kresowa'); H = place('H', 'Biedrusko/Park')
+    Z = place('Z', 'Bolechowo-Os./Szkoła'); W = place('W', 'Bolechowo-Os./Wojska Polskiego')
+    corridor = seq('R', 'Corridor', 8)
+    lines = {
+        # route: (label, stops in direction 0, first departure, headway minutes)
+        'L911': ('911', seq('C', 'City', 6) + [A, K] + corridor + [H], (5, 57)),
+        'L348': ('348', seq('S', 'Estate', 4) + [B, K] + corridor + [W] + seq('X', 'Beyond', 3), (6, 5)),
+        'L397': ('397', [H] + seq('P', 'Promnice', 3) + [Z] + seq('Q', 'Szlachęcin', 3), (6, 10)),
+        'N1': ('101', seq('M', 'Ring', 10) + [A] + seq('MM', 'Ring outer', 8), (6, 1)),
+        'N2': ('202', seq('L', 'Loop', 10) + [Z] + seq('LL', 'Loop outer', 8), (6, 3)),
+    }
+    stops = ['stop_id,stop_name,stop_code,stop_lat,stop_lon']
+    for key, (name, index) in places.items():
+        for platform in (1, 2):
+            stops.append(f'{key}-{platform},{name},{key}{platform:02},{52.40 + index * 0.004:.6f},{16.90 + platform * 0.0002:.6f}')
+    routes = ['route_id,route_short_name,route_type'] + [f'{r},{label},3' for r, (label, _, _) in lines.items()]
+    trips = ['route_id,service_id,trip_id,direction_id']
+    calls = ['trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type']
+    for service in ('SAT', 'WD'):
+        for route, (label, path, (hour, minute)) in lines.items():
+            for direction in (0, 1):
+                ordered = path if direction == 0 else path[::-1]
+                # Departures from about 06:00 cover the six hours after 08:00.
+                for k in range(22):
+                    trip = f'{service}-{route}-{direction}-{k}'
+                    trips.append(f'{route},{service},{trip},{direction}')
+                    start = hour * 60 + minute + 20 * k
+                    for i, key in enumerate(ordered):
+                        at = start + 2 * i
+                        time = f'{at // 60:02}:{at % 60:02}:00'
+                        request = 3 if key == A else 0
+                        calls.append(f'{trip},{time},{time},{key}-{direction + 1},{i + 1},{request},{request}')
+    return {
+        'agency.txt': journey['agency.txt'],
+        'routes.txt': '\n'.join(routes) + '\n',
+        'stops.txt': '\n'.join(stops) + '\n',
+        'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nSAT,0,0,0,0,0,1,0,20261001,20261031\nWD,1,1,1,1,1,0,0,20261001,20261031\n',
+        'trips.txt': '\n'.join(trips) + '\n',
+        'stop_times.txt': '\n'.join(calls) + '\n',
+    }
+write_archive('journey-city.zip', city_fixture())
