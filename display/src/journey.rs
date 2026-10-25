@@ -23,7 +23,8 @@ const FINISH: u16 = 0x8000;
 const DAY: u8 = 0x03;
 const REQUEST_BOARD: u8 = 0x80;
 const REQUEST_ALIGHT: u8 = 0x40;
-/// Leg flags: the rider has to signal the driver or arrange the stop.
+/// Leg flags: the rider has to signal the driver (GTFS type 3) or phone the
+/// operator (type 2) to board or alight.
 pub const LEG_REQUEST_BOARD: u8 = 1;
 pub const LEG_REQUEST_ALIGHT: u8 = 2;
 /// Group limits: the window ended early to fit, or fewer transfers were searched.
@@ -1537,7 +1538,10 @@ impl<
         }
         self.endpoint_paths(calls, config, depth)?;
         if depth == 2 {
-            // Earlier candidates stay valid; deeper search is reported as limited.
+            // No rollback is needed: every kept candidate is a real connection,
+            // and `candidate` fails only before it removes any, so each
+            // one-transfer result is kept or beaten by a kept two-transfer one.
+            // The deeper search is reported as limited.
             match self.middle(source, workspace, mask, calls, config).await {
                 Ok(()) => {}
                 Err(Error::IndexFull) => {
@@ -1792,6 +1796,10 @@ impl<
             }
             (window, used_stops, used_routes)
         };
+        // Earlier groups can leave too few result slots for even an hour.
+        if window < MIN_WINDOW {
+            return Err(Error::IndexFull);
+        }
         let mut names = [u8::MAX; 32];
         let mut lines = [u8::MAX; 32];
         source

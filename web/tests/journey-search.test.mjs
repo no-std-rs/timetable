@@ -330,3 +330,21 @@ test("leaving later on a middle ride rechecks the transfer rule into that trip",
   const result=await searchJourneys(await loader("journey-tighten-scoped.zip"),config(),{now:NOW,maxTransfers:2});
   assert.deepEqual(result.paths.map(path=>[path.legs.map(leg=>JSON.parse(leg.trip)[0]).join("+"),path.arrival-NOW]),[["a+m+f",40*60]]);
 });
+test("a stop dot is never offered as an endpoint where its ride forbids getting on or off",async()=>{
+  const {JourneyEditor}=await import("../journey-editor.js");
+  const feed=await loader("journey-walkable.zip"),places=stopPlaces(feed.catalog),park=places.byId.get("P");
+  const journey={origins:[{stop:"A",walk:6}],targets:[{stop:"S",walk:0}]};
+  const editor={group:()=>({journey}),catalog:()=>feed.catalog};
+  const plan=call=>JourneyEditor.prototype.plan.call(editor,park,"targets",call);
+  // The 911 sets down at the park; the 397 only picks up there.
+  assert.equal(plan({pickup:1,dropoff:0}).kind,"targets");
+  assert.deepEqual(plan({pickup:0,dropoff:1}),{error:"This ride does not set down here"});
+  journey.targets=[];
+  assert.deepEqual(plan({pickup:1,dropoff:0}),{error:"This ride does not pick up here"},"a start needs a pickup");
+  assert.equal(plan({pickup:0,dropoff:1}).kind,"origins");
+});
+test("a circular ride past the start is kept when its second pass does not pick up",async()=>{
+  const departures=async name=>(await searchJourneys(await loader(name),config(),{now:NOW})).paths.map(path=>[path.legs[0].departure-NOW,path.arrival-NOW]);
+  assert.deepEqual(await departures("journey-circular.zip"),[[7*60,20*60]]);
+  assert.deepEqual(await departures("journey-circular-open.zip"),[[13*60,20*60]],"board on the second pass instead");
+});

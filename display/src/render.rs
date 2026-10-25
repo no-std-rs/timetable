@@ -136,7 +136,7 @@ fn journey_board<D: DrawTarget<Color = Rgb565>>(
             let wait = (u32::from(leg.departure) - u32::from(path.legs[i - 1].arrival)) / 60;
             let _ = write!(value, "{wait}m change / ");
         }
-        // A star marks a request stop: signal the driver to board or alight.
+        // A star marks a request stop: signal the driver or phone the operator.
         let star = |flag| if leg.flags & flag != 0 { "*" } else { "" };
         request |= leg.flags != 0;
         let _ = write!(

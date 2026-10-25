@@ -193,16 +193,22 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   // earlier makes continuing to another target a worse duplicate.
   const reachedEarlier=path=>path.legs.some((leg,i)=>leg.stops.some((call,at)=>at>0&&!(i===path.legs.length-1&&at===leg.stops.length-1)&&call.dropoff!==1&&call.arrival!==null&&targetAt.has(call.stop.id)&&call.arrival+targetAt.get(call.stop.id).walk*60<=path.arrival));
   // Riding away and back (a repeated place across rides, or back through the
-  // start) only adds waiting time. Consecutive trips of one route stay: short
-  // turns and branches can need that change, and a redundant one is dominated
-  // by staying on the later trip below.
+  // start) only adds waiting time when one could have stayed there and boarded
+  // this ride on its return: the earlier visit allows getting off (or is where
+  // one boarded) and the later call allows boarding. Consecutive trips of one
+  // route stay: short turns and branches can need that change, and a redundant
+  // one is dominated by staying on the later trip below.
   const placeOf=stop=>places.byId.get(stop.id)?.key??stop.id;
   const loops=path=>{
-    const seen=new Set([placeOf(path.origin)]);
+    const stay=new Map([[placeOf(path.origin),true]]);
     return path.legs.some(leg=>{
-      const own=new Set();
-      for(const [at,call]of leg.stops.entries()){if(at&&seen.has(placeOf(call.stop)))return true;own.add(placeOf(call.stop));}
-      for(const place of own)seen.add(place);
+      const own=new Map();
+      for(const [at,call]of leg.stops.entries()){
+        const place=placeOf(call.stop);
+        if(at&&stay.get(place)&&call.pickup!==1)return true;
+        own.set(place,own.get(place)||at===0||call.dropoff!==1);
+      }
+      for(const [place,off]of own)stay.set(place,stay.get(place)||off);
       return false;
     });
   };
@@ -254,7 +260,7 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
       for(const [at,call] of list.entries()){
         if(call.arrival===null||call.departure===null)continue;
         if(call.dropoff!==1)for(const boarded of boardings){
-          // Types 2/3 are request stops (phone or signal the driver), not errors.
+          // Types 2/3 are request stops (phone the operator or signal the driver), not errors.
           const leg={trip:call.trip,route:identities.get(call.trip).route,line:call.line,from:boarded.call.stop,to:call.stop,departure:boarded.call.departure,arrival:call.arrival,requestBoard:boarded.call.pickup>=2,requestAlight:call.dropoff>=2,stops:list.slice(boarded.at,at+1).map(c=>({stop:c.stop,arrival:c.arrival,departure:c.departure,pickup:c.pickup,dropoff:c.dropoff}))};
           const label={...boarded.label,error:boarded.error,arrival:call.arrival,legs:[...boarded.label.legs,leg]};
           labels+=offer(next,call.stop.id,label);if(labels>300000)budget();

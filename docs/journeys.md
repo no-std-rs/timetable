@@ -26,7 +26,7 @@ With at least one starting place and one target, **Routes between your stops**
 lists every route the timetable offers in the next six hours, including routes
 that need a transfer. Each alternative is a dot diagram of every stop on every
 ride, with walks, line labels, change minutes and request stops (a dashed ring:
-signal the driver). The first search downloads the network once in the browser;
+signal the driver or phone the operator). The first search downloads the network once in the browser;
 later edits refresh the routes automatically. The search also starts from
 places within the extra-walk limit (default ten minutes) of a chosen start and
 ends at places within that limit of a chosen target. This finds a further stop
@@ -64,8 +64,8 @@ Different lines, interchange choices, and intermediate stop patterns remain
 separate alternatives; repeated services of an identical route share one result.
 Any target counts as arrival, so a ride or change continuing past an earlier
 target is not listed. Boarding the same vehicles at another nearby place, riding
-away and back, and routes with an extra change but no earlier arrival or later
-departure are left out. Changing between trips of the same line stays, because
+away and back when you could have waited and boarded on the return, and routes
+with an extra change but no earlier arrival or later departure are left out. Changing between trips of the same line stays, because
 short turns and branches can need it. Pickup/drop-off types 2 and 3 are request
 stops: they are used and marked, not rejected. Dense networks keep the earliest
 few prefixes of the earliest line sequences at each stop, so very slow
@@ -86,8 +86,8 @@ screen chooses the next complete connection whose first bus can still be reached
 with the configured walk, without another download. It shows arrival ETA, when
 to leave, walking time, each line and its boarding/alighting stops, and actual
 change time. A star marks a request stop: pickup/drop-off types 2 and 3 (in
-Poznań, every Maków Polnych call) are planned like ordinary stops, and the
-rider signals the driver or arranges the stop. A long press in this mode opens
+Poznań, every Maków Polnych call) are planned like ordinary stops; the rider
+signals the driver (type 3) or phones the operator in advance (type 2). A long press in this mode opens
 group selection; edit journey endpoints and margins in the installer.
 
 Transfers use the same named place (including its platforms), platforms with a
@@ -134,11 +134,13 @@ they do, down to one hour. Every connection arriving before the new end uses onl
 kept calls, so the shorter profile stays exact; the board says the search was
 shorter and when it ends ("No journey before HH:MM" afterwards). When change
 places do not fit, the device keeps the exact direct journeys; when two-transfer
-middle rides do not fit, it keeps the one-transfer results. Both say "fewer
-transfers". Each journey group records its own window and limits. Both profiles
-retain at most 64 nondominated future connections across groups, with 32 shared
-labels in a 1 KiB arena; when these fill, the window ends before the first
-omitted arrival. Browser exploration separately bounds active calls, untimed
+middle rides do not fit, it keeps the one-transfer results and any two-transfer
+journeys already found. Both say "fewer transfers" (on Android: not every
+journey with the configured transfers was checked). Each journey group records
+its own window and limits. Both profiles retain at most 64 nondominated future
+connections across groups, with 32 shared labels in a 1 KiB arena; when these
+fill, the window ends before the first omitted arrival. If that would leave less
+than an hour, the search fails instead of showing such a short profile. Browser exploration separately bounds active calls, untimed
 calls, retained prefixes per search round, boardings per trip, and route
 alternatives at 300,000 each. A shortened result is never presented as a complete
 six-hour search. Yesterday, today and tomorrow's service

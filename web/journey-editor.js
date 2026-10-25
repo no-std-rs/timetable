@@ -96,12 +96,15 @@ export class JourneyEditor {
       if(this.rerun){this.rerun=false;void this.calculate();}
     }
   }
-  // A tapped stop joins the nearer side (by estimated walk) or leaves it.
-  plan(place,fallback){
+  // A tapped stop joins the nearer side (by estimated walk) or leaves it. The
+  // tapped call must also let passengers on (start) or off (target) there.
+  plan(place,fallback,call){
     const j=this.group().journey,places=stopPlaces(this.catalog());
     const near={origins:nearestEndpoint(places,place,j.origins),targets:nearestEndpoint(places,place,j.targets)};
     const kind=near.origins&&near.targets?((near.origins.walk-near.targets.walk||near.origins.metres-near.targets.metres)<=0?"origins":"targets"):near.origins?"origins":near.targets?"targets":fallback;
     if(kind==="origins"&&!place.stops.some(s=>places.boarding.has(s.id)))return {error:"No boarding at this stop"};
+    if(kind==="origins"&&call?.pickup===1)return {error:"This ride does not pick up here"};
+    if(kind==="targets"&&call?.dropoff===1)return {error:"This ride does not set down here"};
     if(j[kind].length>=4)return {error:kind==="origins"?"Starting stops are full (4)":"Target stops are full (4)"};
     const stop=deviceStop(place);if(!stop)return {error:"This stop's platform IDs exceed the device's 32-byte limit. Choose another stop."};
     return {kind,entry:{stop:stop.id,stop_name:place.name,stop_code:stop.code,walk:Math.min(60,near[kind]?.walk??j[kind][0]?.walk??0)}};
@@ -116,7 +119,7 @@ export class JourneyEditor {
       const last=j[kind].length<2;
       return {label:`${base} · ${t(kind==="origins"?last?"Your only starting stop":"Your starting stop · tap to remove":last?"Your only target stop":"Your target stop · tap to remove")}`,selected:true,disabled:last};
     }
-    const plan=this.plan(place,token.leg===0?"origins":"targets");
+    const plan=this.plan(place,token.leg===0?"origins":"targets",call);
     if(plan.error)return {label:`${base} · ${t(plan.error)}`,selected:false,disabled:true};
     return {label:`${base} · ${t(plan.kind==="origins"?"Add as a starting stop · about {minutes} min walk":"Add as a target · about {minutes} min walk after arrival",{minutes:plan.entry.walk})}`,selected:false,disabled:false};
   }
@@ -128,7 +131,7 @@ export class JourneyEditor {
       if(j[kind].length>1){j[kind].splice(at,1);this.render();this.changed();}
       return;
     }
-    const plan=this.plan(place,token.leg===0?"origins":"targets");if(plan.error)return;
+    const plan=this.plan(place,token.leg===0?"origins":"targets",token.call);if(plan.error)return;
     j[plan.kind].push(plan.entry);this.render();this.changed();
   }
   // Routes from estimated nearby stops name what the device still needs.

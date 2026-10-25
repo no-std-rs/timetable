@@ -396,3 +396,13 @@ for name, rule in [('stop', 'X,XP,0'), ('station', 'P,Q,0')]:
             + 'Q,Other interchange,,,1\n' + ''.join(f'R{n},Remote {n},R{n:03},,0\n' for n in range(160)),
         'transfers.txt': f'from_stop_id,to_stop_id,transfer_type\n{rule}\n' + ''.join(f'R{n},R{n+1},0\n' for n in range(0, 160, 2)),
     })
+
+# A circular trip passes the start again before the school. When it does not
+# pick up there the second time, staying aboard from the first call is the trip.
+circular = {**journey,
+    'routes.txt': 'route_id,route_short_name,route_type\nC,Circle,3\n',
+    'trips.txt': 'route_id,service_id,trip_id\nC,ALL,c\n',
+    'stop_times.txt': journey_calls([('c','08:07:00','A',1),('c','08:10:00','X',2),('c','08:13:00','A',3),('c','08:20:00','Z',4)]),
+}
+write_archive('journey-circular-open.zip', circular)
+write_archive('journey-circular.zip', {**circular, 'stop_times.txt': circular['stop_times.txt'].replace('A,3,0,0', 'A,3,1,0')})

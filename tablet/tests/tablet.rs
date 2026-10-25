@@ -218,7 +218,7 @@ impl timetable_tablet::Painter for Texts {
     }
 }
 #[test]
-fn journey_footer_never_claims_the_configured_depth_after_a_fallback() {
+fn journey_footer_never_claims_a_complete_search_after_a_fallback() {
     use timetable_display::journey::{LIMIT_TRANSFERS, Leg, Path};
     let original = std::str::from_utf8(SETTINGS).unwrap();
     let start = original.find("\"picks\":[").unwrap();
@@ -233,7 +233,7 @@ fn journey_footer_never_claims_the_configured_depth_after_a_fallback() {
         (0, "On-device search complete · up to 2 transfers"),
         (
             LIMIT_TRANSFERS,
-            "On-device search limited to fewer than 2 transfers",
+            "On-device search limited: not every journey with up to 2 transfers checked",
         ),
     ] {
         let mut app = App {
@@ -248,7 +248,7 @@ fn journey_footer_never_claims_the_configured_depth_after_a_fallback() {
             line,
             from: stop,
             to: stop,
-            flags: 0,
+            flags: timetable_display::journey::LEG_REQUEST_BOARD,
             departure: 600,
             arrival: 1200,
         };
@@ -256,6 +256,7 @@ fn journey_footer_never_claims_the_configured_depth_after_a_fallback() {
             .paths
             .push(Path {
                 walk: 6,
+                egress: 2,
                 len: 1,
                 leave: 240,
                 arrival: 1200,
@@ -284,6 +285,10 @@ fn journey_footer_never_claims_the_configured_depth_after_a_fallback() {
         .unwrap();
         let footer = texts.0.iter().find(|t| t.starts_with("On-device")).unwrap();
         assert!(footer.starts_with(expected), "{footer}");
-        assert_eq!(footer.contains("up to 2"), limits == 0, "{footer}");
+        assert_eq!(footer.contains("complete"), limits == 0, "{footer}");
+        assert!(
+            footer.ends_with("signal the driver or phone the operator"),
+            "{footer}"
+        );
     }
 }

@@ -932,3 +932,56 @@ fn explicit_links_between_stations_still_join_change_places() {
         }
     }
 }
+#[test]
+fn result_slots_left_by_earlier_groups_must_cover_an_hour() {
+    let config = settings(1);
+    for (taken, fits) in [(56, true), (63, false)] {
+        let mut cache = Cache::default();
+        cache.reset(NOW);
+        for _ in 0..taken {
+            cache
+                .paths
+                .push(timetable_display::journey::Path {
+                    group: 3,
+                    len: 1,
+                    arrival: 7200,
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let result =
+            futures::executor::block_on(DevicePlanner::new("20261017".parse().unwrap()).query(
+                &mut Source(include_bytes!("fixtures/journey.zip")),
+                &mut zip::Workspace::new(),
+                &config,
+                clock::Zone::WARSAW,
+                NOW,
+                7,
+                0,
+                &mut cache,
+                &mut timetable_display::model::Headings::default(),
+                None,
+            ));
+        // The second arrival is 35 minutes away, so one slot is too few.
+        assert_eq!(result.is_ok(), fits, "{taken} slots taken");
+        if !fits {
+            assert!(matches!(result, Err(Error::IndexFull)));
+        }
+    }
+}
+#[test]
+fn a_circular_ride_past_the_start_can_be_boarded_on_its_first_pass() {
+    for device in [false, true] {
+        let cache = query_at(
+            include_bytes!("fixtures/journey-circular.zip"),
+            &settings(1),
+            NOW,
+            device,
+        );
+        let best = cache.best(0, NOW).unwrap();
+        assert_eq!(
+            (best.len, best.legs[0].departure, best.arrival),
+            (1, 7 * 60, 20 * 60)
+        );
+    }
+}

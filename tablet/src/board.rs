@@ -166,7 +166,7 @@ fn journey_card<P: Painter>(
                 (u32::from(leg.departure) - u32::from(path.legs[i - 1].arrival)) / 60
             );
         }
-        // Request stops ("on request") need a signal to the driver.
+        // Request stops ("on request") need a signal to the driver or a call to the operator.
         let request_at = |flag| {
             if leg.flags & flag != 0 {
                 " (request stop)"
@@ -196,12 +196,14 @@ fn journey_card<P: Painter>(
         let top = y + 98 + i32::from(path.len) * step;
         text(p, &value, x + 20, top.min(y + h - 40), 14, w - 40, MUTED, 0)?;
     }
-    value.clear();
-    // After a fallback the profile searched fewer transfers than configured.
+    // The longest footer exceeds the line buffer; never drop its last clauses.
+    let mut value = String::<320>::new();
+    // After a fallback not every journey with the configured transfers was
+    // searched; journeys already found with more changes may still be shown.
     let _ = if limits & timetable_display::journey::LIMIT_TRANSFERS != 0 {
         write!(
             value,
-            "On-device search limited to fewer than {} transfers",
+            "On-device search limited: not every journey with up to {} transfers checked",
             config.max_transfers
         )
     } else {
@@ -221,7 +223,7 @@ fn journey_card<P: Painter>(
             ""
         },
         if request {
-            " · signal the driver at request stops"
+            " · request stops: signal the driver or phone the operator"
         } else {
             ""
         }
