@@ -22,6 +22,57 @@ async function add(page,kind,search,name){
   await page.locator(`#journey-${kind}-search`).fill(search);
   await page.locator(`#journey-${kind}-matches`).getByRole("button",{name,exact:true}).click();
 }
+const alternativesZip=await readFile(new URL("../../display/tests/fixtures/journey-alternatives.zip",import.meta.url));
+const alternativesCatalog=await new FeedLoader().load(new Uint8Array(alternativesZip),{id:"mdb-982",provider:"Synthetic transit"});
+test("stops with no direct connection show every transfer route and all ride stops",async({page})=>{
+  await prepare(page,alternativesZip,alternativesCatalog);
+  await add(page,"origin","makow","Maków Polnych · A01");
+  await add(page,"target","bolechowo","Bolechowo-Os./Szkoła · Z01");
+  await page.locator("#journey-editor details > summary").click();
+  await page.locator("#journey-preview-depth").selectOption("1");
+  await page.locator("#journey-preview").click();
+  await expect(page.locator("#journey-preview-status")).toContainText("Search complete");
+  const cards=page.locator("#journey-preview-result .journey-result");
+  await expect(cards).toHaveCount(3);
+  await expect(cards.nth(0)).toContainText("Via park");
+  await expect(cards.nth(1)).toContainText("Via square");
+  await expect(cards.nth(2)).toContainText("Alt");
+  for(const card of await cards.all()){
+    await expect(card).toContainText("Through stop · V01 · Pass through");
+    await expect(card).toContainText("Transfers: 1");
+    await expect(card.locator(".journey-calls").nth(1).locator("li")).toHaveText([
+      /^08:22.* · Interchange · X01 · Board here$/,/^08:25.* · Through stop · V01 · Pass through$/,/^08:30.* · Bolechowo-Os.\/Szkoła · Z01 · Alight here$/,
+    ]);
+  }
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.locator("#journey-preview-result").screenshot({path:`/tmp/timetable-route-alternatives-${page.viewportSize().width}.png`});
+  await page.locator(".masthead [data-language=pl]").click();
+  await page.locator("#journey-preview").click();
+  await expect(page.locator("#journey-preview-status")).toContainText("Wyszukiwanie zakończone");
+  await expect(cards.first()).toContainText("Wsiądź");
+  await expect(cards.first()).toContainText("Po drodze");
+});
+const untimedZip=await readFile(new URL("../../display/tests/fixtures/journey-untimed-alternatives.zip",import.meta.url));
+const untimedCatalog=await new FeedLoader().load(new Uint8Array(untimedZip),{id:"mdb-982",provider:"Synthetic transit"});
+test("untimed intermediate stops retain full platform codes and do not display invented times",async({page})=>{
+  await prepare(page,untimedZip,untimedCatalog);
+  await add(page,"origin","makow","Maków Polnych · A01");
+  await add(page,"target","bolechowo","Bolechowo-Os./Szkoła · Z01");
+  await page.locator("#journey-editor details > summary").click();
+  await page.locator("#journey-preview").click();
+  await expect(page.locator("#journey-preview-status")).toContainText("Search complete");
+  const cards=page.locator("#journey-preview-result .journey-result");
+  await expect(cards).toHaveCount(3);
+  const park=cards.filter({hasText:"Via park"});
+  await expect(park).toContainText("Time not provided · Via park · 番二三四五六七八九十 · Pass through");
+  await expect(park).toContainText("08:25");
+  await expect(park).not.toContainText("Invalid Date");
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.locator(".masthead [data-language=pl]").click();
+  await page.locator("#journey-preview").click();
+  await expect(page.locator("#journey-preview-status")).toContainText("Wyszukiwanie zakończone");
+  await expect(park).toContainText("Brak godziny w rozkładzie · Via park · 番二三四五六七八九十");
+});
 test("journey settings preserve multiple walks, use one transfer by default and progressively explore deeper",async({page},info)=>{
   await prepare(page);
   await add(page,"origin","makow","Maków Polnych · A01");

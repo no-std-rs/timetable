@@ -48,27 +48,45 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   const stops=new Map(loader.catalog.stops.map(s=>[s.id,s]));
   const places=stopPlaces(loader.catalog);
   for(const stop of[...settings.origins,...settings.targets])if(!places.byId.has(stop.stop))throw new Error("A journey stop changed. Reload the network and select it again.");
-  const calls=new Map(),identities=new Map();let count=0;
+  const calls=new Map(),identities=new Map(),untimed=new Map();let count=0,untimedCount=0;
   for await(const row of loader.rows("stop_times.txt")){
     const trip=loader.trips.get(row.trip_id);if(!trip)fail();
     const mask=services.get(trip.service_id)?.active??0;if(!mask)continue;
     const arrival=time(row.arrival_time),departure=time(row.departure_time);
-    if(arrival===null||departure===null)continue;if(arrival>departure)fail();
+    if(arrival!==null&&departure!==null&&arrival>departure)fail();
     const sequence=uint(row.stop_sequence),pickup=uint(row.pickup_type||"0",3),dropoff=uint(row.drop_off_type||"0",3);
     const stop=stops.get(row.stop_id);if(!stop)fail();
+    if(arrival===null||departure===null){
+      const list=untimed.get(row.trip_id)??[];
+      list.push({sequence,arrival,departure,pickup,dropoff,stop,line:loader.catalog.routes[trip.route].line});untimed.set(row.trip_id,list);
+      if(++untimedCount>300000)throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");
+      continue;
+    }
     for(let day=0;day<3;day++){
       if(!(mask&(1<<day)))continue;
       const a=days[day].epoch+arrival,d=days[day].epoch+departure;
       if(d<now||a>now+HORIZON)continue;
       const key=JSON.stringify([row.trip_id,day]);let list=calls.get(key);
-      if(!list){list=[];calls.set(key,list);identities.set(key,{trip:row.trip_id,route:loader.catalog.routes[trip.route].id});}
+      if(!list){list=[];calls.set(key,list);identities.set(key,{trip:row.trip_id,route:loader.catalog.routes[trip.route].id,day});}
       list.push({sequence,arrival:a,departure:d,pickup:d>now+HORIZON?1:pickup,dropoff:a<now?1:dropoff,stop,trip:key,line:loader.catalog.routes[trip.route].line});
       if(++count>300000)throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");
     }
   }
-  for(const list of calls.values()){
+  for(const [key,list]of calls){
+    const identity=identities.get(key),day=identity.day;
+    // Untimed calls describe the route but cannot supply boarding/arrival
+    // times. Attach them only to trip instances with calls in our window.
+    for(const call of untimed.get(identity.trip)??[]){
+      list.push({...call,trip:key,arrival:call.arrival===null?null:days[day].epoch+call.arrival,departure:call.departure===null?null:days[day].epoch+call.departure});
+      if(++count>300000)throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");
+    }
     list.sort((a,b)=>a.sequence-b.sequence);
-    if(list.some((c,i)=>i&&(c.sequence===list[i-1].sequence||c.arrival<list[i-1].departure)))fail();
+    let lastTime=null;
+    for(const [i,call]of list.entries()){
+      const first=call.arrival??call.departure;
+      if(i&&call.sequence===list[i-1].sequence||first!==null&&lastTime!==null&&first<lastTime)fail();
+      lastTime=call.departure??call.arrival??lastTime;
+    }
   }
   const scopeFields=["from_route_id","to_route_id","from_trip_id","to_trip_id"];
   const rules=new Map(),allRules=[];
@@ -117,12 +135,12 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
     const from=children.get(rule.from)??[rule.from],to=children.get(rule.to)??[rule.to];
     for(const a of from)for(const b of to)if(a!==b)connect(a,b);
   }
-  const tripSensitive=allRules.some(rule=>scopeFields.some(field=>rule[field]));
-  // Scoped rules distinguish arriving trips. Preserve their prefixes, including
-  // different access walks, rather than letting one forbidden trip hide another.
+  const routeSegments=legs=>legs.map(leg=>[leg.route,leg.stops.map(call=>call.stop.id)]);
+  // Keep every route prefix and arriving trip (for scoped transfer rules).
+  // Earlier services of an identical prefix can share their onward ride.
   const offer=(map,stop,label)=>{
     let list=map.get(stop);if(!list){list=new Map();map.set(stop,list);}
-    const key=JSON.stringify([tripSensitive?label.legs.at(-1)?.trip??null:null,label.walk]),old=list.get(key);
+    const key=JSON.stringify([label.origin.id,label.walk,routeSegments(label.legs),label.legs.at(-1)?.trip,label.error,!!label.conditional]),old=list.get(key);
     if(!old||compare(label,old)<0)list.set(key,label);
     return old?0:1;
   };
@@ -130,14 +148,19 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   let previous=new Map();
   for(const origin of settings.origins)for(const stop of places.byId.get(origin.stop).stops)offer(previous,stop.id,{arrival:now+origin.walk*60,walk:origin.walk,origin:stop,legs:[]});
   const best=new Map();
-  const publish=(depth,complete)=>({depth,complete,now,timezone:loader.timezone,paths:[...best.values()].sort(compare)});
+  // Repeated services of the same ordered route are one choice: show its
+  // earliest feasible itinerary, while retaining every distinct stop pattern.
+  const routeKey=path=>JSON.stringify([places.byId.get(path.origin.id).key,places.byId.get(path.target.id).key,routeSegments(path.legs)]);
+  const publish=(depth,complete)=>({depth,complete,now,until:now+HORIZON,timezone:loader.timezone,paths:[...best.values()].sort(compare)});
   for(let depth=0;depth<=maxTransfers;depth++){
     const next=new Map();let labels=0;
     for(const list of calls.values()){
-      let boarded=null;
-      for(const call of list){
-        if(boarded&&call.dropoff!==1&&call.sequence>boarded.call.sequence){
-          const label={...boarded.label,error:boarded.error,conditional:boarded.label.conditional||boarded.call.pickup>=2||call.dropoff>=2,arrival:call.arrival,legs:[...boarded.label.legs,{trip:call.trip,line:call.line,from:boarded.call.stop,to:call.stop,departure:boarded.call.departure,arrival:call.arrival}]};
+      const boardings=[];
+      for(const [at,call] of list.entries()){
+        if(call.arrival===null||call.departure===null)continue;
+        if(call.dropoff!==1)for(const boarded of boardings){
+          const leg={trip:call.trip,route:identities.get(call.trip).route,line:call.line,from:boarded.call.stop,to:call.stop,departure:boarded.call.departure,arrival:call.arrival,stops:list.slice(boarded.at,at+1).map(c=>({stop:c.stop,arrival:c.arrival,departure:c.departure}))};
+          const label={...boarded.label,error:boarded.error,conditional:boarded.label.conditional||boarded.call.pickup>=2||call.dropoff>=2,arrival:call.arrival,legs:[...boarded.label.legs,leg]};
           labels+=offer(next,call.stop.id,label);if(labels>300000)budget();
         }
         if(call.pickup===1)continue;
@@ -153,8 +176,8 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
           // Timed guarantees do not waive the user's chosen minimum margin.
           const seconds=depth?Math.max(settings.transfer_minutes*60,rule?.seconds??0):0;
           if(label.arrival+seconds>call.departure)continue;
-          // Every previous label has exactly `depth` rides in this round.
-          if(!boarded||label.walk<boarded.label.walk)boarded={call,label,error:label.error||rule?.error};
+          boardings.push({at,call,label,error:label.error||rule?.error});
+          if(boardings.length>300000)budget();
         }
       }
     }
@@ -162,8 +185,9 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
       const candidate={...label,arrival:label.arrival+target.walk*60,target:stop,egress:target.walk};
       if(candidate.arrival<=now+HORIZON&&candidate.error)throw new Error(candidate.error);
       if(candidate.arrival<=now+HORIZON&&candidate.conditional)throw new Error("Journey routing does not yet support conditional boarding or alighting.");
-      const key=places.byId.get(target.stop).key;
+      const key=routeKey(candidate);
       if(candidate.arrival<=now+HORIZON&&(!best.has(key)||compare(candidate,best.get(key))<0))best.set(key,candidate);
+      if(best.size>300000)budget();
     }
     previous=next;onProgress(publish(depth,depth===maxTransfers));
     await new Promise(resolve=>setTimeout(resolve,0));
