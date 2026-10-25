@@ -151,21 +151,32 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   const scoped=allRules.some(rule=>scopeFields.some(field=>rule[field]));
   // A stop keeps the earliest few prefixes of its earliest line sequences.
   // Later copies only lead to slower routes, and dense networks would explode.
+  // Arrivals by a route or trip that a from-scoped rule names can have changes
+  // the others lack, so they are kept up to the memory budget and do not
+  // displace the rest.
+  const fromRoutes=new Set(allRules.map(rule=>rule.from_route_id).filter(Boolean));
+  const fromTrips=new Set(allRules.map(rule=>rule.from_trip_id).filter(Boolean));
+  const exempt=label=>{const leg=label.legs.at(-1);return !!leg&&(fromRoutes.has(leg.route)||fromTrips.has(identities.get(leg.trip).trip));};
   const lines=label=>label.legs.map(leg=>leg.route).join("\n");
   const offer=(map,stop,label)=>{
     let list=map.get(stop);if(!list){list=new Map();map.set(stop,list);}
     const key=JSON.stringify([label.origin.id,label.walk,routeSegments(label.legs),scoped?label.legs.at(-1)?.trip:"",label.error]),old=list.get(key);
     if(old){if(compare(label,old)<0)list.set(key,label);return 0;}
-    const group=lines(label),best=new Map();let worst=null;
-    for(const [k,l]of list){const g=lines(l);if(!best.has(g)||compare(l,best.get(g))<0)best.set(g,l);if(g===group&&(!worst||compare(l,worst[1])>0))worst=[k,l];}
-    if(worst&&[...list.values()].filter(l=>lines(l)===group).length>=PREFIXES){
+    if(exempt(label)){list.set(key,label);return 1;}
+    const group=lines(label),best=new Map();let worst=null,same=0;
+    for(const [k,l]of list){
+      if(exempt(l))continue;
+      const g=lines(l);if(!best.has(g)||compare(l,best.get(g))<0)best.set(g,l);
+      if(g===group){same++;if(!worst||compare(l,worst[1])>0)worst=[k,l];}
+    }
+    if(same>=PREFIXES){
       if(compare(label,worst[1])>=0)return 0;
       list.delete(worst[0]);list.set(key,label);return 0;
     }
-    if(!worst&&best.size>=SEQUENCES){
+    if(!same&&best.size>=SEQUENCES){
       let last=null;for(const [g,l]of best)if(!last||compare(l,last[1])>0)last=[g,l];
       if(compare(label,last[1])>=0)return 0;
-      for(const [k,l]of list)if(lines(l)===last[0])list.delete(k);
+      for(const [k,l]of list)if(!exempt(l)&&lines(l)===last[0])list.delete(k);
     }
     list.set(key,label);return 1;
   };
@@ -181,13 +192,14 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   // Any target counts as arrival: a ride or change that already reached one
   // earlier makes continuing to another target a worse duplicate.
   const reachedEarlier=path=>path.legs.some((leg,i)=>leg.stops.some((call,at)=>at>0&&!(i===path.legs.length-1&&at===leg.stops.length-1)&&call.dropoff!==1&&call.arrival!==null&&targetAt.has(call.stop.id)&&call.arrival+targetAt.get(call.stop.id).walk*60<=path.arrival));
-  // Riding away and back (a repeated place across rides, back through the
-  // start, or two consecutive rides of one line) only adds waiting time.
+  // Riding away and back (a repeated place across rides, or back through the
+  // start) only adds waiting time. Consecutive trips of one route stay: short
+  // turns and branches can need that change, and a redundant one is dominated
+  // by staying on the later trip below.
   const placeOf=stop=>places.byId.get(stop.id)?.key??stop.id;
   const loops=path=>{
     const seen=new Set([placeOf(path.origin)]);
-    return path.legs.some((leg,k)=>{
-      if(k&&leg.route===path.legs[k-1].route)return true;
+    return path.legs.some(leg=>{
       const own=new Set();
       for(const [at,call]of leg.stops.entries()){if(at&&seen.has(placeOf(call.stop)))return true;own.add(placeOf(call.stop));}
       for(const place of own)seen.add(place);

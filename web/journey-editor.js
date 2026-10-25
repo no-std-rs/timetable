@@ -24,7 +24,7 @@ export class JourneyEditor {
   // Any edit invalidates shown routes. Once the network is loaded in this
   // browser, routes refresh automatically; the first search is a button.
   invalidate(){
-    this.generation++;clearTimeout(this.timer);this.last=null;this.expanded=false;
+    this.generation++;clearTimeout(this.timer);this.rerun=false;this.last=null;this.expanded=false;
     this.$("journey-preview-status").textContent="";this.$("journey-preview-result").replaceChildren();this.$("journey-routes-more").hidden=true;this.$("journey-route-hint").textContent="";
     const j=this.group().journey,shown=!!(j&&j.origins.length&&j.targets.length&&this.catalog());
     this.$("journey-routes").hidden=!shown;this.$("journey-preview").disabled=false;
@@ -81,19 +81,26 @@ export class JourneyEditor {
   async calculate(){
     clearTimeout(this.timer);this.generation++;const generation=this.generation;
     const button=this.$("journey-preview"),status=this.$("journey-preview-status");
+    // The worker cannot interrupt a scan, so searches run one at a time and
+    // edits during a search coalesce into one rerun with the latest settings.
+    if(this.running){this.rerun=true;status.textContent=t("Checking direct journeys…");return;}
+    this.running=true;
     try{
       const journey=structuredClone(validateJourneyPlaces(validateJourney(this.group().journey),stopPlaces(this.catalog())));button.disabled=true;
       status.textContent=t("Checking direct journeys…");
       const update=result=>{if(generation!==this.generation)return;this.result(result);};
       const result=await this.preview(journey,Number(this.$("journey-preview-depth").value),update,Number(this.$("journey-quick-minutes").value)||0);update(result);
     }catch(error){if(generation===this.generation&&error.name!=="AbortError")status.textContent=t(error.message);}
-    finally{if(generation===this.generation)button.disabled=false;}
+    finally{
+      this.running=false;if(generation===this.generation)button.disabled=false;
+      if(this.rerun){this.rerun=false;void this.calculate();}
+    }
   }
   // A tapped stop joins the nearer side (by estimated walk) or leaves it.
   plan(place,fallback){
     const j=this.group().journey,places=stopPlaces(this.catalog());
     const near={origins:nearestEndpoint(places,place,j.origins),targets:nearestEndpoint(places,place,j.targets)};
-    const kind=near.origins&&near.targets?(near.origins.metres<=near.targets.metres?"origins":"targets"):near.origins?"origins":near.targets?"targets":fallback;
+    const kind=near.origins&&near.targets?((near.origins.walk-near.targets.walk||near.origins.metres-near.targets.metres)<=0?"origins":"targets"):near.origins?"origins":near.targets?"targets":fallback;
     if(kind==="origins"&&!place.stops.some(s=>places.boarding.has(s.id)))return {error:"No boarding at this stop"};
     if(j[kind].length>=4)return {error:kind==="origins"?"Starting stops are full (4)":"Target stops are full (4)"};
     const stop=deviceStop(place);if(!stop)return {error:"This stop's platform IDs exceed the device's 32-byte limit. Choose another stop."};

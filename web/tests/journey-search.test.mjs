@@ -294,3 +294,35 @@ test("any target counts as arrival, so rides and changes past an earlier target 
   assert.deepEqual(lines(both),[["348","W",37*60],["911+397","S",50*60]]);
   assert.ok(both.paths.every(path=>path.start.configured&&path.end.configured));
 });
+test("a change between trips of one route stays: a short turn feeds its own branch",async()=>{
+  const result=await searchJourneys(await loader("journey-branch.zip"),config(),{now:NOW});
+  assert.deepEqual(result.paths.map(path=>[path.legs.map(leg=>leg.line).join("+"),path.arrival-NOW]),[["348+348",35*60]]);
+});
+test("busy-stop caps keep arrivals a from-scoped transfer rule names",async()=>{
+  const result=await searchJourneys(await loader("journey-hub-scoped.zip"),config(),{now:NOW});
+  assert.deepEqual(result.paths.map(path=>[path.legs.map(leg=>leg.line).join("+"),path.arrival-NOW]),[["R13+Final",40*60]]);
+});
+test("a tapped stop joins the side with the shorter estimated walk, not the nearer chosen stop",async()=>{
+  const {JourneyEditor}=await import("../journey-editor.js");
+  const feed=await loader("journey-walkable.zip"),places=stopPlaces(feed.catalog);
+  const journey={origins:[{stop:"A",walk:30}],targets:[{stop:"G",walk:0}]};
+  // Kresowa is about 460 m from Maków Polnych and 650 m from UAM Geografii.
+  const plan=JourneyEditor.prototype.plan.call({group:()=>({journey}),catalog:()=>feed.catalog},places.byId.get("K"),"origins");
+  assert.deepEqual([plan.kind,plan.entry.stop,plan.entry.walk],["targets","K",9]);
+});
+test("route searches run one at a time and edits during one coalesce into a single rerun",async()=>{
+  const {JourneyEditor}=await import("../journey-editor.js");
+  const feed=await loader("journey-walkable.zip"),journey=walkable(),elements=new Map(),pending=[],walks=[];let active=0,peak=0;
+  const editor=Object.assign(Object.create(JourneyEditor.prototype),{
+    generation:0,group:()=>({journey}),catalog:()=>feed.catalog,result:()=>{},
+    $:id=>{if(!elements.has(id))elements.set(id,{textContent:"",disabled:false,value:"1"});return elements.get(id);},
+    preview:j=>{walks.push(j.origins[0].walk);peak=Math.max(peak,++active);return new Promise(resolve=>pending.push(()=>{active--;resolve({});}));},
+  });
+  const first=editor.calculate();
+  for(const walk of[7,8]){journey.origins[0].walk=walk;void editor.calculate();}
+  assert.deepEqual(walks,[6]);
+  pending.shift()();await first;
+  assert.deepEqual(walks,[6,8],"one rerun with the latest settings");
+  pending.shift()();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.deepEqual([walks.length,peak,pending.length],[2,1,0]);
+});

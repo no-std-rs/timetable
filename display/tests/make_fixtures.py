@@ -342,3 +342,27 @@ walkable = {**journey,
         'x1,09:10:00,09:10:00,W,1,0,0\nx1,09:11:00,09:11:00,S,2,0,0\n',
 }
 write_archive('journey-walkable.zip', walkable)
+
+# A short-turn trip of one route ends at the interchange; a branch trip of the
+# same route continues to the school. The change between them is the journey.
+write_archive('journey-branch.zip', {**journey,
+    'routes.txt': 'route_id,route_short_name,route_type\nL,348,3\n',
+    'trips.txt': 'route_id,service_id,trip_id\nL,ALL,short\nL,ALL,branch\n',
+    'stop_times.txt': journey_calls([
+        ('short','08:07:00','A',1),('short','08:17:00','X',2),
+        ('branch','08:22:00','X',1),('branch','08:35:00','Z',2),
+    ]),
+})
+
+# Twelve lines reach the hub before line 13, but only line 13 may use the
+# route-scoped link to the far platform where the final bus leaves.
+hub_lines = [f'R{n}' for n in range(1, 14)]
+write_archive('journey-hub-scoped.zip', {**journey,
+    'routes.txt': 'route_id,route_short_name,route_type\n' + ''.join(f'{r},{r},3\n' for r in hub_lines) + 'F,Final,3\n',
+    'stops.txt': journey['stops.txt'] + 'H,Hub,H01\nHB,Hub far platform,H02\n',
+    'trips.txt': 'route_id,service_id,trip_id\n' + ''.join(f'{r},ALL,{r.lower()}\n' for r in hub_lines) + 'F,ALL,f\n',
+    'stop_times.txt': journey_calls([row for n, r in enumerate(hub_lines)
+        for row in ((r.lower(),'08:07:00','A',1),(r.lower(),f'08:{9+n+(3 if n==12 else 0):02}:00','H',2))]
+        + [('f','08:30:00','HB',1),('f','08:40:00','Z',2)]),
+    'transfers.txt': 'from_stop_id,to_stop_id,transfer_type,from_route_id\nH,HB,0,R13\n',
+})

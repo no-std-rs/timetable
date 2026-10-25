@@ -33,8 +33,9 @@ ends at places within that limit of a chosen target. This finds a further stop
 with a direct bus, such as walking about 13 minutes to Kresowa for the 348
 instead of taking the 911 from Maków Polnych and changing. Alternatives that use
 such an estimated place say so and offer **Add these stops**. Tap or
-keyboard-activate any stop dot to add it: it joins the starting stops when it is
-nearer a chosen start, otherwise the targets. Tap one of your stops to remove it.
+keyboard-activate any stop dot to add it: it joins the starting stops when its
+estimated walk from a chosen start is shorter than its walk to a chosen target,
+otherwise the targets. Tap one of your stops to remove it.
 Editable estimates add straight-line walking at 75 metres/minute to the nearest
 chosen stop's walk; adjust them for real streets and crossings. Without feed
 coordinates, nearby places are not suggested and manual stop search remains.
@@ -64,10 +65,14 @@ separate alternatives; repeated services of an identical route share one result.
 Any target counts as arrival, so a ride or change continuing past an earlier
 target is not listed. Boarding the same vehicles at another nearby place, riding
 away and back, and routes with an extra change but no earlier arrival or later
-departure are left out. Pickup/drop-off types 2 and 3 are request stops: they
-are used and marked, not rejected. Dense networks keep the earliest few prefixes
-of the earliest line sequences at each stop, so very slow alternatives can be
-omitted. The first eight alternatives are shown, with the rest on request.
+departure are left out. Changing between trips of the same line stays, because
+short turns and branches can need it. Pickup/drop-off types 2 and 3 are request
+stops: they are used and marked, not rejected. Dense networks keep the earliest
+few prefixes of the earliest line sequences at each stop, so very slow
+alternatives can be omitted; arrivals by a route or trip that a from-scoped
+transfer rule names are always kept. Edits during a search wait for it and then
+search once with the latest settings. The first eight alternatives are shown,
+with the rest on request.
 Intermediate calls with missing times remain in the stop list and distinguish
 route alternatives; missing times are labelled rather than interpolated.
 The website explorer can also apply route/trip-scoped stop-transfer rules and

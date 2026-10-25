@@ -889,3 +889,20 @@ fn stops_added_from_the_route_view_give_the_device_the_direct_bus() {
         assert_eq!(after.line(best.legs[0].line), "348");
     }
 }
+#[test]
+fn a_short_turn_can_feed_a_branch_trip_of_the_same_route() {
+    for device in [false, true] {
+        let cache = query_at(
+            include_bytes!("fixtures/journey-branch.zip"),
+            &settings(1),
+            NOW,
+            device,
+        );
+        let best = cache.best(0, NOW).unwrap();
+        assert_eq!((best.len, best.arrival), (2, 35 * 60));
+        assert_eq!(
+            (cache.line(best.legs[0].line), cache.line(best.legs[1].line)),
+            ("348", "348")
+        );
+    }
+}
