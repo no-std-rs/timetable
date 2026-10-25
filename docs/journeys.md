@@ -18,6 +18,9 @@ towards ETA.
 The display recommends the catchable connection with the earliest arrival,
 including access walking, waiting, all bus/train legs and destination walking.
 It can therefore prefer a 12-minute walk to a direct bus over a nearer stop.
+Any target counts as arriving: a connection that reaches one target earlier
+always beats riding on to another target. Below the recommendation, the board
+shows what to take after missing it, when the screen has room.
 
 With at least one starting place and one target, **Routes between your stops**
 lists every route the timetable offers in the next six hours, including routes
@@ -77,8 +80,10 @@ The device builds a six-hour departure/arrival profile. As time advances, the
 screen chooses the next complete connection whose first bus can still be reached
 with the configured walk, without another download. It shows arrival ETA, when
 to leave, walking time, each line and its boarding/alighting stops, and actual
-change time. A long press in this mode opens group selection; edit journey
-endpoints and margins in the installer.
+change time. A star marks a request stop: pickup/drop-off types 2 and 3 (in
+Poznań, every Maków Polnych call) are planned like ordinary stops, and the
+rider signals the driver or arranges the stop. A long press in this mode opens
+group selection; edit journey endpoints and margins in the installer.
 
 Transfers use the same named place (including its platforms), platforms with a
 declared common `parent_station`, or explicit `transfers.txt` links. Explicit
@@ -86,31 +91,47 @@ platform/station prohibitions and minimums override a same-name connection. No s
 invented. A station transfer's configured slack must cover its walking time.
 Journey stop IDs must still exist in the downloaded feed; select them again if
 the operator renumbers stops. This mode does not plan walking-only journeys,
-fares, accessibility constraints, frequency templates, conditional boarding or
-alighting that requires arrangements, route/trip-specific
+fares, accessibility constraints, frequency templates, route/trip-specific
 transfer rules or in-seat transfer rules. Unsupported relevant rules fail the
 search explicitly. The bounded device search conservatively rejects a scoped
 rule touching a selected trip’s stops; it does not evaluate route/trip predicates.
 Use feeds without such rules for those stops. On ESP32, a window requiring different GTFS archives is
 rejected instead of claiming a complete search across incompatible snapshots.
 
-The planner uses fixed storage and fails visibly when a selection exceeds it:
+The planner uses fixed storage and stores only calls that can matter. A first
+stop_times pass keeps calls at the chosen places, for every service day; the
+trips table then drops days that do not run. A second pass marks stops a ride
+reaches after boarding at a start, and stops where a ride towards a target can
+be boarded, in small Bloom sets. Only places both sides use become change
+places, and a third pass keeps calls there within each trip's useful range.
+Trip, route and service IDs are compared as 64-bit keys; a colliding key would
+appear as a duplicate ID in the feed and fails the search. For the real Poznań
+search from Maków Polnych and UAM Wydział Geografii to Bolechowo-Os./Szkoła and
+Wojska Polskiego, the ESP32 profile keeps 66 change-place platforms and completes
+the six-hour window with the same connections as Android.
 
 | Bound | ESP32 | Android |
 | --- | ---: | ---: |
-| Relevant endpoint trips | 256 | 1,024 |
-| Trip-ID / temporary place-name arena bytes | 4,096 | 16,384 |
-| Endpoint trip calls in the time window | 1,024 | 2,048 |
-| Stops including relevant name cohorts and interchange platforms | 128 | 384 |
-| Advanced middle-ride calls | 128 | 2,048 |
-| Active services | 16 | 64 |
-| Relevant routes | 32 | 64 |
+| Trips at chosen places, all service days | 512 | 1,536 |
+| Stored calls (chosen places and change places) | 1,170 | 3,072 |
+| Stops including name cohorts and change platforms | 128 | 512 |
+| Advanced middle-ride calls | 128 | 1,024 |
+| Active services | 64 | 256 |
+| Relevant routes | 32 | 256 |
 
-Both profiles retain at most 64 nondominated future connections across groups,
-with 32 shared labels in a 1 KiB arena. Browser exploration separately bounds
-active calls, untimed calls, retained prefixes per search round, boardings per trip, and route
-alternatives at 300,000 each. Capacity exhaustion never returns a
-silently shortened complete result. Yesterday, today and tomorrow's service
+When calls or trips still do not fit, the window ends a quarter earlier until
+they do, down to one hour. Every connection arriving before the new end uses only
+kept calls, so the shorter profile stays exact; the board says the search was
+shorter and when it ends ("No journey before HH:MM" afterwards). When change
+places do not fit, the device keeps the exact direct journeys; when two-transfer
+middle rides do not fit, it keeps the one-transfer results. Both say "fewer
+transfers". Each journey group records its own window and limits. Both profiles
+retain at most 64 nondominated future connections across groups, with 32 shared
+labels in a 1 KiB arena; when these fill, the window ends before the first
+omitted arrival. Browser exploration separately bounds active calls, untimed
+calls, retained prefixes per search round, boardings per trip, and route
+alternatives at 300,000 each. A shortened result is never presented as a complete
+six-hour search. Yesterday, today and tomorrow's service
 days include calendar exceptions and after-24:00 times, using the installed
 network timezone. Feeds extending beyond that service-day policy are unsupported.
 

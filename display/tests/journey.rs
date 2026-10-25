@@ -857,3 +857,35 @@ fn snapshot_keeps_windows_limits_and_request_stops() {
     assert!(restored.paths.iter().any(|p| p.legs[0].flags != 0));
     assert_eq!(restored.until_for(0), NOW + i64::from(short.windows[0]));
 }
+
+#[test]
+fn stops_added_from_the_route_view_give_the_device_the_direct_bus() {
+    let bytes = include_bytes!("fixtures/journey-walkable.zip");
+    let config = |json: &str| -> Journey {
+        serde_json_core::from_slice_escaped(json.as_bytes(), &mut [0; 256])
+            .unwrap()
+            .0
+    };
+    let nearer = config(
+        r#"{"origins":[{"stop":"A","walk":6}],"targets":[{"stop":"S","walk":0}],"transfer_minutes":3,"max_transfers":1}"#,
+    );
+    // After tapping UAM Wydział Geografii and Wojska Polskiego in the browser.
+    let added = config(
+        r#"{"origins":[{"stop":"A","walk":6},{"stop":"G","walk":12}],"targets":[{"stop":"S","walk":0},{"stop":"W","walk":2}],"transfer_minutes":3,"max_transfers":1}"#,
+    );
+    for device in [false, true] {
+        let before = query_at(bytes, &nearer, NOW, device);
+        let best = before.best(0, NOW).unwrap();
+        assert_eq!(
+            (best.len, best.arrival, best.legs[0].flags),
+            (2, 50 * 60, LEG_REQUEST_BOARD)
+        );
+        let after = query_at(bytes, &added, NOW, device);
+        let best = after.best(0, NOW).unwrap();
+        assert_eq!(
+            (best.len, best.origin, best.target, best.arrival),
+            (1, 1, 1, 37 * 60)
+        );
+        assert_eq!(after.line(best.legs[0].line), "348");
+    }
+}

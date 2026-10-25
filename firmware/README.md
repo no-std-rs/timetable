@@ -155,6 +155,8 @@ are optional. ESP32 runs its own bounded Rust search after downloading GTFS.
 The temporary search workspace uses the existing heap after TLS verification;
 the last validated result remains visible during an update. Journey profiles
 are RAM-only: restart or C3 deep-sleep wake requires Wi-Fi to calculate again.
+Request stops are marked with `*`. If a selection does not fit, the board says
+it searched a shorter window or fewer transfers instead of failing.
 See [configuration, transfer semantics and capacities](../docs/journeys.md).
 
 ## Data and memory

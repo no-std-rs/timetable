@@ -1157,28 +1157,50 @@ transfer; advanced device search permits two. Results retain future
 nondominated leave/arrival pairs, so selecting the next connection does not
 repeat the GTFS scans. Website exploration is optional and independent.
 
-The ESP32's 1,024 call records reuse the ordinary departure join's idle 16 KiB
+The ESP32's 1,170 call records reuse the ordinary departure join's idle 16 KiB
 exact-ID arena. Its remaining search scratch is allocated fallibly after TLS
 verification, then released before the next handshake. This preserves the
-64 KiB heap, the existing departure/parser capacities and the new journey search
-capacities. A host ABI admission model counts 34,320 B radio allowance, query
-settings, staged results, 20,096 B planner scratch and 512 B allocation allowance:
-63,464 B total. That is an admission model, not a physical peak or a reservation
-against radio activity. Large selections still fail explicitly at fixed limits.
+64 KiB heap and the existing departure/parser capacities. A host ABI admission
+model counts 34,320 B radio allowance, query settings, staged results, 20,728 B
+planner scratch and 512 B allocation allowance: 64,112 B total (main: 20,464 B
+and 63,832 B). That is an admission model, not a physical peak or a reservation
+against radio activity.
+
+The first device planner stored every call of every trip touching a chosen place,
+interned trips from every service day by ID text, and failed on real data: the
+Poznań search from Maków Polnych to Bolechowo-Os./Szkoła needed 255 trip slots,
+2,903 calls and 179 stops on the 256/1,024/128 ESP32 bounds, and every
+Maków Polnych call is a request stop (type 3), which it rejected. Both planners
+now plan request stops. Calls are kept only at chosen places and at change
+places that both a ride from a start and a ride towards a target serve, found
+with four 5,120-bit Bloom sets sharing the place-key scratch. Trip, route and
+service IDs are 64-bit keys, so 512 trip slots fit in less RAM than 256 did.
+With two starts and two targets on the 2026-10-24 Poznań archive, the ESP32
+profile keeps 66 change-place platforms and returns the same ten connections as
+Android over the full six-hour window (host run, not hardware). When storage
+still does not fit, the window shortens and is reported instead of failing.
+
+One transfer now costs three stop_times passes instead of two; direct search
+needs one instead of two. At the measured 58 KiB/s compressed C3 pipeline above,
+an extra Poznań stop_times pass is roughly two and a half minutes per refresh.
+That is an estimate from the earlier partial-member measurement, not a timed
+journey refresh.
 
 The final linked binaries give these results with the pinned firmware toolchain:
 
 | Image | Static + 24 KiB reserve | Full linker RAM | Available stack | Journey record path | TLS path |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| C3 | 299,892 B | 324,604 B | 49,288 B | 39,856 B | 41,744 B |
-| C6 portrait | 331,412 B | 397,308 B | 90,472 B | 38,960 B | 40,848 B |
-| C6 landscape | 331,412 B | 397,308 B | 90,472 B | 38,960 B | 40,848 B |
+| C3 | 299,756 B | 324,604 B | 49,424 B | 40,000 B | 41,744 B |
+| C6 portrait | 331,276 B | 397,308 B | 90,608 B | 39,104 B | 40,848 B |
+| C6 landscape | 331,276 B | 397,308 B | 90,608 B | 39,104 B | 40,848 B |
 
 All audited paths retain 4,096 B headroom. The C3 static-plus-reserve figure
-increases by 24 B from the preceding 299,868 B baseline; all unchanged C3/C6 RAM
-ratchets pass. Static initialization avoids copying the large shared parser
+falls by 136 B from 299,892 B; all unchanged C3/C6 RAM ratchets pass. The
+journey record path grows by 144 B and planner scratch creation from 17,024 B
+to 19,488 B on C3. Static initialization avoids copying the large shared parser
 arena through the startup stack. The isolated no_std display workflow plus
-explicit reserves is 366,736 B under the unchanged 400,000 B budget. These
+explicit reserves is 369,128 B (main: 367,872 B) under the unchanged 400,000 B
+budget. These
 compiler/linker accounts and DWARF path sums are not complete call-graph proofs
 or measurements on hardware. Journey mode has not been physically exercised.
 
@@ -1192,7 +1214,9 @@ Reproduce the linked measurements with `tools/build-device-artifact.sh` for
 ELFs. The stack auditor includes scratch creation, journey query/scan outlines,
 ZIP-record/header parsing and original-ZIP fallback as separate audited paths.
 
-Offline regression checks exercise both real device capacities, direct/one/two
+Offline regression checks exercise both real device capacities, a synthetic
+city that exceeded the former ESP32 bounds, request stops, target dominance,
+exact window shortening, change-place and two-transfer fallbacks, direct/one/two
 transfer ranking, different access walks, exact change-time boundaries,
 parent-station platforms, prohibited/minimum transfers, unordered calls,
 calendar exceptions, after-24:00 service and saved-profile advancement. The
