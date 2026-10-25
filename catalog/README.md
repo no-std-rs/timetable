@@ -6,7 +6,8 @@ patterns reconstructed by sorting each trip's numeric `stop_sequence`. They
 preserve branches, repeated visits, per-stop headsigns and pickup restrictions.
 Ordering and per-call overrides follow the [GTFS stop-times specification](https://gtfs.org/documentation/schedule/reference/#stop_timestxt).
 `patterns.calls` stores `[stop_index, pickup_type, optional_stop_headsign]`;
-Browser records also retain full `place_name` identity and optional `lat`/`lon`
+Browser records also retain full `place_name` and `platform_code` text for
+identity and glyph provisioning, alongside optional `lat`/`lon`
 coordinates for local journey grouping and walkable-stop suggestions.
 Indices address `stops` followed by `via_stops`. The latter also retains
 referenced parent stations for journey labels and search, alongside graph-only

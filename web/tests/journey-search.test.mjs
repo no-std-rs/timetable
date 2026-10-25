@@ -173,3 +173,9 @@ test("overlapping halos keep one global partition for selected peers and interme
   const unicode=stopPlaces({stops:[{id:"𐀀",name:"Same",lat:52.4,lon:16.9},{id:"",name:"Same",lat:52.4,lon:16.9001}]});
   assert.equal(unicode.byId.get("𐀀").stops[0].id,"","ID order follows Unicode scalar/UTF-8 ordering on Rust and JavaScript");
 });
+
+test("raw labels retain glyph inputs beyond bounded human display fields",async()=>{
+  const feed=await loader("journey-places-glyphs.zip"),peer=feed.catalog.stops.find(s=>s.id==="A2"),interchange=feed.catalog.stops.find(s=>s.id==="X");
+  assert.equal(peer.code,"");assert.equal(peer.platform_code,"番二三四五六七八九十");
+  assert.ok(!interchange.name.includes("界"));assert.ok(interchange.place_name.includes("界"));
+});

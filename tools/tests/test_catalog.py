@@ -58,6 +58,7 @@ class CatalogPaths(unittest.TestCase):
             'stops.txt': 'stop_id,stop_name,stop_code,stop_lat,stop_lon\nA,Central,C01,52.4,16.9\nZ,Terminal,Z01,nan,16.9\n'})
         self.assertEqual(binary, same_binary)
         self.assertEqual(extended['stops'][0]['place_name'], 'Central')
+        self.assertEqual(extended['stops'][0]['platform_code'], 'C01')
         self.assertEqual((extended['stops'][0]['lat'], extended['stops'][0]['lon']), (52.4, 16.9))
         self.assertNotIn('lat', extended['via_stops'][0])
         self.assertNotIn('lat', plain['stops'][0])
@@ -73,6 +74,14 @@ class CatalogPaths(unittest.TestCase):
                          [('P', 'Central station', 1)])
         self.assertEqual(plain['via_stops'], [])
         self.assertEqual([c[0] for c in catalogue['patterns'][0]['calls']], [0, 1])
+
+    def test_uncalled_platform_code_glyph_source_survives_device_field_limit(self):
+        code = '番二三四五六七八九十'
+        catalogue, binary = self.generate('T1,1,A,0,\nT1,2,Z,1,\n', {
+            'stops.txt': f'stop_id,stop_name,stop_code\nA,Start,A01\nZ,Terminal,{code}\n'})
+        self.assertEqual(catalogue['via_stops'][0]['code'], '')
+        self.assertEqual(catalogue['via_stops'][0]['platform_code'], code)
+        self.assertTrue(binary.startswith(b'TTCAT001'))
 
     def test_duplicate_stop_sequence_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'duplicate trip stop_sequence'):

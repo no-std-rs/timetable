@@ -229,7 +229,7 @@ write_archive('journey-place-middle-overlap.zip',middle_overlap)
 # platform code needs Japanese glyphs in the installed profile.
 glyphs={**places}
 rows=places['stops.txt'].splitlines()
-glyphs['stops.txt']=rows[0]+',parent_station\n'+''.join(row.replace(',A02,',',番二,')+(','+'PA' if row.split(',')[0] in ('A','A2') else ',')+'\n' for row in rows[1:])+'PA,Central station,,1,52.4,16.9,\n'
+glyphs['stops.txt']=rows[0]+',parent_station\n'+''.join(row.replace(',A02,',',番二三四五六七八九十,').replace('X,Interchange,X01','X,'+'A'*61+'界語,X01')+(','+'PA' if row.split(',')[0] in ('A','A2') else ',')+'\n' for row in rows[1:])+'PA,Central station,,1,52.4,16.9,\n'
 # A remote line exceeds the ROM trip-ID bound, forcing a projected catalogue.
 # The usable peer-platform line is absent from that projection, so only the
 # journey-wide glyph profile can supply its non-ASCII platform code.

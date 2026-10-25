@@ -695,7 +695,7 @@ function currentBundle() {
   }
   const routeKey=[...routes].sort((a,b)=>a-b).join(",");
   const characters=texts=>[...new Set(texts.flatMap(text=>[...String(text||"")]).filter(needsGlyph))].sort((a,b)=>a.codePointAt(0)-b.codePointAt(0)).join("");
-  if(journeys.length && state.journeyGlyphs===undefined)state.journeyGlyphs=characters(["·",...[...state.catalog.stops,...state.catalog.via_stops??[]].flatMap(s=>[s.name,s.code]),...state.catalog.routes.map(r=>r.line)]);
+  if(journeys.length && state.journeyGlyphs===undefined)state.journeyGlyphs=characters(["·",...[...state.catalog.stops,...state.catalog.via_stops??[]].flatMap(s=>[s.place_name??s.name,s.platform_code??s.code]),...state.catalog.routes.map(r=>r.line)]);
   const userChars=characters([...state.groups.map(g=>g.name),...picks.flatMap(p=>[p.line,p.stop_name,p.headsign]),...journeys.flatMap(j=>[...j.origins,...j.targets].map(s=>s.stop_name)),journeys.length?state.journeyGlyphs:""]);
   if(state.bundle && state.bundleUserChars===userChars && (state.bundleFull || state.bundleKey===routeKey))return state.bundle;
   if(state.fullBytes===undefined){try{state.fullBytes=catalogBytes(state.catalog);}catch{state.fullBytes=null;}}

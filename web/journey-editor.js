@@ -87,7 +87,7 @@ export class JourneyEditor {
     const places=stopPlaces(this.catalog());
     for(const place of places.groups){
       if(kind==="origin"&&!place.stops.some(s=>places.boarding.has(s.id)))continue;
-      if(selected.some(s=>places.byId.get(s.stop)===place)||!place.stops.some(stop=>terms.every(term=>searchText(`${place.name} ${stop.name} ${stop.code} ${stop.id}`).includes(term))))continue;
+      if(selected.some(s=>places.byId.get(s.stop)===place)||!place.stops.some(stop=>terms.every(term=>searchText(`${place.name} ${stop.place_name??stop.name} ${stop.platform_code??stop.code} ${stop.id}`).includes(term))))continue;
       const stop=place.stops.find(stop=>new TextEncoder().encode(stop.id).length<=32);
       const detail=place.stops.length>1?t("{count} platforms",{count:place.stops.length}):place.stops[0].code||place.stops[0].id;
       const button=node("button",`${place.name} · ${detail}`,"text-button");button.type="button";

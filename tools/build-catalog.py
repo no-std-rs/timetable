@@ -85,8 +85,10 @@ def build(source, destination, date):
     def label(value, size):
         return field(value, size, True).rstrip(b'\0').decode('utf-8')
     def browser_stop(s, key, name, code):
-        browser_stop = {'id': key, 'name': name, 'code': code,
-                        'place_name': s.get('stop_name') or key, 'parent': s.get('parent_station') or '',
+        browser_stop = {'id': key, 'name': name,
+                        'code': code if len(code.encode('utf-8')) <= 16 else '',
+                        'place_name': s.get('stop_name') or key, 'platform_code': s.get('stop_code') or '',
+                        'parent': s.get('parent_station') or '',
                         'location_type': int(s.get('location_type') or '0')}
         try:
             lat, lon = float(s.get('stop_lat', '')), float(s.get('stop_lon', ''))

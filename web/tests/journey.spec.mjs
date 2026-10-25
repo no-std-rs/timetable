@@ -99,6 +99,8 @@ const glyphZip=await readFile(new URL("../../display/tests/fixtures/journey-plac
 const glyphCatalog=await new FeedLoader().load(new Uint8Array(glyphZip),{id:"mdb-982",provider:"Synthetic transit"});
 test("station-name search selects child platforms and installed profiles cover generated labels and unselected peer codes",async({page})=>{
   await prepare(page,glyphZip,glyphCatalog,true);
+  await page.locator("#journey-origin-search").fill("番二三四五六七八九十");
+  await expect(page.locator("#journey-origin-matches").getByRole("button",{name:"Central station · 2 platforms",exact:true})).toHaveCount(1);
   await add(page,"origin","central station","Central station · 2 platforms");
   await expect(page.locator("#journey-origins strong")).toHaveText("Central station");
   await add(page,"target","Z01","Bolechowo-Os./Szkoła · 2 platforms");
@@ -111,5 +113,5 @@ test("station-name search selects child platforms and installed profiles cover g
     const signature=new TextEncoder().encode("TTGLY001"),offset=bytes.findIndex((_,i)=>signature.every((b,j)=>bytes[i+j]===b)),view=new DataView(bytes.buffer);
     return offset<0?[]:Array.from({length:view.getUint16(offset+8,true)},(_,i)=>String.fromCodePoint(view.getUint32(offset+10+24*i,true)));
   });
-  expect(glyphs).toEqual(expect.arrayContaining(["·","番","二"]));
+  expect(glyphs).toEqual(expect.arrayContaining(["·","番","二","三","四","五","界"]));
 });
