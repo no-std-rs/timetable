@@ -1,5 +1,6 @@
 // English message keys keep validation modules independent of browser state.
 export const polish = {
+  "This stop's platform IDs exceed the device's 32-byte limit. Choose another stop.": "Identyfikatory peronów tego przystanku przekraczają limit urządzenia (32 bajty). Wybierz inny przystanek.",
   "Group mode": "Tryb grupy",
   "Departure board": "Tablica odjazdów",
   "Journey routing does not yet support conditional boarding or alighting.": "Planowanie nie obsługuje jeszcze warunkowego wsiadania ani wysiadania.",

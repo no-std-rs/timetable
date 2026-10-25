@@ -17,6 +17,12 @@ export function stopPlaces(catalog) {
     if(!group){group={key:`place:${stop.parent||stop.id}`,name:stations.get(stop.parent)?.name||stop.name,stops:[]};choices.push(group);byName.set(identity,choices);groups.push(group);}
     group.stops.push(stop);byId.set(stop.id,group);
   }
+  // Native partitioning indexes the entire name/station cohort, including
+  // distant homonyms, before deciding which platforms share a physical place.
+  for(const choices of byName.values()){
+    const supported=choices.every(g=>g.stops.every(s=>fitsId(s.id)&&(!s.parent||fitsId(s.parent))));
+    for(const group of choices)group.device_supported=supported;
+  }
   const compare=new Intl.Collator(catalog?.language||"pl",{numeric:true,sensitivity:"base"}).compare;
   groups.sort((a,b)=>compare(a.name,b.name));
   const boarding=catalog?.links?new Set(catalog.links.map(([,i])=>catalog.stops[i]?.id)):new Set(byId.keys());
@@ -93,4 +99,14 @@ function nearPlace(a,b){
   let delta=Math.abs(lo-lp);if(delta>180000000)delta=360000000-delta;
   const dx=delta*(111195/1e6)*cos,dy=(la-lb)*(111195/1e6);
   return dx*dx+dy*dy<=125*125;
+}
+
+const fitsId=value=>new TextEncoder().encode(value).length<=32;
+export const deviceStop=place=>place?.device_supported?place.stops[0]:undefined;
+export function validateJourneyPlaces(journey,places){
+  for(const endpoint of [...journey.origins,...journey.targets]){
+    const place=places.byId.get(endpoint.stop);
+    if(place&&!place.device_supported)throw new Error("This stop's platform IDs exceed the device's 32-byte limit. Choose another stop.");
+  }
+  return journey;
 }

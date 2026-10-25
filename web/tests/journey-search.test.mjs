@@ -179,3 +179,33 @@ test("raw labels retain glyph inputs beyond bounded human display fields",async(
   assert.equal(peer.code,"");assert.equal(peer.platform_code,"番二三四五六七八九十");
   assert.ok(!interchange.name.includes("界"));assert.ok(interchange.place_name.includes("界"));
 });
+
+
+test("device eligibility covers every peer in the native name/station cohort",async()=>{
+  const {deviceStop,validateJourneyPlaces}=await import("../stop-places.js");
+  for(const peer of ["x".repeat(33),"界".repeat(11)])for(const distant of [false,true]){
+    const places=stopPlaces({stops:[
+      {id:"A",name:"Start",lat:52.4,lon:16.9},
+      {id:peer,name:"Start",lat:distant?53.4:52.4,lon:16.9},
+      {id:"Z",name:"Target",lat:52.5,lon:17},
+    ]});
+    assert.equal(deviceStop(places.byId.get("A")),undefined);
+    assert.equal(deviceStop(places.byId.get("Z")).id,"Z");
+    assert.throws(()=>validateJourneyPlaces({origins:[{stop:"A"}],targets:[{stop:"Z"}]},places),/32-byte/);
+  }
+  const parent=stopPlaces({stops:[{id:"A",name:"Platform",parent:"P".repeat(33)}]});
+  assert.equal(deviceStop(parent.byId.get("A")),undefined);
+});
+
+test("glyph inputs match native bounded labels without hidden suffixes",async()=>{
+  const {deviceLabel,journeyGlyphText}=await import("../journey-labels.js");
+  assert.equal(deviceLabel(" \tA\u0000B\u0085界語 ",6),"AB 界");
+  assert.equal(deviceLabel("A".repeat(61)+"界語",64),"A".repeat(61)+"界");
+  assert.equal(deviceLabel("番二三四五六七八九十",16),"番二三四五");
+  assert.equal(deviceLabel("A \u0000 B",4),"A  B");
+  assert.deepEqual(journeyGlyphText({stops:[],routes:[{line:"display",route_name:"一二三"}]}),["·","一二"]);
+  const feed=await loader("journey-places-glyphs.zip"),text=journeyGlyphText(feed.catalog).join("");
+  for(const c of ["·","番","二","三","四","五","界"])assert.ok(text.includes(c),c);
+  for(const c of ["一","耀","語","六"])assert.ok(!text.includes(c),c);
+  assert.ok(new Set(feed.catalog.stops.flatMap(s=>[...(s.place_name+s.platform_code)])).size>4096);
+});

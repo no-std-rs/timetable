@@ -18,7 +18,7 @@ export class FeedLoader {
     const routes=[];progress("Reading lines…");
     for await(const r of this.rows("routes.txt")){
       if(!validId(r.route_id))throw new Error("Invalid route ID in feed.");
-      routes.push({id:r.route_id,line:label(r.route_short_name||r.route_long_name||r.route_id,8),headsigns:["",""]});
+      routes.push({id:r.route_id,route_name:r.route_short_name||r.route_id,line:label(r.route_short_name||r.route_long_name||r.route_id,8),headsigns:["",""]});
       if(routes.length>200000)throw new Error("This feed exceeds the browser catalogue limit.");
     }
     routes.sort((a,b)=>compare(a.line,b.line)||compare(a.id,b.id));

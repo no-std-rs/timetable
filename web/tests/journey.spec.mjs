@@ -114,4 +114,18 @@ test("station-name search selects child platforms and installed profiles cover g
     return offset<0?[]:Array.from({length:view.getUint16(offset+8,true)},(_,i)=>String.fromCodePoint(view.getUint32(offset+10+24*i,true)));
   });
   expect(glyphs).toEqual(expect.arrayContaining(["·","番","二","三","四","五","界"]));
+  for(const hidden of ["一","耀"])expect(glyphs).not.toContain(hidden);
+});
+
+
+test("a short selectable anchor cannot hide an unsupported platform peer",async({page})=>{
+  const incompatible=structuredClone(groupedCatalog);
+  incompatible.stops.find(s=>s.id==="A2").id="x".repeat(33);
+  await prepare(page,groupedZip,incompatible);
+  await page.locator("#journey-origin-search").fill("maków");
+  const choice=page.locator("#journey-origin-matches").getByRole("button",{name:"Maków Polnych · 2 platforms",exact:true});
+  await expect(choice).toBeDisabled();
+  await expect(choice).toHaveAttribute("title",/32-byte/);
+  await page.locator("#journey-target-search").fill("maków");
+  await expect(page.locator("#journey-target-matches").getByRole("button",{name:"Maków Polnych · 2 platforms",exact:true})).toBeDisabled();
 });

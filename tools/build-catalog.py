@@ -104,7 +104,7 @@ def build(source, destination, date):
         directions = [label(heads[(key, d)].most_common(1)[0][0], 64) if heads[(key, d)] else '' for d in [0, 1]]
         line = r.get('route_short_name') or key
         payload += field(key, 32) + field(line, 8) + b''.join(field(h, 64, True) for h in directions)
-        browser_routes.append({'id': key, 'line': line, 'headsigns': directions})
+        browser_routes.append({'id': key, 'line': line, 'route_name': line, 'headsigns': directions})
     for key in stop_ids:
         s = stops[key]
         name, code = label(s.get('stop_name', ''), 64), s.get('stop_code', '')

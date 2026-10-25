@@ -236,6 +236,11 @@ glyphs['stops.txt']=rows[0]+',parent_station\n'+''.join(row.replace(',A02,',',ç•
 long_trip='q'*256
 glyphs['routes.txt']+='Q,Remote,3\n'
 glyphs['trips.txt']+=f'Q,ALL,{long_trip}\n'
-glyphs['stops.txt']+='V,Remote terminal,V01,0,53.4,17.0,\n'
+# Each raw CSV row stays below the parser's 8192-byte record limit. Hidden
+# suffixes together exceed the 4096-glyph budget but never render on device.
+hidden_name=''.join(chr(0x4e00+i) for i in range(2200))
+hidden_code=''.join(chr(0x8000+i) for i in range(2200))
+glyphs['stops.txt']=glyphs['stops.txt'].replace(',U01,', ','+'C'*16+hidden_code+',')
+glyphs['stops.txt']+='V,'+'R'*64+hidden_name+',V01,0,53.4,17.0,\n'
 glyphs['stop_times.txt']+=journey_calls([(long_trip,'08:05:00','U',1),(long_trip,'08:10:00','V',2)]).split('\n',1)[1]
 write_archive('journey-places-glyphs.zip',glyphs)

@@ -1,6 +1,6 @@
 import { renderStopDots } from "./stop-dot-map.js";
 import { searchText } from "./catalog-search.js";
-import { stopPlaces, walkableStops } from "./stop-places.js";
+import { stopPlaces, walkableStops, deviceStop, validateJourneyPlaces } from "./stop-places.js";
 import { validateJourney } from "./config.js";
 import { t } from "./i18n.js";
 const node=(tag,text,className)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;};
@@ -63,17 +63,17 @@ export class JourneyEditor {
       const selected=j.origins.findIndex(s=>places.byId.get(s.stop)===suggestion.place);
       if(selected>=2)j.origins.splice(selected,1);
       else if(selected<0&&j.origins.length<4){
-        const stop=suggestion.place.stops.find(s=>new TextEncoder().encode(s.id).length<=32);
+        const stop=deviceStop(suggestion.place);
         if(!stop)return;
         j.origins.push({stop:stop.id,stop_name:suggestion.place.name,stop_code:stop.code,walk:suggestion.walk});
       }
       this.render();this.changed();
     };
     for(const suggestion of suggestions){
-      const stop=suggestion.place.stops.find(s=>new TextEncoder().encode(s.id).length<=32);
+      const stop=deviceStop(suggestion.place);
       const selected=j.origins.some(s=>places.byId.get(s.stop)===suggestion.place);
       const label=selected?t("Remove {stop}",{stop:suggestion.place.name}):t("Add {stop} · about {minutes} min walk",{stop:suggestion.place.name,minutes:suggestion.walk});
-      const disabled=!stop||!selected&&j.origins.length>=4;
+      const disabled=!selected&&(!stop||j.origins.length>=4);
       const button=node("button",label,"text-button");button.type="button";button.disabled=disabled;
       button.addEventListener("click",()=>toggle(suggestion));list.append(button);
       dots.push({point:suggestion.point,label,selected,disabled,suggestion});
@@ -88,10 +88,11 @@ export class JourneyEditor {
     for(const place of places.groups){
       if(kind==="origin"&&!place.stops.some(s=>places.boarding.has(s.id)))continue;
       if(selected.some(s=>places.byId.get(s.stop)===place)||!place.stops.some(stop=>terms.every(term=>searchText(`${place.name} ${stop.place_name??stop.name} ${stop.platform_code??stop.code} ${stop.id}`).includes(term))))continue;
-      const stop=place.stops.find(stop=>new TextEncoder().encode(stop.id).length<=32);
+      const stop=deviceStop(place);
       const detail=place.stops.length>1?t("{count} platforms",{count:place.stops.length}):place.stops[0].code||place.stops[0].id;
       const button=node("button",`${place.name} · ${detail}`,"text-button");button.type="button";
       button.disabled=!stop;
+      if(!stop)button.title=t("This stop's platform IDs exceed the device's 32-byte limit. Choose another stop.");
       button.addEventListener("click",()=>{selected.push({stop:stop.id,stop_name:place.name,stop_code:stop.code,walk:kind==="origin"?6:0});this.render();this.changed();});list.append(button);
       if(++count===20)break;
     }
@@ -101,7 +102,7 @@ export class JourneyEditor {
     this.invalidate();const generation=this.generation;
     const button=this.$("journey-preview"),status=this.$("journey-preview-status");
     try{
-      const journey=structuredClone(validateJourney(this.group().journey));button.disabled=true;
+      const journey=structuredClone(validateJourneyPlaces(validateJourney(this.group().journey),stopPlaces(this.catalog())));button.disabled=true;
       status.textContent=t("Checking direct journeys…");
       const update=result=>{if(generation!==this.generation)return;this.result(result);};
       const result=await this.preview(journey,Number(this.$("journey-preview-depth").value),update);update(result);
