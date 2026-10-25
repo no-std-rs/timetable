@@ -132,6 +132,13 @@ alternatives = {**journey,
 # The middle call cannot be used for boarding/alighting but must be displayed.
 alternatives['stop_times.txt'] = alternatives['stop_times.txt'].replace('V,2,0,0', 'V,2,1,1')
 write_archive('journey-alternatives.zip', alternatives)
+untimed_alternatives = {**alternatives,
+    'stops.txt': alternatives['stops.txt'].replace('Via park,P01', 'Via park,番二三四五六七八九十'),
+    'stop_times.txt': alternatives['stop_times.txt'].replace('a,08:10:00,08:10:00,P', 'a,,,P')
+        .replace('a2,08:11:00,08:11:00,Q', 'a2,,,Q')
+        .replace('last,08:25:00,08:25:00,V', 'last,,08:25:00,V'),
+}
+write_archive('journey-untimed-alternatives.zip', untimed_alternatives)
 write_archive('journey-shuffled.zip',{**journey,'stop_times.txt':journey_calls(journey_rows[::-1])})
 write_archive('journey-direct.zip',{**journey,'stop_times.txt':journey['stop_times.txt'].replace('d,08:35:00,08:35:00','d,08:28:00,08:28:00')})
 write_archive('journey-no-service.zip',{**journey,'calendar_dates.txt':'service_id,date,exception_type\nALL,20261017,2\n'})

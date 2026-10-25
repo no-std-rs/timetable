@@ -48,27 +48,45 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
   const stops=new Map(loader.catalog.stops.map(s=>[s.id,s]));
   const places=stopPlaces(loader.catalog);
   for(const stop of[...settings.origins,...settings.targets])if(!places.byId.has(stop.stop))throw new Error("A journey stop changed. Reload the network and select it again.");
-  const calls=new Map(),identities=new Map();let count=0;
+  const calls=new Map(),identities=new Map(),untimed=new Map();let count=0,untimedCount=0;
   for await(const row of loader.rows("stop_times.txt")){
     const trip=loader.trips.get(row.trip_id);if(!trip)fail();
     const mask=services.get(trip.service_id)?.active??0;if(!mask)continue;
     const arrival=time(row.arrival_time),departure=time(row.departure_time);
-    if(arrival===null||departure===null)continue;if(arrival>departure)fail();
+    if(arrival!==null&&departure!==null&&arrival>departure)fail();
     const sequence=uint(row.stop_sequence),pickup=uint(row.pickup_type||"0",3),dropoff=uint(row.drop_off_type||"0",3);
     const stop=stops.get(row.stop_id);if(!stop)fail();
+    if(arrival===null||departure===null){
+      const list=untimed.get(row.trip_id)??[];
+      list.push({sequence,arrival,departure,pickup,dropoff,stop,line:loader.catalog.routes[trip.route].line});untimed.set(row.trip_id,list);
+      if(++untimedCount>300000)throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");
+      continue;
+    }
     for(let day=0;day<3;day++){
       if(!(mask&(1<<day)))continue;
       const a=days[day].epoch+arrival,d=days[day].epoch+departure;
       if(d<now||a>now+HORIZON)continue;
       const key=JSON.stringify([row.trip_id,day]);let list=calls.get(key);
-      if(!list){list=[];calls.set(key,list);identities.set(key,{trip:row.trip_id,route:loader.catalog.routes[trip.route].id});}
+      if(!list){list=[];calls.set(key,list);identities.set(key,{trip:row.trip_id,route:loader.catalog.routes[trip.route].id,day});}
       list.push({sequence,arrival:a,departure:d,pickup:d>now+HORIZON?1:pickup,dropoff:a<now?1:dropoff,stop,trip:key,line:loader.catalog.routes[trip.route].line});
       if(++count>300000)throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");
     }
   }
-  for(const list of calls.values()){
+  for(const [key,list]of calls){
+    const identity=identities.get(key),day=identity.day;
+    // Untimed calls describe the route but cannot supply boarding/arrival
+    // times. Attach them only to trip instances with calls in our window.
+    for(const call of untimed.get(identity.trip)??[]){
+      list.push({...call,trip:key,arrival:call.arrival===null?null:days[day].epoch+call.arrival,departure:call.departure===null?null:days[day].epoch+call.departure});
+      if(++count>300000)throw new Error("Browser journey search reached its memory budget. Choose a smaller transport feed.");
+    }
     list.sort((a,b)=>a.sequence-b.sequence);
-    if(list.some((c,i)=>i&&(c.sequence===list[i-1].sequence||c.arrival<list[i-1].departure)))fail();
+    let lastTime=null;
+    for(const [i,call]of list.entries()){
+      const first=call.arrival??call.departure;
+      if(i&&call.sequence===list[i-1].sequence||first!==null&&lastTime!==null&&first<lastTime)fail();
+      lastTime=call.departure??call.arrival??lastTime;
+    }
   }
   const scopeFields=["from_route_id","to_route_id","from_trip_id","to_trip_id"];
   const rules=new Map(),allRules=[];
@@ -139,6 +157,7 @@ export async function searchJourneys(loader,settings,{now=Math.floor(Date.now()/
     for(const list of calls.values()){
       const boardings=[];
       for(const [at,call] of list.entries()){
+        if(call.arrival===null||call.departure===null)continue;
         if(call.dropoff!==1)for(const boarded of boardings){
           const leg={trip:call.trip,route:identities.get(call.trip).route,line:call.line,from:boarded.call.stop,to:call.stop,departure:boarded.call.departure,arrival:call.arrival,stops:list.slice(boarded.at,at+1).map(c=>({stop:c.stop,arrival:c.arrival,departure:c.departure}))};
           const label={...boarded.label,error:boarded.error,conditional:boarded.label.conditional||boarded.call.pickup>=2||call.dropoff>=2,arrival:call.arrival,legs:[...boarded.label.legs,leg]};

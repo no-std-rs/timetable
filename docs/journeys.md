@@ -50,6 +50,8 @@ each transfer's platform and waiting time, and every ordered stop along each
 ride, including calls that do not allow boarding or alighting. Different lines,
 interchange choices, and intermediate stop patterns remain separate alternatives;
 repeated services of an identical route share one result.
+Intermediate calls with missing times remain in the stop list and distinguish
+route alternatives; missing times are labelled rather than interpolated.
 The website explorer can also apply route/trip-scoped stop-transfer rules and
 keeps different arriving services when those rules distinguish them. Installed
 devices retain the stricter rule limits described below. There is no routing
@@ -91,7 +93,7 @@ The planner uses fixed storage and fails visibly when a selection exceeds it:
 
 Both profiles retain at most 64 nondominated future connections across groups,
 with 32 shared labels in a 1 KiB arena. Browser exploration separately bounds
-active calls, retained prefixes per search round, boardings per trip, and route
+active calls, untimed calls, retained prefixes per search round, boardings per trip, and route
 alternatives at 300,000 each. Capacity exhaustion never returns a
 silently shortened complete result. Yesterday, today and tomorrow's service
 days include calendar exceptions and after-24:00 times, using the installed

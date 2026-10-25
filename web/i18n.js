@@ -42,6 +42,7 @@ export const polish = {
   "Board here": "Wsiądź tutaj",
   "Alight here": "Wysiądź tutaj",
   "Pass through": "Po drodze",
+  "Time not provided": "Brak godziny w rozkładzie",
   "The optional browser search can look up to four transfers deep and handle service-specific transfer rules. Devices calculate their own journeys within their stricter limits.": "Opcjonalne wyszukiwanie w przeglądarce uwzględnia do czterech przesiadek i reguły dla konkretnych kursów. Urządzenia obliczają własne połączenia w ramach bardziej ograniczonych możliwości.",
   "Website search depth": "Zakres wyszukiwania na stronie",
   "Calculate journey": "Oblicz podróż",

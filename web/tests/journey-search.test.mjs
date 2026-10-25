@@ -120,6 +120,22 @@ test("direct and transfer alternatives remain together, with repeated services g
   assert.deepEqual(result.paths.slice(2).map(path=>path.legs[0].stops.map(c=>c.stop.id)),[["B","W","Z"],["B","Z"]]);
   assert.equal(result.paths.filter(path=>path.legs.at(-1).line==="Transfer").length,1,"later identical services are one route alternative");
 });
+test("untimed calls distinguish route alternatives without inventing boarding or arrival times",async()=>{
+  const feed=await loader("journey-untimed-alternatives.zip"),c=config();c.origins.length=1;
+  const result=await searchJourneys(feed,c,{now:NOW});
+  assert.equal(result.paths.length,3,"patterns differing only at untimed stops remain distinct");
+  const viaPark=result.paths.find(p=>p.legs[0].stops.some(c=>c.stop.id==="P"));
+  const park=viaPark.legs[0].stops[1],through=viaPark.legs[1].stops[1];
+  assert.equal(park.arrival,null);assert.equal(park.departure,null);
+  assert.equal(park.stop.code,"");assert.equal(park.stop.platform_code,"番二三四五六七八九十");
+  assert.equal(through.arrival,null);assert.equal(through.departure,NOW+25*60);
+  c.origins[0].stop="P";
+  assert.deepEqual((await searchJourneys(feed,c,{now:NOW})).paths,[],"a blank time cannot be a boarding time");
+  const rows=feed.rows.bind(feed);
+  feed.rows=async function*(name){for await(const row of rows(name))yield name==="stop_times.txt"&&row.stop_id==="V"?{...row,drop_off_type:"0"}:row;};
+  c.origins[0].stop="A";c.targets[0].stop="V";
+  assert.deepEqual((await searchJourneys(feed,c,{now:NOW})).paths,[],"a partial time cannot supply an arrival");
+});
 test("place grouping excludes stations, preserves full names and coalesces old platform selections",async()=>{
   const feed=await loader("journey-places.zip"),places=stopPlaces(feed.catalog);
   assert.deepEqual(places.byId.get("A").stops.map(s=>s.id).sort(),["A","A2"]);

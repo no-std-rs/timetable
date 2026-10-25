@@ -127,7 +127,8 @@ export class JourneyEditor {
         const calls=node("ol",undefined,"journey-calls");
         for(const [at,call]of leg.stops.entries()){
           const action=at===0?t("Board here"):at===leg.stops.length-1?t("Alight here"):t("Pass through");
-          calls.append(node("li",`${format(at===0?call.departure:call.arrival)} · ${call.stop.name}${call.stop.code?` · ${call.stop.code}`:""} · ${action}`));
+          const time=at===0?call.departure:call.arrival??call.departure,code=call.stop.platform_code||call.stop.code;
+          calls.append(node("li",`${time===null?t("Time not provided"):format(time)} · ${call.stop.name}${code?` · ${code}`:""} · ${action}`));
         }
         ride.append(calls);legs.append(ride);
       });card.append(legs);list.append(card);
